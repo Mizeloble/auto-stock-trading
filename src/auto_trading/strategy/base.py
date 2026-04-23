@@ -10,26 +10,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from enum import StrEnum
 from typing import Any
 
+from .._common import Bar, Side
 
-class Side(StrEnum):
-    BUY = "buy"
-    SELL = "sell"
-
-
-@dataclass(frozen=True)
-class Bar:
-    """OHLCV 한 개."""
-
-    symbol: str
-    ts: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
+__all__ = ["Bar", "Side", "Signal", "Strategy", "StrategyContext"]
 
 
 @dataclass(frozen=True)

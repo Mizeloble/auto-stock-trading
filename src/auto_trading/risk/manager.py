@@ -19,8 +19,9 @@ from enum import StrEnum
 
 import structlog
 
-from ..account.orders import Order, OrderType, Side as OrderSide
-from ..strategy.base import Side as SignalSide, Signal
+from .._common import Side
+from ..account.orders import Order, OrderType
+from ..strategy.base import Signal
 
 log = structlog.get_logger(__name__)
 
@@ -70,7 +71,7 @@ class RiskManager:
         if price <= 0:
             return RiskDecision(Decision.REJECT, reason="invalid price")
 
-        if signal.side is SignalSide.SELL:
+        if signal.side is Side.SELL:
             held = account.positions.get(signal.symbol, 0)
             if held <= 0:
                 return RiskDecision(Decision.REJECT, reason="no position to sell")
@@ -78,7 +79,7 @@ class RiskManager:
             qty = min(qty, held)
             order = Order(
                 symbol=signal.symbol,
-                side=OrderSide.SELL,
+                side=Side.SELL,
                 quantity=qty,
                 order_type=OrderType.MARKET,
                 price=Decimal(str(price)) if signal.price_hint is None else signal.price_hint,
@@ -122,7 +123,7 @@ class RiskManager:
 
         order = Order(
             symbol=signal.symbol,
-            side=OrderSide.BUY,
+            side=Side.BUY,
             quantity=qty,
             order_type=OrderType.MARKET,
             price=signal.price_hint,

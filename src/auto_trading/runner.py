@@ -21,6 +21,7 @@ from decimal import Decimal
 
 import structlog
 
+from ._common import Bar, Side
 from .account.balance import AccountSnapshot, get_balance
 from .account.orders import place_order
 from .config import Settings, get_settings
@@ -28,7 +29,7 @@ from .kiwoom.rest import KiwoomRestClient
 from .kiwoom.ws import KiwoomWebSocket, Subscription
 from .market.feed import Tick, ticks
 from .risk.manager import AccountState, Decision, RiskManager
-from .strategy.base import Bar, Strategy
+from .strategy.base import Strategy
 
 log = structlog.get_logger(__name__)
 
@@ -80,8 +81,7 @@ class _BarAggregator:
 
 def _floor_bucket(ts: datetime, minutes: int) -> datetime:
     base = ts.replace(second=0, microsecond=0)
-    floor = base - timedelta(minutes=base.minute % minutes)
-    return floor
+    return base - timedelta(minutes=base.minute % minutes)
 
 
 @dataclass
@@ -103,7 +103,7 @@ class PaperRunner:
         async with KiwoomRestClient(settings=self._settings) as rest:
             ws = KiwoomWebSocket(
                 settings=self._settings,
-                token_provider=rest._token_provider,  # 토큰 공유
+                token_provider=rest.token_provider,
             )
             await ws.start([Subscription(symbols=self.symbols, types=["0B"])])
 
@@ -147,8 +147,7 @@ class PaperRunner:
 
     async def _on_bar(self, rest: KiwoomRestClient, bar: Bar, account: AccountState) -> None:
         log.debug("runner.bar", symbol=bar.symbol, ts=bar.ts.isoformat(), close=bar.close)
-        signals = self.strategy.on_bar(bar)
-        for signal in signals:
+        for signal in self.strategy.on_bar(bar):
             decision = self.risk.evaluate(signal, price=bar.close, account=account)
             if decision.decision is Decision.REJECT or decision.order is None:
                 log.info(
@@ -158,21 +157,22 @@ class PaperRunner:
                     reason=decision.reason,
                 )
                 continue
+            order = decision.order
             try:
-                result = await place_order(rest, decision.order)
+                result = await place_order(rest, order)
                 log.info(
                     "runner.order_accepted",
                     order_no=result.order_no,
-                    symbol=decision.order.symbol,
-                    side=decision.order.side.value,
-                    qty=decision.order.quantity,
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    qty=order.quantity,
                 )
                 # 로컬 포지션 즉시 갱신 (다음 snapshot 까지의 공백 메움)
-                qty_delta = decision.order.quantity if decision.order.side.value == "buy" else -decision.order.quantity
-                account.positions[decision.order.symbol] = max(
-                    0, account.positions.get(decision.order.symbol, 0) + qty_delta
+                delta = order.quantity if order.side is Side.BUY else -order.quantity
+                account.positions[order.symbol] = max(
+                    0, account.positions.get(order.symbol, 0) + delta
                 )
-                if decision.order.side.value == "buy":
-                    account.avg_prices[decision.order.symbol] = float(decision.order.price or Decimal(str(bar.close)))
+                if order.side is Side.BUY:
+                    account.avg_prices[order.symbol] = float(order.price or Decimal(str(bar.close)))
             except Exception as exc:
-                log.error("runner.order_failed", error=str(exc), symbol=decision.order.symbol)
+                log.error("runner.order_failed", error=str(exc), symbol=order.symbol)

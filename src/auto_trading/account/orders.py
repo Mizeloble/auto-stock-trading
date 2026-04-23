@@ -12,15 +12,13 @@ from enum import StrEnum
 
 import structlog
 
+from .._common import Side
 from ..kiwoom.endpoints import PATH_ORDER, TR
 from ..kiwoom.rest import KiwoomRestClient
 
 log = structlog.get_logger(__name__)
 
-
-class Side(StrEnum):
-    BUY = "buy"
-    SELL = "sell"
+__all__ = ["Side", "OrderType", "Order", "OrderResult", "place_order", "cancel_order"]
 
 
 class OrderType(StrEnum):
