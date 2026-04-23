@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Data / 로그
+data/
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+.DS_Store

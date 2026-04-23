@@ -1,0 +1,114 @@
+"""KiwoomRestClient 단위 테스트."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+import httpx
+import pytest
+import respx
+
+from auto_trading.config import KiwoomMode, Settings
+from auto_trading.kiwoom.auth import TokenProvider
+from auto_trading.kiwoom.endpoints import PATH_MARKET, PATH_TOKEN, TR
+from auto_trading.kiwoom.rest import KiwoomRestClient
+from auto_trading.kiwoom.schemas import KiwoomError
+
+
+@pytest.fixture
+def settings() -> Settings:
+    return Settings(
+        kiwoom_mode=KiwoomMode.MOCK,
+        kiwoom_app_key="k",
+        kiwoom_app_secret="s",
+    )
+
+
+def _token_resp() -> httpx.Response:
+    exp = (datetime.now() + timedelta(hours=24)).strftime("%Y%m%d%H%M%S")
+    return httpx.Response(200, json={"token": "tkn", "expires_dt": exp})
+
+
+async def test_request_injects_headers_and_unwraps_success(settings: Settings) -> None:
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        route = mock.post(PATH_MARKET).mock(
+            return_value=httpx.Response(200, json={"return_code": 0, "cur_prc": "70000"})
+        )
+
+        async with KiwoomRestClient(settings=settings) as client:
+            data = await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {"stk_cd": "005930"})
+
+        assert data["cur_prc"] == "70000"
+        sent = route.calls[0].request
+        assert sent.headers["authorization"] == "Bearer tkn"
+        assert sent.headers["api-id"] == TR.QUOTE_CURRENT
+        assert sent.headers["cont-yn"] == "N"
+
+
+async def test_return_code_nonzero_raises(settings: Settings) -> None:
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_MARKET).mock(
+            return_value=httpx.Response(200, json={"return_code": 900, "return_msg": "bad symbol"})
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            with pytest.raises(KiwoomError) as exc:
+                await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {"stk_cd": "X"})
+        assert exc.value.code == "900"
+
+
+async def test_retry_on_429(settings: Settings) -> None:
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        route = mock.post(PATH_MARKET).mock(
+            side_effect=[
+                httpx.Response(429, text="rate limited"),
+                httpx.Response(200, json={"return_code": 0, "cur_prc": "1"}),
+            ]
+        )
+        async with KiwoomRestClient(settings=settings, max_retries=2) as client:
+            data = await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {"stk_cd": "A"})
+        assert data["cur_prc"] == "1"
+        assert route.call_count == 2
+
+
+async def test_401_triggers_token_refresh(settings: Settings) -> None:
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(
+            side_effect=[_token_resp(), _token_resp()]
+        )
+        mock.post(PATH_MARKET).mock(
+            side_effect=[
+                httpx.Response(401, text="expired"),
+                httpx.Response(200, json={"return_code": 0, "cur_prc": "5"}),
+            ]
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            data = await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {"stk_cd": "A"})
+        assert data["cur_prc"] == "5"
+
+
+async def test_paginate_follows_cont_yn(settings: Settings) -> None:
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_MARKET).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={"return_code": 0, "rows": [{"cur_prc": "1"}]},
+                    headers={"cont-yn": "Y", "next-key": "k1"},
+                ),
+                httpx.Response(
+                    200,
+                    json={"return_code": 0, "rows": [{"cur_prc": "2"}]},
+                    headers={"cont-yn": "N", "next-key": ""},
+                ),
+            ]
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            pages = [p async for p in client.paginate(TR.QUOTE_CURRENT, PATH_MARKET, {})]
+
+        assert len(pages) == 2
+        assert pages[0]["rows"][0]["cur_prc"] == "1"
+        assert pages[1]["rows"][0]["cur_prc"] == "2"

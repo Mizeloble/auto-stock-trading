@@ -1,0 +1,139 @@
+"""키움 REST API 공통 HTTP 클라이언트.
+
+모든 TR 요청은 이 클래스의 `request(tr_id, path, body)` 를 통하게 해, 인증 헤더 주입
+· 오류 매핑 · 페이지네이션 처리를 한 곳에 모은다.
+
+키움 REST 규약(요지):
+- 헤더: `Authorization: Bearer <token>`, `api-id: <TR>`, `cont-yn`, `next-key`
+- 응답: JSON. 성공 시 `return_code == 0`, 실패 시 code/message 포함.
+- 페이지네이션: 응답 헤더에 `cont-yn: "Y"`, `next-key: <cursor>` 가 있으면 다음 요청 헤더에 실어 보냄.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+import structlog
+
+from ..config import Settings, get_settings
+from .auth import TokenProvider
+from .schemas import KiwoomError
+
+log = structlog.get_logger(__name__)
+
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
+class KiwoomRestClient:
+    """키움 REST 호출 래퍼. async with 로 사용 권장."""
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        token_provider: TokenProvider | None = None,
+        client: httpx.AsyncClient | None = None,
+        max_retries: int = 3,
+    ) -> None:
+        self._settings = settings or get_settings()
+        self._client = client or httpx.AsyncClient(
+            base_url=self._settings.rest_base_url, timeout=10.0
+        )
+        self._owns_client = client is None
+        self._token_provider = token_provider or TokenProvider(
+            settings=self._settings, client=self._client
+        )
+        self._max_retries = max_retries
+
+    async def __aenter__(self) -> "KiwoomRestClient":
+        return self
+
+    async def __aexit__(self, *_exc) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        await self._token_provider.aclose()
+        if self._owns_client:
+            await self._client.aclose()
+
+    async def request(
+        self,
+        tr_id: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        *,
+        cont_yn: str = "N",
+        next_key: str = "",
+    ) -> dict[str, Any]:
+        """단일 페이지 요청. 429/5xx 는 지수 백오프로 재시도."""
+        token = await self._token_provider.get_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "api-id": tr_id,
+            "cont-yn": cont_yn,
+            "next-key": next_key,
+            "Content-Type": "application/json;charset=UTF-8",
+        }
+        attempt = 0
+        while True:
+            resp = await self._client.post(path, headers=headers, json=body or {})
+            if resp.status_code == 401:
+                # 토큰이 서버측 만료일 수 있음 — 한번만 재발급 시도
+                await self._token_provider.invalidate()
+                token = await self._token_provider.get_token()
+                headers["Authorization"] = f"Bearer {token}"
+                resp = await self._client.post(path, headers=headers, json=body or {})
+
+            if resp.status_code in RETRY_STATUSES and attempt < self._max_retries:
+                delay = 0.5 * (2**attempt)
+                log.warning(
+                    "kiwoom.retry",
+                    status=resp.status_code,
+                    tr_id=tr_id,
+                    attempt=attempt + 1,
+                    delay=delay,
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
+                continue
+
+            if resp.status_code >= 400:
+                raise KiwoomError(
+                    code=str(resp.status_code),
+                    message=f"http error: {resp.text[:300]}",
+                    payload={"tr_id": tr_id, "path": path},
+                )
+
+            data: dict[str, Any] = resp.json()
+            rc = data.get("return_code")
+            if rc is not None and rc != 0:
+                raise KiwoomError(
+                    code=str(rc),
+                    message=str(data.get("return_msg") or "unknown"),
+                    payload={"tr_id": tr_id, "path": path},
+                )
+
+            # 페이지네이션 메타데이터는 헤더에서 꺼내서 응답 dict 에 실어준다
+            data["_cont_yn"] = resp.headers.get("cont-yn", "N")
+            data["_next_key"] = resp.headers.get("next-key", "")
+            return data
+
+    async def paginate(
+        self,
+        tr_id: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        max_pages: int = 20,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """`cont-yn=Y` 가 올 때까지 자동 페이지 순회."""
+        cont_yn = "N"
+        next_key = ""
+        for _ in range(max_pages):
+            page = await self.request(tr_id, path, body, cont_yn=cont_yn, next_key=next_key)
+            yield page
+            if page.get("_cont_yn") != "Y" or not page.get("_next_key"):
+                return
+            cont_yn = "Y"
+            next_key = page["_next_key"]
