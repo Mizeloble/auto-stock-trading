@@ -58,11 +58,17 @@ async def test_token_refreshed_near_expiry(settings: Settings, monkeypatch) -> N
             side_effect=[
                 httpx.Response(
                     200,
-                    json={"token": "first", "expires_dt": _future(datetime.now() + timedelta(hours=24))},
+                    json={
+                        "token": "first",
+                        "expires_dt": _future(datetime.now() + timedelta(hours=24)),
+                    },
                 ),
                 httpx.Response(
                     200,
-                    json={"token": "second", "expires_dt": _future(datetime.now() + timedelta(hours=24))},
+                    json={
+                        "token": "second",
+                        "expires_dt": _future(datetime.now() + timedelta(hours=24)),
+                    },
                 ),
             ]
         )

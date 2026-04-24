@@ -21,7 +21,15 @@ def test_side_enum_has_buy_and_sell() -> None:
 
 
 def test_bar_is_hashable_and_immutable() -> None:
-    bar = Bar(symbol="X", ts=datetime(2025, 1, 1, tzinfo=KST), open=1, high=2, low=0.5, close=1.5, volume=10)
+    bar = Bar(
+        symbol="X",
+        ts=datetime(2025, 1, 1, tzinfo=KST),
+        open=1,
+        high=2,
+        low=0.5,
+        close=1.5,
+        volume=10,
+    )
     assert hash(bar)
     assert bar.symbol == "X"
 

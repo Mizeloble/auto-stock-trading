@@ -13,10 +13,10 @@ from ..kiwoom.rest import KiwoomRestClient
 @dataclass(frozen=True)
 class Quote:
     symbol: str
-    price: Decimal        # 현재가 (절댓값)
-    change: Decimal       # 전일 대비 변동폭 (부호 포함)
-    change_pct: Decimal   # 등락률 % (예: 1.23 = +1.23%)
-    volume: int           # 누적 거래량
+    price: Decimal  # 현재가 (절댓값)
+    change: Decimal  # 전일 대비 변동폭 (부호 포함)
+    change_pct: Decimal  # 등락률 % (예: 1.23 = +1.23%)
+    volume: int  # 누적 거래량
 
 
 async def get_quote(client: KiwoomRestClient, symbol: str) -> Quote:

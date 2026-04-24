@@ -25,15 +25,15 @@ def test_ticks_within_bucket_aggregate_open_high_low_close() -> None:
     agg = _BarAggregator(minutes=1)
 
     assert agg.ingest(_t(9, 0, 5, 100, 10)) is None
-    assert agg.ingest(_t(9, 0, 15, 110, 5)) is None    # high 갱신
-    assert agg.ingest(_t(9, 0, 45, 95, 7)) is None     # low 갱신
-    finalized = agg.ingest(_t(9, 1, 2, 105, 3))         # 다음 버킷 진입 → 이전 봉 확정
+    assert agg.ingest(_t(9, 0, 15, 110, 5)) is None  # high 갱신
+    assert agg.ingest(_t(9, 0, 45, 95, 7)) is None  # low 갱신
+    finalized = agg.ingest(_t(9, 1, 2, 105, 3))  # 다음 버킷 진입 → 이전 봉 확정
 
     assert finalized is not None
     assert finalized.open == 100
     assert finalized.high == 110
     assert finalized.low == 95
-    assert finalized.close == 95     # 마지막 틱 직전까지 종가 = 95
+    assert finalized.close == 95  # 마지막 틱 직전까지 종가 = 95
     assert finalized.volume == 22
     # 봉 ts 는 버킷 시작 시각 = 09:00:00
     assert finalized.ts.hour == 9 and finalized.ts.minute == 0

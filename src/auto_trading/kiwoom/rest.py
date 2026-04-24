@@ -52,7 +52,7 @@ class KiwoomRestClient:
         """동일 인증 컨텍스트를 공유하려는 WS 등 외부 컴포넌트용 접근자."""
         return self._token_provider
 
-    async def __aenter__(self) -> "KiwoomRestClient":
+    async def __aenter__(self) -> KiwoomRestClient:
         return self
 
     async def __aexit__(self, *_exc) -> None:

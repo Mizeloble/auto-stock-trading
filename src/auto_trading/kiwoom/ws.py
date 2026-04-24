@@ -14,9 +14,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import AsyncIterator
 
 import structlog
 import websockets
@@ -59,14 +60,14 @@ class KiwoomWebSocket:
     async def stop(self) -> None:
         self._stop.set()
         if self._conn is not None:
-            try:
+            with contextlib.suppress(Exception):  # pragma: no cover
                 await self._conn.close()
-            except Exception:  # pragma: no cover
-                pass
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=5)
-            except (TimeoutError, asyncio.CancelledError):
+            except TimeoutError:
+                self._task.cancel()
+            except asyncio.CancelledError:
                 self._task.cancel()
         await self._token_provider.aclose()
 
@@ -102,7 +103,7 @@ class KiwoomWebSocket:
             except (ConnectionClosed, OSError) as exc:
                 if self._stop.is_set():
                     return
-                log.warning("ws.disconnect", error=str(exc), backoff=backoff)
+                log.warning("ws.disconnect", error=str(exc), backoff=backoff, exc_info=exc)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
 
@@ -125,5 +126,26 @@ class KiwoomWebSocket:
                 "refresh": sub.refresh,
                 "data": [{"item": sub.symbols, "type": sub.types}],
             }
-            await ws.send(json.dumps(payload))
-            log.info("ws.subscribe", symbols=sub.symbols, types=sub.types)
+            delay = 1.0
+            for attempt in range(1, 4):
+                try:
+                    await ws.send(json.dumps(payload))
+                    log.info("ws.subscribe", symbols=sub.symbols, types=sub.types, attempt=attempt)
+                    break
+                except (ConnectionClosed, OSError) as exc:
+                    # 연결 자체가 끊긴 경우: 재접속 루프가 처리하도록 그대로 전파
+                    log.warning("ws.subscribe_connection_lost", error=str(exc))
+                    raise
+                except Exception as exc:
+                    if attempt == 3:
+                        log.error("ws.subscribe_failed", error=str(exc), symbols=sub.symbols)
+                        raise
+                    log.warning(
+                        "ws.subscribe_retry",
+                        error=str(exc),
+                        symbols=sub.symbols,
+                        attempt=attempt,
+                        next_delay=delay,
+                    )
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 5.0)

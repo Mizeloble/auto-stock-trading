@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from auto_trading.account.orders import Side as OrderSide
 from auto_trading.risk.manager import AccountState, Decision, RiskLimits, RiskManager
-from auto_trading.strategy.base import Side as SignalSide, Signal
+from auto_trading.strategy.base import Side as SignalSide
+from auto_trading.strategy.base import Signal
 
 
 def _buy(symbol: str = "005930", weight: float = 1.0) -> Signal:
@@ -78,3 +79,14 @@ def test_existing_position_reduces_remaining_budget() -> None:
     d = rm.evaluate(_buy(), price=70_000, account=acct)
     assert d.decision is Decision.APPROVE
     assert d.order is not None and d.order.quantity == 8
+
+
+def test_sizing_uses_decimal_at_rounding_boundary() -> None:
+    """float 산술이었다면 budget=1_400_000.00000001 → qty 한 주 더 → 오버런."""
+    rm = RiskManager(limits=RiskLimits(max_position_weight=0.14, max_portfolio_exposure=1.0))
+    acct = AccountState(deposit=10_000_000, total_equity=10_000_000, day_start_equity=10_000_000)
+
+    d = rm.evaluate(_buy(), price=100_000, account=acct)
+    # 10_000_000 * 0.14 = 1_400_000 정확 → 14주
+    assert d.decision is Decision.APPROVE
+    assert d.order is not None and d.order.quantity == 14

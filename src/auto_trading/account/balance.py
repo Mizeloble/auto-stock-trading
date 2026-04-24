@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -24,8 +25,8 @@ class Holding:
 
 @dataclass(frozen=True)
 class AccountSnapshot:
-    deposit: Decimal            # 예수금(사용 가능 현금)
-    total_evaluation: Decimal   # 평가금액(보유종목 + 현금 등)
+    deposit: Decimal  # 예수금(사용 가능 현금)
+    total_evaluation: Decimal  # 평가금액(보유종목 + 현금 등)
     total_pnl: Decimal
     holdings: list[Holding] = field(default_factory=list)
 
@@ -59,10 +60,8 @@ async def get_balance(client: KiwoomRestClient) -> AccountSnapshot:
 
     deposit = to_decimal(data.get("entr") or data.get("dnca_tot_amt"))
     if deposit == 0:
-        try:
+        with contextlib.suppress(Exception):
             deposit = await get_deposit(client)
-        except Exception:
-            pass
 
     return AccountSnapshot(
         deposit=deposit,

@@ -43,7 +43,11 @@ class TokenProvider:
 
     async def get_token(self) -> str:
         async with self._lock:
-            if self._token and self._expires_at and datetime.now() < self._expires_at - REFRESH_MARGIN:
+            if (
+                self._token
+                and self._expires_at
+                and datetime.now() < self._expires_at - REFRESH_MARGIN
+            ):
                 return self._token
             return await self._issue()
 
@@ -58,7 +62,9 @@ class TokenProvider:
             self._client = None
 
     async def _issue(self) -> str:
-        client = self._client or httpx.AsyncClient(base_url=self._settings.rest_base_url, timeout=10.0)
+        client = self._client or httpx.AsyncClient(
+            base_url=self._settings.rest_base_url, timeout=10.0
+        )
         if self._client is None:
             self._client = client
 

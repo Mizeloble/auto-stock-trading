@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date
-from typing import Iterable
 
 import pandas as pd
 
@@ -36,11 +36,37 @@ async def get_daily_bars(
                 Bar(
                     symbol=symbol,
                     ts=parse_kiwoom_ts(ts_raw),
-                    open=float(abs(to_decimal(row.get("open_pric") or row.get("stck_oprc") or row.get("open")))),
-                    high=float(abs(to_decimal(row.get("high_pric") or row.get("stck_hgpr") or row.get("high")))),
-                    low=float(abs(to_decimal(row.get("low_pric") or row.get("stck_lwpr") or row.get("low")))),
-                    close=float(abs(to_decimal(row.get("cur_prc") or row.get("stck_clpr") or row.get("close")))),
-                    volume=int(to_decimal(row.get("trde_qty") or row.get("acml_vol") or row.get("volume"))),
+                    open=float(
+                        abs(
+                            to_decimal(
+                                row.get("open_pric") or row.get("stck_oprc") or row.get("open")
+                            )
+                        )
+                    ),
+                    high=float(
+                        abs(
+                            to_decimal(
+                                row.get("high_pric") or row.get("stck_hgpr") or row.get("high")
+                            )
+                        )
+                    ),
+                    low=float(
+                        abs(
+                            to_decimal(
+                                row.get("low_pric") or row.get("stck_lwpr") or row.get("low")
+                            )
+                        )
+                    ),
+                    close=float(
+                        abs(
+                            to_decimal(
+                                row.get("cur_prc") or row.get("stck_clpr") or row.get("close")
+                            )
+                        )
+                    ),
+                    volume=int(
+                        to_decimal(row.get("trde_qty") or row.get("acml_vol") or row.get("volume"))
+                    ),
                 )
             )
     return bars
