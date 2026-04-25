@@ -9,7 +9,6 @@ import pytest
 import respx
 
 from auto_trading.config import KiwoomMode, Settings
-from auto_trading.kiwoom.auth import TokenProvider
 from auto_trading.kiwoom.endpoints import PATH_MARKET, PATH_TOKEN, TR
 from auto_trading.kiwoom.rest import KiwoomRestClient
 from auto_trading.kiwoom.schemas import KiwoomError
@@ -75,9 +74,7 @@ async def test_retry_on_429(settings: Settings) -> None:
 
 async def test_401_triggers_token_refresh(settings: Settings) -> None:
     async with respx.mock(base_url=settings.rest_base_url) as mock:
-        mock.post(PATH_TOKEN).mock(
-            side_effect=[_token_resp(), _token_resp()]
-        )
+        mock.post(PATH_TOKEN).mock(side_effect=[_token_resp(), _token_resp()])
         mock.post(PATH_MARKET).mock(
             side_effect=[
                 httpx.Response(401, text="expired"),

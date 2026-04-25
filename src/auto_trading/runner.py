@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -86,13 +85,35 @@ def _floor_bucket(ts: datetime, minutes: int) -> datetime:
 
 @dataclass
 class PaperRunner:
-    strategy: Strategy
-    symbols: list[str]
+    """Paper/모의투자 러너.
+
+    종목별로 다른 전략 인스턴스를 쓰려면 `strategies={"005930": s1, "000660": s2}` 형태로
+    생성자에 직접 맵을 넘긴다. 생략하면 `strategy` 를 모든 종목에 공유.
+    """
+
+    strategy: Strategy | None = None
+    symbols: list[str] = field(default_factory=list)
+    strategies: dict[str, Strategy] = field(default_factory=dict)
     risk: RiskManager = field(default_factory=RiskManager)
     bar_minutes: int = 1
     balance_refresh_sec: int = 60
     allow_real: bool = False
+    max_balance_failures: int = 5
+    dry_run: bool = False  # True 면 모의투자 체결도 시뮬레이션(REST 전송 없음)
     _settings: Settings = field(default_factory=get_settings)
+    _balance_failures: int = field(default=0, init=False)
+
+    def __post_init__(self) -> None:
+        # strategies 가 비어있으면 symbols 전부에 공통 strategy 를 복제 없이 공유.
+        if not self.strategies:
+            if self.strategy is None:
+                raise ValueError("strategy 또는 strategies 중 하나는 반드시 지정해야 합니다")
+            self.strategies = {sym: self.strategy for sym in self.symbols}
+        elif not self.symbols:
+            self.symbols = list(self.strategies.keys())
+        missing = [sym for sym in self.symbols if sym not in self.strategies]
+        if missing:
+            raise ValueError(f"전략이 지정되지 않은 종목: {missing}")
 
     async def run(self) -> None:
         if not self._settings.is_mock and not self.allow_real:
@@ -108,10 +129,11 @@ class PaperRunner:
             await ws.start([Subscription(symbols=self.symbols, types=["0B"])])
 
             aggregator = _BarAggregator(minutes=self.bar_minutes)
-            account = await self._snapshot_account(rest)
+            account = await self._snapshot_account(rest, previous=None)
             last_refresh = datetime.now()
 
-            self.strategy.reset()
+            for strat in set(self.strategies.values()):
+                strat.reset()
             try:
                 async for tick in ticks(ws):
                     bar = aggregator.ingest(tick)
@@ -120,34 +142,54 @@ class PaperRunner:
                     await self._on_bar(rest, bar, account)
 
                     if (datetime.now() - last_refresh).total_seconds() >= self.balance_refresh_sec:
-                        account = await self._snapshot_account(rest)
+                        account = await self._snapshot_account(rest, previous=account)
                         last_refresh = datetime.now()
             finally:
                 await ws.stop()
 
-    async def _snapshot_account(self, rest: KiwoomRestClient) -> AccountState:
+    async def _snapshot_account(
+        self,
+        rest: KiwoomRestClient,
+        *,
+        previous: AccountState | None,
+    ) -> AccountState:
         try:
             snap: AccountSnapshot = await get_balance(rest)
         except Exception as exc:
-            log.warning("runner.balance_fetch_failed", error=str(exc))
-            return AccountState(deposit=0, total_equity=0)
+            self._balance_failures += 1
+            log.warning(
+                "runner.balance_fetch_failed",
+                error=str(exc),
+                consecutive=self._balance_failures,
+                max=self.max_balance_failures,
+            )
+            if previous is None:
+                raise
+            if self._balance_failures >= self.max_balance_failures:
+                raise RuntimeError(
+                    f"balance fetch failed {self._balance_failures} times in a row"
+                ) from exc
+            return previous
 
+        self._balance_failures = 0
         positions = {h.symbol: h.quantity for h in snap.holdings}
         avg_prices = {h.symbol: float(h.avg_price) for h in snap.holdings}
         equity = float(snap.total_evaluation) or float(snap.deposit)
-        state = AccountState(
+        day_start = previous.day_start_equity if previous and previous.day_start_equity else equity
+        return AccountState(
             deposit=float(snap.deposit),
             total_equity=equity,
             positions=positions,
             avg_prices=avg_prices,
+            day_start_equity=day_start,
         )
-        if state.day_start_equity == 0:
-            state.day_start_equity = equity
-        return state
 
     async def _on_bar(self, rest: KiwoomRestClient, bar: Bar, account: AccountState) -> None:
         log.debug("runner.bar", symbol=bar.symbol, ts=bar.ts.isoformat(), close=bar.close)
-        for signal in self.strategy.on_bar(bar):
+        strat = self.strategies.get(bar.symbol)
+        if strat is None:
+            return
+        for signal in strat.on_bar(bar):
             decision = self.risk.evaluate(signal, price=bar.close, account=account)
             if decision.decision is Decision.REJECT or decision.order is None:
                 log.info(
@@ -158,6 +200,15 @@ class PaperRunner:
                 )
                 continue
             order = decision.order
+            if self.dry_run:
+                log.info(
+                    "runner.order_simulated",
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    qty=order.quantity,
+                    price=float(order.price) if order.price else bar.close,
+                )
+                continue
             try:
                 result = await place_order(rest, order)
                 log.info(
@@ -175,4 +226,9 @@ class PaperRunner:
                 if order.side is Side.BUY:
                     account.avg_prices[order.symbol] = float(order.price or Decimal(str(bar.close)))
             except Exception as exc:
-                log.error("runner.order_failed", error=str(exc), symbol=order.symbol)
+                log.error(
+                    "runner.order_failed",
+                    error=str(exc),
+                    symbol=order.symbol,
+                    exc_info=exc,
+                )

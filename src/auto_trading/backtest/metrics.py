@@ -7,20 +7,20 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .broker import Trade
 from ..strategy.base import Side
+from .broker import Trade
 
 
 @dataclass
 class PerformanceReport:
     initial_equity: float
     final_equity: float
-    total_return: float     # 0.10 = +10%
+    total_return: float  # 0.10 = +10%
     cagr: float
     annualized_vol: float
-    sharpe: float           # 연환산
-    max_drawdown: float     # 음수 (-0.15 = -15%)
-    win_rate: float         # 0~1
+    sharpe: float  # 연환산
+    max_drawdown: float  # 음수 (-0.15 = -15%)
+    win_rate: float  # 0~1
     num_trades: int
     num_round_trips: int
 
@@ -39,7 +39,9 @@ class PerformanceReport:
         }
 
 
-def compute(equity_curve: pd.Series, trades: list[Trade], initial_equity: float) -> PerformanceReport:
+def compute(
+    equity_curve: pd.Series, trades: list[Trade], initial_equity: float
+) -> PerformanceReport:
     if equity_curve.empty:
         return PerformanceReport(initial_equity, initial_equity, 0, 0, 0, 0, 0, 0, 0, 0)
 
@@ -95,8 +97,8 @@ def _round_trips(trades: list[Trade]) -> list[float]:
                 buy_qty, buy_price, buy_fee = opens[t.symbol][0]
                 matched = min(buy_qty, remaining)
                 pnl = (t.price - buy_price) * matched
-                pnl -= (buy_fee * (matched / t.quantity if t.quantity else 0))
-                pnl -= (sell_cost * (matched / t.quantity if t.quantity else 0))
+                pnl -= buy_fee * (matched / t.quantity if t.quantity else 0)
+                pnl -= sell_cost * (matched / t.quantity if t.quantity else 0)
                 pnls.append(pnl)
                 buy_qty -= matched
                 remaining -= matched

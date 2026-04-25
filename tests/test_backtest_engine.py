@@ -35,10 +35,16 @@ class AlwaysBuyOnceThenSell(Strategy):
 def _df(prices: list[float]) -> pd.DataFrame:
     rows = []
     for i, p in enumerate(prices):
-        rows.append({
-            "ts": datetime(2025, 1, 1) + timedelta(days=i),
-            "open": p, "high": p, "low": p, "close": p, "volume": 100,
-        })
+        rows.append(
+            {
+                "ts": datetime(2025, 1, 1) + timedelta(days=i),
+                "open": p,
+                "high": p,
+                "low": p,
+                "close": p,
+                "volume": 100,
+            }
+        )
     return pd.DataFrame(rows).set_index("ts")
 
 

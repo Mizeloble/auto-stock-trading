@@ -24,9 +24,23 @@ def test_golden_and_dead_cross_emits_signals() -> None:
     strat = registry.get("sma_crossover", short=3, long=5)
 
     # 하락 → 상승 → 하락 패턴. 3/5 이평이 충분히 축적된 뒤 교차.
-    prices = [10, 9, 8, 7, 6,   # long=5 채워짐, short ma < long ma (음수 diff)
-              8, 10, 12, 14, 16,  # 상승 추세 → golden cross 발생
-              14, 12, 10, 8, 6]   # 하락 → dead cross 발생
+    prices = [
+        10,
+        9,
+        8,
+        7,
+        6,  # long=5 채워짐, short ma < long ma (음수 diff)
+        8,
+        10,
+        12,
+        14,
+        16,  # 상승 추세 → golden cross 발생
+        14,
+        12,
+        10,
+        8,
+        6,
+    ]  # 하락 → dead cross 발생
 
     signals = []
     for i, p in enumerate(prices):

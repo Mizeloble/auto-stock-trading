@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import AsyncIterator
 
 from .._common import parse_kiwoom_ts, to_decimal
 from ..kiwoom.ws import KiwoomWebSocket
@@ -31,7 +31,7 @@ async def ticks(ws: KiwoomWebSocket) -> AsyncIterator[Tick]:
             symbol = str(item.get("item") or values.get("9001") or "").strip().lstrip("A")
             yield Tick(
                 symbol=symbol,
-                ts=parse_kiwoom_ts(values.get("20")),   # 체결시간 HHMMSS
-                price=abs(to_decimal(values.get("10"))),   # 현재가
+                ts=parse_kiwoom_ts(values.get("20")),  # 체결시간 HHMMSS
+                price=abs(to_decimal(values.get("10"))),  # 현재가
                 volume=int(to_decimal(values.get("15"))),  # 체결거래량
             )

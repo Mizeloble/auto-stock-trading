@@ -39,6 +39,8 @@ def _setup_logging() -> None:
         processors=[
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            # 예외 로그에 스택트레이스 포함 — 장애 발생 시 원인 추적용
+            structlog.processors.format_exc_info,
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
@@ -90,14 +92,27 @@ def balance() -> None:
 
         if snap.holdings:
             holdings = Table(title="보유 종목")
-            for col in ("코드", "종목명", "수량", "평단가", "현재가", "평가금액", "손익", "수익률%"):
+            for col in (
+                "코드",
+                "종목명",
+                "수량",
+                "평단가",
+                "현재가",
+                "평가금액",
+                "손익",
+                "수익률%",
+            ):
                 holdings.add_column(col, justify="right" if col != "종목명" else "left")
             for h in snap.holdings:
                 holdings.add_row(
-                    h.symbol, h.name,
-                    f"{h.quantity:,}", f"{h.avg_price:,}",
-                    f"{h.current_price:,}", f"{h.market_value:,}",
-                    f"{h.pnl:+,}", f"{h.pnl_pct:+}%",
+                    h.symbol,
+                    h.name,
+                    f"{h.quantity:,}",
+                    f"{h.avg_price:,}",
+                    f"{h.current_price:,}",
+                    f"{h.market_value:,}",
+                    f"{h.pnl:+,}",
+                    f"{h.pnl_pct:+}%",
                 )
             console.print(holdings)
 
@@ -147,24 +162,70 @@ def backtest(
     console.print(f"[green]결과 저장:[/green] {saved}")
 
 
+def _coerce_param(value: str) -> object:
+    """'3' → 3, '1.5' → 1.5, '005930' → '005930' (숫자면 숫자, 아니면 문자열)."""
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
+def _parse_symbol_spec(spec: str) -> tuple[str, dict[str, object]]:
+    """`005930:short=3:long=15` → ('005930', {'short': 3, 'long': 15}).
+
+    콜론 없으면 심볼만.
+    """
+    head, *rest = spec.split(":")
+    params: dict[str, object] = {}
+    for token in rest:
+        if "=" not in token:
+            raise typer.BadParameter(f"'key=value' 형식이어야 합니다: {token!r}")
+        k, v = token.split("=", 1)
+        params[k.strip()] = _coerce_param(v.strip())
+    return head.strip(), params
+
+
 @app.command()
 def paper(
     strategy: str = typer.Option(..., "--strategy", "-s", help="전략 이름"),
-    symbols: str = typer.Option(..., "--symbols", help="콤마 구분 종목코드"),
+    symbols: str = typer.Option(
+        ...,
+        "--symbols",
+        help=(
+            "콤마 구분 종목코드. 종목별 전략 파라미터는 콜론으로 덧붙인다. "
+            "예) 005930:short=3:long=15,000660:short=5:long=20"
+        ),
+    ),
     minutes: int = typer.Option(1, "--minutes", help="집계 봉 길이(분)"),
     allow_real: bool = typer.Option(False, "--allow-real", help="실거래에서도 돌릴지 (위험)"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="모의투자에서도 실제 주문 전송 없이 시뮬레이션만 (전략·리스크 로직 검증용)",
+    ),
 ) -> None:
     """실시간 틱을 받아 전략 실행. 모의투자 기본."""
-    strat = registry.get(strategy)
-    symbol_list = [s.strip() for s in symbols.split(",") if s.strip()]
-    if not symbol_list:
+    raw_specs = [s.strip() for s in symbols.split(",") if s.strip()]
+    if not raw_specs:
         raise typer.BadParameter("symbols 가 비었습니다")
 
+    strategies: dict[str, object] = {}
+    symbol_list: list[str] = []
+    for spec in raw_specs:
+        sym, params = _parse_symbol_spec(spec)
+        strategies[sym] = registry.get(strategy, **params)
+        symbol_list.append(sym)
+
     runner = PaperRunner(
-        strategy=strat,
+        strategies=strategies,  # type: ignore[arg-type]
         symbols=symbol_list,
         bar_minutes=minutes,
         allow_real=allow_real,
+        dry_run=dry_run,
     )
     try:
         asyncio.run(runner.run())

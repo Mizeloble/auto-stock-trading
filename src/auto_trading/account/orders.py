@@ -18,12 +18,12 @@ from ..kiwoom.rest import KiwoomRestClient
 
 log = structlog.get_logger(__name__)
 
-__all__ = ["Side", "OrderType", "Order", "OrderResult", "place_order", "cancel_order"]
+__all__ = ["Order", "OrderResult", "OrderType", "Side", "cancel_order", "place_order"]
 
 
 class OrderType(StrEnum):
-    MARKET = "market"   # 시장가
-    LIMIT = "limit"     # 지정가
+    MARKET = "market"  # 시장가
+    LIMIT = "limit"  # 지정가
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ class Order:
     side: Side
     quantity: int
     order_type: OrderType = OrderType.MARKET
-    price: Decimal | None = None   # limit 일 때만
+    price: Decimal | None = None  # limit 일 때만
     exchange: str = "KRX"
 
 

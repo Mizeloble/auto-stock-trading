@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 
@@ -35,8 +35,8 @@ class BacktestResult:
 @dataclass
 class Backtester:
     strategy: Strategy
-    initial_cash: float = 10_000_000.0   # 기본 천만원
-    position_sizing: str = "all_in"      # all_in: 가용 현금 전부로 매수
+    initial_cash: float = 10_000_000.0  # 기본 천만원
+    position_sizing: str = "all_in"  # all_in: 가용 현금 전부로 매수
     commission_rate: float = 0.00015
     tax_rate_sell: float = 0.0018
     slippage_bps: float = 0.0
@@ -58,8 +58,8 @@ class Backtester:
         pending: list[Signal] = []
 
         rows = list(df.itertuples(index=True))
-        for i, row in enumerate(rows):
-            ts: datetime = row.Index  # type: ignore[assignment]
+        for row in rows:
+            ts: datetime = row.Index
             bar = Bar(
                 symbol=symbol,
                 ts=ts,
@@ -124,10 +124,17 @@ def save_result(result: BacktestResult, out_dir: Path) -> Path:
         writer = csv.writer(f)
         writer.writerow(["ts", "symbol", "side", "price", "quantity", "fee", "tax"])
         for t in result.trades:
-            writer.writerow([
-                t.ts.isoformat(), t.symbol, t.side.value,
-                f"{t.price:.4f}", t.quantity, f"{t.fee:.4f}", f"{t.tax:.4f}",
-            ])
+            writer.writerow(
+                [
+                    t.ts.isoformat(),
+                    t.symbol,
+                    t.side.value,
+                    f"{t.price:.4f}",
+                    t.quantity,
+                    f"{t.fee:.4f}",
+                    f"{t.tax:.4f}",
+                ]
+            )
 
     report_path = out_dir / "report.json"
     report_path.write_text(json.dumps(result.report.as_dict(), ensure_ascii=False, indent=2))
@@ -140,10 +147,16 @@ def frames_from_bars(bars: Iterable) -> pd.DataFrame:
     records = []
     for b in bars:
         if hasattr(b, "ts"):
-            records.append({
-                "ts": b.ts, "open": float(b.open), "high": float(b.high),
-                "low": float(b.low), "close": float(b.close), "volume": int(b.volume),
-            })
+            records.append(
+                {
+                    "ts": b.ts,
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": int(b.volume),
+                }
+            )
         else:
             records.append(b)
     df = pd.DataFrame(records)

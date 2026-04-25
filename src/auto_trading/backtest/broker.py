@@ -55,9 +55,9 @@ class Position:
 @dataclass
 class SimulatedBroker:
     cash: float
-    commission_rate: float = 0.00015   # 0.015%
-    tax_rate_sell: float = 0.0018      # 0.18% 매도 시
-    slippage_bps: float = 0.0          # 1bp = 0.01%
+    commission_rate: float = 0.00015  # 0.015%
+    tax_rate_sell: float = 0.0018  # 0.18% 매도 시
+    slippage_bps: float = 0.0  # 1bp = 0.01%
     positions: dict[str, Position] = field(default_factory=dict)
     trades: list[Trade] = field(default_factory=list)
 
@@ -65,7 +65,9 @@ class SimulatedBroker:
         slip = price * (self.slippage_bps / 10_000.0)
         return price + slip if side is Side.BUY else price - slip
 
-    def execute(self, *, symbol: str, side: Side, quantity: int, bar_open: float, ts: datetime) -> Trade | None:
+    def execute(
+        self, *, symbol: str, side: Side, quantity: int, bar_open: float, ts: datetime
+    ) -> Trade | None:
         if quantity <= 0:
             return None
         price = self._apply_slippage(bar_open, side)
@@ -97,10 +99,14 @@ class SimulatedBroker:
             self.cash += gross - fee - tax
 
         pos.apply(side, price, quantity)
-        trade = Trade(symbol=symbol, side=side, ts=ts, price=price, quantity=quantity, fee=fee, tax=tax)
+        trade = Trade(
+            symbol=symbol, side=side, ts=ts, price=price, quantity=quantity, fee=fee, tax=tax
+        )
         self.trades.append(trade)
         return trade
 
     def equity(self, prices: dict[str, float]) -> float:
-        holdings = sum(pos.quantity * prices.get(sym, pos.avg_price) for sym, pos in self.positions.items())
+        holdings = sum(
+            pos.quantity * prices.get(sym, pos.avg_price) for sym, pos in self.positions.items()
+        )
         return self.cash + holdings

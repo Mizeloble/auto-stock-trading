@@ -62,6 +62,6 @@ class Strategy(ABC):
 class StrategyContext:
     """전략 실행 중 참고용 상태 (러너/백테스터가 채움)."""
 
-    current_position: int = 0     # 해당 심볼의 현재 보유 수량
+    current_position: int = 0  # 해당 심볼의 현재 보유 수량
     cash: float = 0.0
     recent_bars: list[Bar] = field(default_factory=list)

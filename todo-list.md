@@ -94,25 +94,52 @@
 
 ---
 
-## ✅ 10단계 · 테스트 요약 — **✅ 완료 (25건 passing)**
+## ✅ 10단계 · 테스트 요약 — **✅ 완료 (53건 passing)**
 
 - `tests/test_auth.py` (4)
 - `tests/test_rest_client.py` (5)
+- `tests/test_common.py` (6)
 - `tests/test_strategy_sma.py` (4)
+- `tests/test_strategy_rsi.py` (5) · RSI 전략
 - `tests/test_backtest_engine.py` (4)
-- `tests/test_risk_manager.py` (6)
+- `tests/test_risk_manager.py` (7)
 - `tests/test_runner_aggregator.py` (2)
+- `tests/test_runner.py` (6) · 잔고 폴백·dry-run
+- `tests/test_ws_subscribe.py` (3) · 재구독 재시도
+- `tests/test_cli_parsing.py` (6) · 종목별 파라미터 파서
+- `tests/integration/test_rest_roundtrip.py` (3, 키 있을 때만)
 
 ```
-uv run pytest        # 단위 25건 (네트워크 없음, 수 초 내)
+uv run pytest        # 단위 53건 (네트워크 없음)
+uv run pytest -m integration  # 모의투자 키가 있을 때만
 ```
 
 ---
 
-## 🚀 다음에 할 수 있는 것 (선택)
+## 🛡 11단계 · 운영 안정화 개선 — **✅ 완료**
 
-- **통합 테스트**: 모의 키가 있을 때 실제 REST/WS 왕복을 `@pytest.mark.integration` 으로 추가.
-- **차트 API 검증**: `get_daily_bars` 의 TR 코드/필드명을 실 응답과 대조해 최종 확정.
-- **새 전략 플러그인**: `strategy/` 에 `rsi_reversion.py` 같은 파일 추가 → `@register("rsi")`.
-- **알림 연동**: 체결 이벤트를 텔레그램/슬랙으로 전송.
-- **실거래 전환**: `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후).
+- [x] **러너 잔고 폴백 로직** · `_snapshot_account` 가 실패 시 직전 상태 유지 + `max_balance_failures` 초과 시 러너 중단 (`src/auto_trading/runner.py`)
+- [x] **WS 구독 재시도** · 구독 실패 시 지수 백오프 재시도, 연결 끊김은 재접속 루프에 위임 (`src/auto_trading/kiwoom/ws.py`)
+- [x] **리스크 매니저 Decimal 경계** · 예산/수량 산식을 모두 `Decimal` 로 통일해 FP 반올림 오차 제거 (`src/auto_trading/risk/manager.py`)
+
+## 🧰 12단계 · 품질 게이트 — **✅ 완료**
+
+- [x] **ruff + mypy 도입** · `pyproject.toml` 에 lint/format/타입체크 설정 + dev 의존성 추가
+- [x] **GitHub Actions CI** · `.github/workflows/ci.yml` — push/PR 에서 ruff/mypy/pytest 자동 실행
+- [x] **통합 테스트 프레임** · `tests/integration/` + `@pytest.mark.integration`, 키 없으면 자동 skip
+- [x] **로깅 강화** · `format_exc_info` 프로세서 + 주요 에러에 `exc_info` 첨부
+
+## ⚡️ 13단계 · 사용성 — **✅ 완료**
+
+- [x] **`paper --dry-run` 플래그** · 모의투자에서도 실제 주문 전송 없이 `order.simulated` 로깅만
+- [x] **종목별 전략 파라미터** · `--symbols 005930:short=3:long=15,000660:short=5:long=20`
+- [x] **RSI 역추세 전략** · `strategy/rsi_reversion.py` + 레지스트리 등록 + 5건 테스트
+- [x] **rich 의존성 명시** · `pyproject.toml` dependencies 에 추가 (전이 의존에서 직접 의존으로)
+
+---
+
+## 🚀 남은 과제 (선택)
+
+- **실 API 필드명 최종 확정** · `account/balance.py` 의 `or` 체인을 실 모의투자 응답으로 1:1 매핑. 모의투자 키 입력 후 `uv run pytest -m integration` 으로 확인.
+- **알림 연동** · 체결 이벤트를 텔레그램/슬랙으로 전송 (신규 `notify/`).
+- **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후).
