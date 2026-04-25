@@ -96,6 +96,28 @@ async def test_token_http_error_raises(settings: Settings) -> None:
             await provider.aclose()
 
 
+async def test_token_business_error_raises_with_return_msg(settings: Settings) -> None:
+    """HTTP 200 + return_code≠0 (예: 8030 모의/실전 키 불일치) 케이스."""
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "return_code": 2,
+                    "return_msg": "입력 값 오류입니다[8030:투자구분(실전/모의)이 달라서 Appkey를 사용할수가 없습니다]",
+                },
+            )
+        )
+        provider = TokenProvider(settings=settings)
+        try:
+            with pytest.raises(KiwoomError) as ei:
+                await provider.get_token()
+        finally:
+            await provider.aclose()
+    assert ei.value.code == "2"
+    assert "8030" in ei.value.message
+
+
 async def test_default_ttl_used_when_expires_missing(settings: Settings) -> None:
     async with respx.mock(base_url=settings.rest_base_url) as mock:
         mock.post(PATH_TOKEN).mock(return_value=httpx.Response(200, json={"token": "t"}))

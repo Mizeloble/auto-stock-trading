@@ -13,7 +13,8 @@ from __future__ import annotations
 PATH_TOKEN = "/oauth2/token"
 PATH_TOKEN_REVOKE = "/oauth2/revoke"
 
-PATH_MARKET = "/api/dostk/mrkcond"  # 시세 (현재가/호가 등)
+PATH_STKINFO = "/api/dostk/stkinfo"  # 종목 기본정보 (현재가·등락률·거래량 등)
+PATH_MARKET = "/api/dostk/mrkcond"  # 시세 (호가창 등)
 PATH_CHART = "/api/dostk/chart"  # 차트 (일/분봉)
 PATH_ACCOUNT = "/api/dostk/acnt"  # 계좌 (예수금/잔고)
 PATH_ORDER = "/api/dostk/ordr"  # 주문 (매수/매도/정정/취소)
@@ -24,8 +25,8 @@ class TR:
     """문서상 자주 쓰이는 TR 코드. 사용 시점에 문서와 대조 후 확정."""
 
     # 시세
-    STOCK_BASIC_INFO = "ka10001"  # 주식기본정보
-    QUOTE_CURRENT = "ka10004"  # 주식호가요청 (현재가·호가)
+    STOCK_BASIC_INFO = "ka10001"  # 주식기본정보 (현재가/등락률/거래량 포함)
+    QUOTE_CURRENT = "ka10004"  # 주식호가요청 (호가창 매수·매도 잔량 — 현재가 필드는 없음)
 
     # 차트
     CHART_DAILY = "ka10081"  # 주식일봉차트조회
@@ -47,6 +48,7 @@ __all__ = [
     "PATH_CHART",
     "PATH_MARKET",
     "PATH_ORDER",
+    "PATH_STKINFO",
     "PATH_TOKEN",
     "PATH_TOKEN_REVOKE",
     "TR",

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from .._common import to_decimal
-from ..kiwoom.endpoints import PATH_MARKET, TR
+from ..kiwoom.endpoints import PATH_STKINFO, TR
 from ..kiwoom.rest import KiwoomRestClient
 
 
@@ -20,11 +20,12 @@ class Quote:
 
 
 async def get_quote(client: KiwoomRestClient, symbol: str) -> Quote:
-    """주식호가요청(`ka10004`) — 현재가/등락률/거래량 포함.
+    """주식기본정보(`ka10001`) — 현재가/등락률/거래량 포함.
 
+    호가창(`ka10004`) 에는 현재가 필드가 없어서 기본정보 TR을 사용한다.
     키움 응답 필드명이 문서에 따라 약간 다르므로 여러 후보를 순회하며 읽는다.
     """
-    data = await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {"stk_cd": symbol})
+    data = await client.request(TR.STOCK_BASIC_INFO, PATH_STKINFO, {"stk_cd": symbol})
 
     def pick(*keys: str) -> object:
         for k in keys:

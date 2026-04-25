@@ -9,10 +9,9 @@
 - [x] **uv 프로젝트 초기화** (Python 3.14)
 - [x] **의존성 설치** (httpx/websockets/pandas/pydantic-settings/structlog/typer + pytest)
 - [x] **`.env.example` / `.gitignore`** · 시크릿 분리 + git 제외
-- [ ] **모의투자 키 받기** (사용자 작업!)
-  - 무엇: [키움 개발자 센터](https://openapi.kiwoom.com) 에서 회원가입 → "모의투자 신청" → AppKey/AppSecret 발급.
-  - 왜: 이 키가 있어야 API 가 "누구세요?" 에 답할 수 있음. 실거래 키는 **절대 쓰지 말 것**.
-  - 확인: `cp .env.example .env` 후 `.env` 에 키를 채우고, `uv run auto-trade quote 005930` 에서 현재가가 나오면 성공.
+- [x] **모의투자 키 받기** (사용자 작업!) — 2026-04-25 완료
+  - 주의: 키움은 실전/모의 AppKey 가 **별도 발급**. 같은 키로 base URL 만 바꾸려면 모의투자 신청 *이후* 발급된 키여야 함. 8030 에러 만나면 키 재발급 필요.
+  - 확인: `uv run auto-trade quote 005930` 에서 현재가가 표로 나오면 성공.
 
 ---
 
@@ -33,7 +32,7 @@
 - [x] **REST 단위 테스트 5종** (`tests/test_rest_client.py`)
 
 ### 체험 확인
-- [ ] `.env` 작성 후 `uv run auto-trade quote 005930` 실행 → 현재가가 표로 출력되면 완료.
+- [x] `.env` 작성 후 `uv run auto-trade quote 005930` 실행 → 현재가가 표로 출력되면 완료. (2026-04-25)
 
 ---
 
@@ -94,9 +93,11 @@
 
 ---
 
-## ✅ 10단계 · 테스트 요약 — **✅ 완료 (53건 passing)**
+## ✅ 10단계 · 테스트 요약 — **✅ 완료 (58건 passing)**
 
-- `tests/test_auth.py` (4)
+- `tests/test_auth.py` (5) · 비즈니스 에러(`return_code≠0`) 매핑 회귀 추가
+- `tests/test_market_chart.py` (2) · 일봉 TR/path/필드명 회귀 (PR #2)
+- `tests/test_market_quote.py` (2) · 현재가 TR/path/필드명 회귀 (`ka10001`+`stkinfo`, 가격 부호 처리)
 - `tests/test_rest_client.py` (5)
 - `tests/test_common.py` (6)
 - `tests/test_strategy_sma.py` (4)
@@ -138,8 +139,17 @@ uv run pytest -m integration  # 모의투자 키가 있을 때만
 
 ---
 
+## 🔧 14단계 · 실 모의투자 응답 검증 (2026-04-25 진행 중)
+
+- [x] **`market/quote.py`** · TR/path 확정 (`ka10001` + `/api/dostk/stkinfo`). 005930 정상 응답 확인 (219,500 / -2.23%). 회귀 테스트 2건 추가 (`tests/test_market_quote.py`).
+- [x] **`kiwoom/auth.py`** · HTTP 200 + `return_code≠0` 비즈니스 에러를 `KiwoomError` 로 매핑 (이전엔 ValidationError 로 폭주). 회귀 테스트 1건 추가.
+- [x] **`account/balance.py`** · `uv run auto-trade balance` 동작 확인 (예수금 5천만원 표시, 페이지네이션 정상).
+- [x] **`market/chart.py`** · `ka10081` + `/api/dostk/chart` mock 실측 정상 확인. 회귀 테스트 2건 추가 (PR #2). 코드 변경 불필요.
+- [ ] **통합 테스트** · `uv run pytest -m integration` 실행해 `account/balance.py`, `account/orders.py` 의 `or` 체인 실 응답 1:1 매핑 확정.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
-- **실 API 필드명 최종 확정** · `account/balance.py` 의 `or` 체인을 실 모의투자 응답으로 1:1 매핑. 모의투자 키 입력 후 `uv run pytest -m integration` 으로 확인.
 - **알림 연동** · 체결 이벤트를 텔레그램/슬랙으로 전송 (신규 `notify/`).
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후).

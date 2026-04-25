@@ -81,6 +81,15 @@ class TokenProvider:
                 payload={"status": resp.status_code},
             )
         data = resp.json()
+        # HTTP 200 이라도 본문 return_code != 0 이면 비즈니스 에러 (예: 8030 모의/실전 키 불일치).
+        # rest.py 의 동일 처리와 맞추어, ValidationError 대신 사람이 읽을 수 있는 메시지로 변환.
+        rc = data.get("return_code")
+        if rc is not None and rc != 0:
+            raise KiwoomError(
+                code=str(rc),
+                message=str(data.get("return_msg") or "unknown"),
+                payload={"path": PATH_TOKEN},
+            )
         parsed = TokenResponse.model_validate(data)
         self._token = parsed.token
         self._expires_at = parsed.expires_at or (datetime.now() + DEFAULT_TTL)
