@@ -61,9 +61,7 @@ async def test_get_daily_bars_uses_chart_path_and_parses_rows(settings: Settings
     }
     async with respx.mock(base_url=settings.rest_base_url) as mock:
         mock.post(PATH_TOKEN).mock(return_value=_token_resp())
-        chart_route = mock.post(PATH_CHART).mock(
-            return_value=httpx.Response(200, json=payload)
-        )
+        chart_route = mock.post(PATH_CHART).mock(return_value=httpx.Response(200, json=payload))
 
         async with KiwoomRestClient(settings=settings) as client:
             bars = await get_daily_bars(client, "005930", base_dt=date(2026, 4, 24))
