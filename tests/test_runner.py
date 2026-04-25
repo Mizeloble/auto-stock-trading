@@ -1,15 +1,16 @@
-"""PaperRunner 의 잔고 스냅샷 폴백 동작 검증."""
+"""PaperRunner 의 잔고 스냅샷 폴백 동작 + notifier hook 검증."""
 
 from __future__ import annotations
 
 from decimal import Decimal
 from itertools import count
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from auto_trading import runner as runner_module
 from auto_trading.account.balance import AccountSnapshot, Holding
+from auto_trading.account.orders import OrderResult
 from auto_trading.runner import PaperRunner
 from auto_trading.strategy.sma_crossover import SmaCrossover
 
@@ -109,6 +110,68 @@ async def test_snapshot_first_call_failure_propagates() -> None:
         pytest.raises(RuntimeError, match="net down"),
     ):
         await r._snapshot_account(rest=object(), previous=None)  # type: ignore[arg-type]
+
+
+async def test_notifier_called_on_order_accepted() -> None:
+    """주문 접수 성공 시 notifier.notify('runner.order_accepted', ...) 가 호출돼야 한다."""
+    from auto_trading._common import Bar
+    from auto_trading.risk.manager import AccountState
+    from auto_trading.strategy.base import Side, Signal
+
+    fake_notifier = AsyncMock()
+    r = PaperRunner(strategy=SmaCrossover(), symbols=["005930"], notifier=fake_notifier)
+    account = AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        day_start_equity=10_000_000,
+    )
+    bar = Bar(
+        symbol="005930",
+        ts=__import__("datetime").datetime.now(),
+        open=70_000,
+        high=70_000,
+        low=70_000,
+        close=70_000,
+        volume=1,
+    )
+    forced_signal = [Signal(symbol="005930", side=Side.BUY, weight=1.0)]
+    r.strategy.on_bar = lambda _b: forced_signal  # type: ignore[method-assign]
+
+    fake_result = OrderResult(order_no="ORD-1", raw={})
+    with patch.object(runner_module, "place_order", AsyncMock(return_value=fake_result)):
+        await r._on_bar(rest=object(), bar=bar, account=account)  # type: ignore[arg-type]
+
+    events = [call.args[0] for call in fake_notifier.notify.call_args_list]
+    assert "runner.order_accepted" in events
+    accepted_call = next(
+        c for c in fake_notifier.notify.call_args_list if c.args[0] == "runner.order_accepted"
+    )
+    assert accepted_call.kwargs["order_no"] == "ORD-1"
+    assert accepted_call.kwargs["symbol"] == "005930"
+
+
+async def test_notifier_called_on_balance_failed_fatal() -> None:
+    """잔고 누적 실패로 러너 중단 시 notifier 가 'runner.balance_failed_fatal' 알림."""
+    fake_notifier = AsyncMock()
+    r = PaperRunner(
+        strategy=SmaCrossover(),
+        symbols=["005930"],
+        max_balance_failures=2,
+        notifier=fake_notifier,
+    )
+
+    with patch.object(runner_module, "get_balance", return_value=_snapshot()):
+        good = await r._snapshot_account(rest=object(), previous=None)  # type: ignore[arg-type]
+
+    with patch.object(runner_module, "get_balance", side_effect=RuntimeError("net down")):
+        # 1회차는 previous 반환
+        await r._snapshot_account(rest=object(), previous=good)  # type: ignore[arg-type]
+        # 2회차에 max 도달 → fatal raise + notifier 호출
+        with pytest.raises(RuntimeError, match="balance fetch failed"):
+            await r._snapshot_account(rest=object(), previous=good)  # type: ignore[arg-type]
+
+    events = [call.args[0] for call in fake_notifier.notify.call_args_list]
+    assert "runner.balance_failed_fatal" in events
 
 
 async def test_dry_run_skips_real_order_placement() -> None:

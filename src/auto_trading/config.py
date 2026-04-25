@@ -33,6 +33,10 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO")
 
+    # 텔레그램 알림 (선택). 두 값 모두 채워졌을 때만 활성화 — 미설정 시 NoopNotifier 폴백.
+    telegram_bot_token: SecretStr = SecretStr("")
+    telegram_chat_id: str = ""
+
     @property
     def rest_base_url(self) -> str:
         return (
@@ -49,6 +53,10 @@ class Settings(BaseSettings):
     @property
     def is_mock(self) -> bool:
         return self.kiwoom_mode is KiwoomMode.MOCK
+
+    @property
+    def has_telegram(self) -> bool:
+        return bool(self.telegram_bot_token.get_secret_value() and self.telegram_chat_id)
 
 
 @lru_cache(maxsize=1)

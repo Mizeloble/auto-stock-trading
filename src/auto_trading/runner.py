@@ -27,6 +27,7 @@ from .config import Settings, get_settings
 from .kiwoom.rest import KiwoomRestClient
 from .kiwoom.ws import KiwoomWebSocket, Subscription
 from .market.feed import Tick, ticks
+from .notify.base import NoopNotifier, Notifier
 from .risk.manager import AccountState, Decision, RiskManager
 from .strategy.base import Strategy
 
@@ -100,6 +101,7 @@ class PaperRunner:
     allow_real: bool = False
     max_balance_failures: int = 5
     dry_run: bool = False  # True 면 모의투자 체결도 시뮬레이션(REST 전송 없음)
+    notifier: Notifier = field(default_factory=NoopNotifier)
     _settings: Settings = field(default_factory=get_settings)
     _balance_failures: int = field(default=0, init=False)
 
@@ -121,31 +123,52 @@ class PaperRunner:
                 "KIWOOM_MODE=real 에서 페이퍼 러너를 돌리려면 allow_real=True 를 명시하세요."
             )
 
-        async with KiwoomRestClient(settings=self._settings) as rest:
-            ws = KiwoomWebSocket(
-                settings=self._settings,
-                token_provider=rest.token_provider,
-            )
-            await ws.start([Subscription(symbols=self.symbols, types=["0B"])])
+        strat_names = sorted({type(s).__name__ for s in self.strategies.values()})
+        await self.notifier.notify(
+            "runner.started",
+            strategy=",".join(strat_names),
+            symbols=",".join(self.symbols),
+            dry_run=self.dry_run,
+        )
 
-            aggregator = _BarAggregator(minutes=self.bar_minutes)
-            account = await self._snapshot_account(rest, previous=None)
-            last_refresh = datetime.now()
+        stop_reason = "정상 종료"
+        try:
+            async with KiwoomRestClient(settings=self._settings) as rest:
+                ws = KiwoomWebSocket(
+                    settings=self._settings,
+                    token_provider=rest.token_provider,
+                )
+                await ws.start([Subscription(symbols=self.symbols, types=["0B"])])
 
-            for strat in set(self.strategies.values()):
-                strat.reset()
-            try:
-                async for tick in ticks(ws):
-                    bar = aggregator.ingest(tick)
-                    if bar is None:
-                        continue
-                    await self._on_bar(rest, bar, account)
+                aggregator = _BarAggregator(minutes=self.bar_minutes)
+                account = await self._snapshot_account(rest, previous=None)
+                last_refresh = datetime.now()
 
-                    if (datetime.now() - last_refresh).total_seconds() >= self.balance_refresh_sec:
-                        account = await self._snapshot_account(rest, previous=account)
-                        last_refresh = datetime.now()
-            finally:
-                await ws.stop()
+                for strat in set(self.strategies.values()):
+                    strat.reset()
+                try:
+                    async for tick in ticks(ws):
+                        bar = aggregator.ingest(tick)
+                        if bar is None:
+                            continue
+                        await self._on_bar(rest, bar, account)
+
+                        if (
+                            datetime.now() - last_refresh
+                        ).total_seconds() >= self.balance_refresh_sec:
+                            account = await self._snapshot_account(rest, previous=account)
+                            last_refresh = datetime.now()
+                finally:
+                    await ws.stop()
+        except KeyboardInterrupt:
+            stop_reason = "KeyboardInterrupt"
+            raise
+        except Exception as exc:
+            stop_reason = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            await self.notifier.notify("runner.stopped", reason=stop_reason)
+            await self.notifier.aclose()
 
     async def _snapshot_account(
         self,
@@ -166,6 +189,10 @@ class PaperRunner:
             if previous is None:
                 raise
             if self._balance_failures >= self.max_balance_failures:
+                await self.notifier.notify(
+                    "runner.balance_failed_fatal",
+                    consecutive=self._balance_failures,
+                )
                 raise RuntimeError(
                     f"balance fetch failed {self._balance_failures} times in a row"
                 ) from exc
@@ -218,6 +245,13 @@ class PaperRunner:
                     side=order.side.value,
                     qty=order.quantity,
                 )
+                await self.notifier.notify(
+                    "runner.order_accepted",
+                    order_no=result.order_no,
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    qty=order.quantity,
+                )
                 # 로컬 포지션 즉시 갱신 (다음 snapshot 까지의 공백 메움)
                 delta = order.quantity if order.side is Side.BUY else -order.quantity
                 account.positions[order.symbol] = max(
@@ -231,4 +265,11 @@ class PaperRunner:
                     error=str(exc),
                     symbol=order.symbol,
                     exc_info=exc,
+                )
+                await self.notifier.notify(
+                    "runner.order_failed",
+                    error=str(exc),
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    qty=order.quantity,
                 )
