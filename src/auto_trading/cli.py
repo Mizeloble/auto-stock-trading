@@ -25,6 +25,7 @@ from .config import get_settings
 from .kiwoom.rest import KiwoomRestClient
 from .market.chart import bars_to_dataframe, get_daily_bars
 from .market.quote import get_quote
+from .notify.factory import build_notifier
 from .runner import PaperRunner
 from .strategy import registry
 
@@ -226,6 +227,7 @@ def paper(
         bar_minutes=minutes,
         allow_real=allow_real,
         dry_run=dry_run,
+        notifier=build_notifier(),
     )
     try:
         asyncio.run(runner.run())

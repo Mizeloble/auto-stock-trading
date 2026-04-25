@@ -63,7 +63,7 @@
 - [x] **테스트 4종** — 체결 타이밍 / 상승장 수익 / 결정론성 / 현금 부족 거절
 
 ### 체험 확인
-- [ ] `.env` 설정 후 위 명령을 실행 → `data/backtests/…/report.json` + `trades.csv` + `equity.csv` 가 쌓이면 완료.
+- [x] `.env` 설정 후 위 명령을 실행 → `data/backtests/…/report.json` + `trades.csv` + `equity.csv` 가 쌓이면 완료. (2026-04-25 005930, 2024-01-01~ 563봉 → 총수익률 103.63%, Sharpe 1.169)
 
 ---
 
@@ -93,12 +93,14 @@
 
 ---
 
-## ✅ 10단계 · 테스트 요약 — **✅ 완료 (단위 64 + 통합 4 = 68건 passing)**
+## ✅ 10단계 · 테스트 요약 — **✅ 완료 (단위 71 + 통합 4 = 75건 passing)**
 
 - `tests/test_auth.py` (5) · 비즈니스 에러(`return_code≠0`) 매핑 회귀 추가
 - `tests/test_market_chart.py` (2) · 일봉 TR/path/필드명 회귀 (PR #2)
 - `tests/test_market_quote.py` (2) · 현재가 TR/path/필드명 회귀 (`ka10001`+`stkinfo`, 가격 부호 처리)
 - `tests/test_account_orders.py` (6) · 매수/매도/취소 body·TR 검증 + `ord_no`→`odno` fallback + RC4010 거절 회귀
+- `tests/test_notify_telegram.py` (3) · sendMessage body·실패 swallow·토큰 마스킹
+- `tests/test_notify_factory.py` (2) · 키 유무 → Telegram/Noop 폴백
 - `tests/test_rest_client.py` (5)
 - `tests/test_common.py` (7)
 - `tests/test_strategy_sma.py` (4)
@@ -106,14 +108,14 @@
 - `tests/test_backtest_engine.py` (4)
 - `tests/test_risk_manager.py` (7)
 - `tests/test_runner_aggregator.py` (2)
-- `tests/test_runner.py` (6) · 잔고 폴백·dry-run
+- `tests/test_runner.py` (8) · 잔고 폴백·dry-run + notifier hook 2건
 - `tests/test_ws_subscribe.py` (3) · 재구독 재시도
 - `tests/test_cli_parsing.py` (6) · 종목별 파라미터 파서
 - `tests/integration/test_rest_roundtrip.py` (3, 키 있을 때만) · quote · daily_bars · balance shape
 - `tests/integration/test_orders_roundtrip.py` (1, 키 있을 때만) · 취소 거절 흐름이 KiwoomError 로 surface
 
 ```
-uv run pytest                  # 단위 64건 (네트워크 없음)
+uv run pytest                  # 단위 71건 (네트워크 없음)
 uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 ```
 
@@ -157,7 +159,25 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ---
 
+## 📲 15단계 · 알림 (텔레그램) v1 — **✅ 완료** (2026-04-25)
+
+- [x] **`notify/` 패키지** · `Notifier` 프로토콜 + `NoopNotifier` (폴백) + `TelegramNotifier` + `build_notifier()` 팩토리. 토큰은 `__repr__` 마스킹.
+- [x] **`config.Settings`** · `telegram_bot_token` / `telegram_chat_id` 옵셔널 + `has_telegram` 프로퍼티. `.env.example` 안내 추가.
+- [x] **`PaperRunner` hook 5개** · started / order_accepted / order_failed / balance_failed_fatal / stopped. 알림 실패는 swallow (트레이딩 핫패스 보호).
+- [x] **`cli.py paper`** · `build_notifier()` 자동 주입. 텔레그램 키 없으면 `NoopNotifier` 폴백 — 기존 동작 그대로.
+- [x] **테스트 7건 신규** — `test_notify_factory.py`(2) + `test_notify_telegram.py`(3, sendMessage body·실패 swallow·토큰 마스킹) + `test_runner.py`(2, order_accepted hook·balance_failed_fatal hook).
+- [x] **품질 게이트** · 단위 71건 / 통합 4건 / ruff / ruff-format / mypy 전부 클린.
+
+### 체험 확인
+- [ ] 모바일 텔레그램 푸시 검증 — BotFather 봇 만들고 `.env` 에 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` 채운 뒤 `uv run auto-trade paper -s sma_crossover --symbols 005930 --dry-run` 실행 → "▶️ paper 시작" 푸시 도착하면 성공.
+
+### v2/v3 후속 (구현 안 함)
+- v2: long polling 으로 `/status` `/positions` `/pnl` `/last_signal` 인커밍 명령. `TELEGRAM_ALLOWED_CHAT_IDS` 화이트리스트 필수.
+- v3: `/pause` `/resume` `/stop` (러너 상태 머신).
+- 옵션: 슬랙·디스코드 백엔드 (Notifier 프로토콜 그대로).
+
+---
+
 ## 🚀 남은 과제 (선택)
 
-- **알림 연동** · 체결 이벤트를 텔레그램/슬랙으로 전송 (신규 `notify/`).
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후).
