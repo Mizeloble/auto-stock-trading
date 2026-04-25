@@ -93,14 +93,14 @@
 
 ---
 
-## ✅ 10단계 · 테스트 요약 — **✅ 완료 (단위 58 + 통합 3 = 61건 passing)**
+## ✅ 10단계 · 테스트 요약 — **✅ 완료 (단위 64 + 통합 4 = 68건 passing)**
 
 - `tests/test_auth.py` (5) · 비즈니스 에러(`return_code≠0`) 매핑 회귀 추가
 - `tests/test_market_chart.py` (2) · 일봉 TR/path/필드명 회귀 (PR #2)
 - `tests/test_market_quote.py` (2) · 현재가 TR/path/필드명 회귀 (`ka10001`+`stkinfo`, 가격 부호 처리)
-- `tests/integration/test_rest_roundtrip.py` (3) · session 스코프 공용 클라이언트로 실 모의서버 왕복 (quote · daily_bars · balance shape)
+- `tests/test_account_orders.py` (6) · 매수/매도/취소 body·TR 검증 + `ord_no`→`odno` fallback + RC4010 거절 회귀
 - `tests/test_rest_client.py` (5)
-- `tests/test_common.py` (6)
+- `tests/test_common.py` (7)
 - `tests/test_strategy_sma.py` (4)
 - `tests/test_strategy_rsi.py` (5) · RSI 전략
 - `tests/test_backtest_engine.py` (4)
@@ -109,11 +109,12 @@
 - `tests/test_runner.py` (6) · 잔고 폴백·dry-run
 - `tests/test_ws_subscribe.py` (3) · 재구독 재시도
 - `tests/test_cli_parsing.py` (6) · 종목별 파라미터 파서
-- `tests/integration/test_rest_roundtrip.py` (3, 키 있을 때만)
+- `tests/integration/test_rest_roundtrip.py` (3, 키 있을 때만) · quote · daily_bars · balance shape
+- `tests/integration/test_orders_roundtrip.py` (1, 키 있을 때만) · 취소 거절 흐름이 KiwoomError 로 surface
 
 ```
-uv run pytest        # 단위 53건 (네트워크 없음)
-uv run pytest -m integration  # 모의투자 키가 있을 때만
+uv run pytest                  # 단위 64건 (네트워크 없음)
+uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 ```
 
 ---
@@ -140,14 +141,19 @@ uv run pytest -m integration  # 모의투자 키가 있을 때만
 
 ---
 
-## 🔧 14단계 · 실 모의투자 응답 검증 (2026-04-25 진행 중)
+## 🔧 14단계 · 실 모의투자 응답 검증 — **✅ 완료**
 
 - [x] **`market/quote.py`** · TR/path 확정 (`ka10001` + `/api/dostk/stkinfo`). 005930 정상 응답 확인 (219,500 / -2.23%). 회귀 테스트 2건 추가 (`tests/test_market_quote.py`).
 - [x] **`kiwoom/auth.py`** · HTTP 200 + `return_code≠0` 비즈니스 에러를 `KiwoomError` 로 매핑 (이전엔 ValidationError 로 폭주). 회귀 테스트 1건 추가.
 - [x] **`account/balance.py`** · `uv run auto-trade balance` 동작 확인 (예수금 5천만원 표시, 페이지네이션 정상).
 - [x] **`market/chart.py`** · `ka10081` + `/api/dostk/chart` mock 실측 정상 확인. 회귀 테스트 2건 추가 (PR #2). 코드 변경 불필요.
 - [x] **통합 테스트 인프라** · 토큰 endpoint(au10001) 분당 호출 제한을 피하기 위해 `tests/integration/conftest.py` 에 session 스코프 `kiwoom_client` 픽스처 추가. `pyproject.toml` 의 `asyncio_default_*_loop_scope = "session"` 도입. `uv run pytest -m integration` → 3건 모두 통과 (quote / daily_bars / balance shape).
-- [ ] **`account/orders.py` `or` 체인 검증** · 매수/매도/취소 응답 필드를 모의 주문 한 건 넣어서 실측 매핑 확인 (현재 `balance.py` 는 통합 테스트로 형태 검증 OK, `orders.py` 는 미검증).
+- [x] **`account/orders.py` 응답 매핑 안전망 + 거절 플로우 검증** (2026-04-25, 토요일).
+  - `scripts/probe_orders.py` 추가 — 토큰만 받아 raw POST 로 응답 dict 캡처 (KiwoomError 우회용 진단 도구).
+  - 모의서버 실측 (영업일 아님): BUY/SELL/CANCEL 모두 `{"return_code": 20, "return_msg": "[2000](RC401x:...)"}` 만 응답. HTTP 200 + return_code≠0.
+  - `tests/test_account_orders.py` 추가 (6건) — 시장가/지정가 body·TR 검증, `ord_no`→`odno` fallback, 둘 다 없을 때 빈 문자열, RC4010 거절이 KiwoomError 로 매핑, 취소.
+  - `tests/integration/test_orders_roundtrip.py` 추가 (1건) — 가짜 원주문번호로 취소 요청 → 키움 거절 → KiwoomError 로 surface (주말/평일 일관 통과).
+  - 결정: 성공 응답의 정확한 주문번호 키(`ord_no` vs `odno`) 확정은 보류. 현재 fallback 체인이 양쪽을 모두 잡으므로 어떤 키여도 정상 동작 — `paper` 첫 실행 시 `order.placed` 로그로 자연 검증되며, 그때 체인을 단순화한다.
 
 ---
 
