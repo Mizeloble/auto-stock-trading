@@ -9,8 +9,12 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 
 import pytest
+import pytest_asyncio
+
+from auto_trading.kiwoom.rest import KiwoomRestClient
 
 
 def _has_mock_keys() -> bool:
@@ -30,3 +34,15 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 def _force_mock_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """통합 테스트는 실거래 모드에서 절대 돌지 않도록 강제."""
     monkeypatch.setenv("KIWOOM_MODE", "mock")
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def kiwoom_client() -> AsyncIterator[KiwoomRestClient]:
+    """통합 테스트 공용 클라이언트.
+
+    키움 토큰 엔드포인트(au10001)는 분당 호출수 제한이 빡빡해, 테스트마다 새
+    클라이언트/토큰을 발급하면 1700(rate limit) 에러로 떨어진다. 세션 1회만
+    발급하고 24h 캐시를 공유한다.
+    """
+    async with KiwoomRestClient() as client:
+        yield client
