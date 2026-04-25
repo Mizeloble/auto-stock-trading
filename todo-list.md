@@ -93,11 +93,12 @@
 
 ---
 
-## ✅ 10단계 · 테스트 요약 — **✅ 완료 (58건 passing)**
+## ✅ 10단계 · 테스트 요약 — **✅ 완료 (단위 58 + 통합 3 = 61건 passing)**
 
 - `tests/test_auth.py` (5) · 비즈니스 에러(`return_code≠0`) 매핑 회귀 추가
 - `tests/test_market_chart.py` (2) · 일봉 TR/path/필드명 회귀 (PR #2)
 - `tests/test_market_quote.py` (2) · 현재가 TR/path/필드명 회귀 (`ka10001`+`stkinfo`, 가격 부호 처리)
+- `tests/integration/test_rest_roundtrip.py` (3) · session 스코프 공용 클라이언트로 실 모의서버 왕복 (quote · daily_bars · balance shape)
 - `tests/test_rest_client.py` (5)
 - `tests/test_common.py` (6)
 - `tests/test_strategy_sma.py` (4)
@@ -145,7 +146,8 @@ uv run pytest -m integration  # 모의투자 키가 있을 때만
 - [x] **`kiwoom/auth.py`** · HTTP 200 + `return_code≠0` 비즈니스 에러를 `KiwoomError` 로 매핑 (이전엔 ValidationError 로 폭주). 회귀 테스트 1건 추가.
 - [x] **`account/balance.py`** · `uv run auto-trade balance` 동작 확인 (예수금 5천만원 표시, 페이지네이션 정상).
 - [x] **`market/chart.py`** · `ka10081` + `/api/dostk/chart` mock 실측 정상 확인. 회귀 테스트 2건 추가 (PR #2). 코드 변경 불필요.
-- [ ] **통합 테스트** · `uv run pytest -m integration` 실행해 `account/balance.py`, `account/orders.py` 의 `or` 체인 실 응답 1:1 매핑 확정.
+- [x] **통합 테스트 인프라** · 토큰 endpoint(au10001) 분당 호출 제한을 피하기 위해 `tests/integration/conftest.py` 에 session 스코프 `kiwoom_client` 픽스처 추가. `pyproject.toml` 의 `asyncio_default_*_loop_scope = "session"` 도입. `uv run pytest -m integration` → 3건 모두 통과 (quote / daily_bars / balance shape).
+- [ ] **`account/orders.py` `or` 체인 검증** · 매수/매도/취소 응답 필드를 모의 주문 한 건 넣어서 실측 매핑 확인 (현재 `balance.py` 는 통합 테스트로 형태 검증 OK, `orders.py` 는 미검증).
 
 ---
 

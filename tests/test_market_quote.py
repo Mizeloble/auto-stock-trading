@@ -50,9 +50,7 @@ async def test_get_quote_uses_stkinfo_path_and_parses_fields(settings: Settings)
     }
     async with respx.mock(base_url=settings.rest_base_url) as mock:
         mock.post(PATH_TOKEN).mock(return_value=_token_resp())
-        quote_route = mock.post(PATH_STKINFO).mock(
-            return_value=httpx.Response(200, json=payload)
-        )
+        quote_route = mock.post(PATH_STKINFO).mock(return_value=httpx.Response(200, json=payload))
 
         async with KiwoomRestClient(settings=settings) as client:
             q = await get_quote(client, "005930")

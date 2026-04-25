@@ -37,6 +37,11 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# 통합 테스트는 키움 토큰 발급 rate limit (au10001) 회피를 위해 세션 1회만 발급해
+# 공유한다 — fixture/test 모두 session 루프 스코프 사용. 단위 테스트는 모두
+# respx/monkeypatch 로 격리돼 있어 session 루프 공유에도 안전.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 # 기본 실행 시 통합 테스트는 제외. `pytest -m integration` 으로 명시 선택 시에만 실행.
 addopts = "-m 'not integration'"
 markers = [

@@ -18,18 +18,16 @@ from auto_trading.market.quote import get_quote
 pytestmark = pytest.mark.integration
 
 
-async def test_current_quote_samsung_electronics() -> None:
-    async with KiwoomRestClient() as client:
-        q = await get_quote(client, "005930")
+async def test_current_quote_samsung_electronics(kiwoom_client: KiwoomRestClient) -> None:
+    q = await get_quote(kiwoom_client, "005930")
 
     assert q.symbol == "005930"
     assert q.price > 0
     assert q.volume >= 0
 
 
-async def test_daily_bars_paginate() -> None:
-    async with KiwoomRestClient() as client:
-        bars = await get_daily_bars(client, "005930", base_dt=date.today(), max_pages=2)
+async def test_daily_bars_paginate(kiwoom_client: KiwoomRestClient) -> None:
+    bars = await get_daily_bars(kiwoom_client, "005930", base_dt=date.today(), max_pages=2)
 
     assert len(bars) > 0
     first = bars[0]
@@ -41,9 +39,8 @@ async def test_daily_bars_paginate() -> None:
     assert ts_sorted_asc or ts_sorted_desc
 
 
-async def test_balance_shape() -> None:
-    async with KiwoomRestClient() as client:
-        snap = await get_balance(client)
+async def test_balance_shape(kiwoom_client: KiwoomRestClient) -> None:
+    snap = await get_balance(kiwoom_client)
 
     # 모의투자 계정은 최초 보유 없을 수 있음 — 타입만 검증
     assert snap.deposit >= 0
