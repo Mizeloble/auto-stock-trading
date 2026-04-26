@@ -11,11 +11,14 @@ from auto_trading.notify.telegram import TelegramNotifier
 
 
 def test_factory_returns_noop_when_telegram_unset() -> None:
+    # _env_file=None 으로 사용자 로컬 .env 의존 차단 (tests/CLAUDE.md 규칙).
     s = Settings(
+        _env_file=None,  # type: ignore[call-arg]
         kiwoom_mode=KiwoomMode.MOCK,
         kiwoom_app_key=SecretStr("k"),
         kiwoom_app_secret=SecretStr("s"),
-        # telegram_* 미설정
+        telegram_bot_token=SecretStr(""),
+        telegram_chat_id="",
     )
     n = build_notifier(s)
     assert isinstance(n, NoopNotifier)
@@ -23,6 +26,7 @@ def test_factory_returns_noop_when_telegram_unset() -> None:
 
 def test_factory_returns_telegram_when_keys_present() -> None:
     s = Settings(
+        _env_file=None,  # type: ignore[call-arg]
         kiwoom_mode=KiwoomMode.MOCK,
         kiwoom_app_key=SecretStr("k"),
         kiwoom_app_secret=SecretStr("s"),
