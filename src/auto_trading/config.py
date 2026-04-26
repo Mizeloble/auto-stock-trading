@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # 텔레그램 알림 (선택). 두 값 모두 채워졌을 때만 활성화 — 미설정 시 NoopNotifier 폴백.
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_chat_id: str = ""
+    # 텔레그램 인커밍 명령(/status 등) 허용 chat_id 화이트리스트 (콤마 구분).
+    # 비어있으면 인커밍 명령 비활성 — 봇은 어떤 메시지에도 응답하지 않는다.
+    telegram_allowed_chat_ids: str = ""
 
     @property
     def rest_base_url(self) -> str:
@@ -57,6 +60,14 @@ class Settings(BaseSettings):
     @property
     def has_telegram(self) -> bool:
         return bool(self.telegram_bot_token.get_secret_value() and self.telegram_chat_id)
+
+    @property
+    def parsed_allowed_chat_ids(self) -> set[str]:
+        return {p.strip() for p in self.telegram_allowed_chat_ids.split(",") if p.strip()}
+
+    @property
+    def has_telegram_commands(self) -> bool:
+        return self.has_telegram and bool(self.parsed_allowed_chat_ids)
 
 
 @lru_cache(maxsize=1)

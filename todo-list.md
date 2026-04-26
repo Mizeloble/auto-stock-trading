@@ -171,13 +171,31 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 ### 체험 확인
 - [ ] 모바일 텔레그램 푸시 검증 — BotFather 봇 만들고 `.env` 에 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` 채운 뒤 `uv run auto-trade paper -s sma_crossover --symbols 005930 --dry-run` 실행 → "▶️ paper 시작" 푸시 도착하면 성공.
 
-### v2/v3 후속 (구현 안 함)
-- v2: long polling 으로 `/status` `/positions` `/pnl` `/last_signal` 인커밍 명령. `TELEGRAM_ALLOWED_CHAT_IDS` 화이트리스트 필수.
+### v3 후속 (구현 안 함)
 - v3: `/pause` `/resume` `/stop` (러너 상태 머신).
 - 옵션: 슬랙·디스코드 백엔드 (Notifier 프로토콜 그대로).
 
 ---
 
+## 🤖 16단계 · 텔레그램 v2 (인커밍 명령) — **✅ 완료** (2026-04-26)
+
+- [x] **`config.Settings`** · `telegram_allowed_chat_ids` (콤마 구분) + `parsed_allowed_chat_ids` / `has_telegram_commands` 프로퍼티. 화이트리스트 비어있으면 폴링 자동 비활성.
+- [x] **`notify/state.py`** · `RunnerStateSnapshot` (raw `AccountSnapshot` + derived `AccountState` + 종목별 최신 `Signal`) + 한국어 포맷터 5종 (`format_status` / `format_balance` / `format_positions` / `format_pnl` / `format_last_signal`).
+- [x] **`runner.py`** · `_snapshot` / `_account` / `_recent_signals` / `_started_at` 인스턴스 필드 + `state_snapshot()` 메서드. `_on_bar` 에서 시그널을 리스크 거절 여부와 무관하게 이력 기록.
+- [x] **`notify/telegram_commands.py`** · `TelegramCommandHandler` long-poll 루프 (`getUpdates?timeout=30`, `update_id` offset 추적). 화이트리스트 미통과 chat 은 응답 없이 무시 (`notify.unauthorized` 로그). 모든 예외 swallow.
+- [x] **`notify/factory.py`** · `build_command_handler(state_provider)` 추가. `has_telegram_commands` False → `None` 리턴 (기존 `build_notifier` 동작과 분리).
+- [x] **`cli.py paper`** · `build_command_handler` 가 None 이면 기존 동작, 있으면 `asyncio.wait` 로 러너 + 폴링 task 동시 실행 + 한쪽 종료 시 cancel + aclose.
+- [x] **`.env.example`** · `TELEGRAM_ALLOWED_CHAT_IDS` 라인 + chat_id 확인 방법 안내.
+- [x] **테스트 24건 신규** (`test_runner_state.py` 5 + `test_telegram_commands.py` 19) — 포맷터 9종, dispatch 권한/sendMessage 4종, polling offset 2종, 인스턴스 가드 3종, runner state 5종.
+- [x] **품질 게이트** · 단위 71 → 95건 (+24) / ruff / ruff-format / mypy 전부 클린.
+- [x] **사이드 픽스** · `tests/test_notify_factory.py` 가 사용자 로컬 `.env` 의 텔레그램 키를 읽어들이던 누수 (`tests/CLAUDE.md` "`.env` 의존 금지" 규칙 위반)를 `_env_file=None` + 명시 빈값으로 차단.
+
+### 체험 확인
+- [ ] 모바일 텔레그램에서 양방향 명령 검증 — `.env` 에 `TELEGRAM_ALLOWED_CHAT_IDS=<본인 chat_id>` 채운 뒤 `uv run auto-trade paper -s sma_crossover --symbols 005930 --dry-run` → 봇에 `/status` `/balance` `/positions` `/pnl` `/last_signal` 보내면 응답 도착, 화이트리스트 외 chat 은 무응답.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
+- **텔레그램 v3** · `/pause` `/resume` `/stop` 제어 명령 (러너 상태 머신 추가 필요).
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후).

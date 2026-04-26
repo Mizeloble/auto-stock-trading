@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from datetime import date, datetime
 from pathlib import Path
@@ -25,7 +26,8 @@ from .config import get_settings
 from .kiwoom.rest import KiwoomRestClient
 from .market.chart import bars_to_dataframe, get_daily_bars
 from .market.quote import get_quote
-from .notify.factory import build_notifier
+from .notify.factory import build_command_handler, build_notifier
+from .notify.telegram_commands import TelegramCommandHandler
 from .runner import PaperRunner
 from .strategy import registry
 
@@ -229,10 +231,39 @@ def paper(
         dry_run=dry_run,
         notifier=build_notifier(),
     )
+    handler = build_command_handler(runner.state_snapshot)
     try:
-        asyncio.run(runner.run())
+        if handler is None:
+            asyncio.run(runner.run())
+        else:
+            console.print("[cyan]텔레그램 인커밍 명령 폴링 활성[/cyan]")
+            asyncio.run(_paper_with_commands(runner, handler))
     except KeyboardInterrupt:
         console.print("[yellow]사용자 중단.[/yellow]")
+
+
+async def _paper_with_commands(runner: PaperRunner, handler: TelegramCommandHandler) -> None:
+    """러너와 텔레그램 명령 핸들러를 동시에 굴린다.
+
+    하나가 끝나면(보통 러너가 종료되면) 다른 task 도 cancel + aclose.
+    """
+    runner_task = asyncio.create_task(runner.run(), name="paper-runner")
+    cmd_task = asyncio.create_task(handler.run(), name="tg-commands")
+    try:
+        done, pending = await asyncio.wait(
+            {runner_task, cmd_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+        for t in pending:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await t
+        # 러너가 raise 했으면 그대로 surface (KeyboardInterrupt 포함)
+        for t in done:
+            t.result()
+    finally:
+        await handler.aclose()
 
 
 if __name__ == "__main__":

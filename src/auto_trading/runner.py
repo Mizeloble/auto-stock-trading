@@ -28,8 +28,9 @@ from .kiwoom.rest import KiwoomRestClient
 from .kiwoom.ws import KiwoomWebSocket, Subscription
 from .market.feed import Tick, ticks
 from .notify.base import NoopNotifier, Notifier
+from .notify.state import RunnerStateSnapshot
 from .risk.manager import AccountState, Decision, RiskManager
-from .strategy.base import Strategy
+from .strategy.base import Signal, Strategy
 
 log = structlog.get_logger(__name__)
 
@@ -104,6 +105,11 @@ class PaperRunner:
     notifier: Notifier = field(default_factory=NoopNotifier)
     _settings: Settings = field(default_factory=get_settings)
     _balance_failures: int = field(default=0, init=False)
+    # 텔레그램 인커밍 명령 응답용 인메모리 상태 (runner 가 매 사이클 갱신)
+    _snapshot: AccountSnapshot | None = field(default=None, init=False)
+    _account: AccountState | None = field(default=None, init=False)
+    _recent_signals: dict[str, Signal] = field(default_factory=dict, init=False)
+    _started_at: datetime | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         # strategies 가 비어있으면 symbols 전부에 공통 strategy 를 복제 없이 공유.
@@ -123,6 +129,7 @@ class PaperRunner:
                 "KIWOOM_MODE=real 에서 페이퍼 러너를 돌리려면 allow_real=True 를 명시하세요."
             )
 
+        self._started_at = datetime.now()
         strat_names = sorted({type(s).__name__ for s in self.strategies.values()})
         await self.notifier.notify(
             "runner.started",
@@ -203,13 +210,17 @@ class PaperRunner:
         avg_prices = {h.symbol: float(h.avg_price) for h in snap.holdings}
         equity = float(snap.total_evaluation) or float(snap.deposit)
         day_start = previous.day_start_equity if previous and previous.day_start_equity else equity
-        return AccountState(
+        state = AccountState(
             deposit=float(snap.deposit),
             total_equity=equity,
             positions=positions,
             avg_prices=avg_prices,
             day_start_equity=day_start,
         )
+        # 텔레그램 명령 응답을 위해 raw + derived 둘 다 보존.
+        self._snapshot = snap
+        self._account = state
+        return state
 
     async def _on_bar(self, rest: KiwoomRestClient, bar: Bar, account: AccountState) -> None:
         log.debug("runner.bar", symbol=bar.symbol, ts=bar.ts.isoformat(), close=bar.close)
@@ -217,6 +228,8 @@ class PaperRunner:
         if strat is None:
             return
         for signal in strat.on_bar(bar):
+            # 시그널은 리스크 거절·체결 여부와 무관하게 이력에 기록 (텔레그램 /last_signal 용).
+            self._recent_signals[signal.symbol] = signal
             decision = self.risk.evaluate(signal, price=bar.close, account=account)
             if decision.decision is Decision.REJECT or decision.order is None:
                 log.info(
@@ -273,3 +286,20 @@ class PaperRunner:
                     side=order.side.value,
                     qty=order.quantity,
                 )
+
+    def state_snapshot(self) -> RunnerStateSnapshot:
+        """텔레그램 명령 핸들러가 호출하는 읽기 전용 스냅샷.
+
+        얕은 복사로 내부 상태 race 를 막는다 (핸들러는 별도 task 에서 동작).
+        """
+        return RunnerStateSnapshot(
+            mode=self._settings.kiwoom_mode.value,
+            dry_run=self.dry_run,
+            symbols=list(self.symbols),
+            strategies={sym: type(strat).__name__ for sym, strat in self.strategies.items()},
+            started_at=self._started_at,
+            snapshot=self._snapshot,
+            account=self._account,
+            recent_signals=dict(self._recent_signals),
+            balance_failures=self._balance_failures,
+        )
