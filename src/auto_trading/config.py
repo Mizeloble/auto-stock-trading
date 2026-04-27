@@ -24,6 +24,10 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # 빈 문자열로 export 된 환경변수는 무시하고 .env 값을 우선 사용한다.
+        # 예: 일부 호스트 환경에서 ANTHROPIC_API_KEY="" 가 미리 export 되어 있어
+        # .env 의 실제 키를 덮어쓰던 문제를 방지.
+        env_ignore_empty=True,
     )
 
     kiwoom_mode: KiwoomMode = KiwoomMode.MOCK

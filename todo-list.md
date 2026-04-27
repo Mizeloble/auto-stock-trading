@@ -226,8 +226,12 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ### 체험 확인
 
-- [ ] 모의투자 키 + 일봉 가능 시: `uv run auto-trade strategy suggest --symbol 005930` → `strategies/profiles/auto_005930.yaml` 생성 → 메모장으로 RSI period 만 16 → 13 으로 바꿔보기 → `uv run auto-trade backtest --profile strategies/profiles/auto_005930.yaml --from 2025-01-01` 실행 → 결과 차이 확인.
-- [ ] (Phase B) `ANTHROPIC_API_KEY` 채운 뒤 `uv run auto-trade strategy advise --profile … --dry-run` → Advisor 제안 표 출력 + 파일 무수정 확인.
+- [x] 모의투자 키 + 일봉 가능 시: `uv run auto-trade strategy suggest --symbol 005930` → `strategies/profiles/auto_005930.yaml` 생성 → 메모장으로 RSI period 만 16 → 13 으로 바꿔보기 → `uv run auto-trade backtest --profile strategies/profiles/auto_005930.yaml --from 2025-01-01` 실행 → 결과 차이 확인. (2026-04-27 검증: 시장국면=high_vol → rsi_reversion period=7/oversold=25/overbought=75/weight=0.5 추천. period 7 → 5 편집 후 320봉 백테스트에서 `total_return_pct` 11.36% → 75.34%, `sharpe` 0.878 → 2.598, `num_trades` 2 → 12 로 명확히 변동 — 프로파일 → 전략 인스턴스화 경로 정상.)
+- [x] (Phase B) `ANTHROPIC_API_KEY` 채운 뒤 `uv run auto-trade strategy advise --profile … --dry-run` → Advisor 제안 표 출력 + 파일 무수정 확인. (2026-04-27 검증: claude-opus-4-7 응답으로 params 5/25/75 → 7/20/80, weight 0.5 → 0.4, confidence 0.70. dry-run 무수정 후 정식 실행 → `auto_005930.yaml.bak` 백업 + `last_advised_at` + `notes`에 `[advisor] …` 갱신까지 정상.)
+
+### 사이드 픽스 (2026-04-27)
+
+- [x] **`config.Settings`** · `env_ignore_empty=True` 추가. 일부 호스트 환경에서 `ANTHROPIC_API_KEY=""` 가 미리 export 되어 `.env` 의 실제 키를 덮어쓰던 문제 방지. 단위 133 / ruff / mypy 클린 유지.
 
 ---
 
