@@ -195,7 +195,44 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ---
 
+## 🧠 17단계 · 초보자용 전략 추천·프로파일 워크플로 — **✅ 완료** (2026-04-26)
+
+코드를 거의 안 짜도 되는 흐름: **추천 → YAML 저장 → 메모장 편집 → 실행**. 주기적으로 Claude API 가 방향성을 조정.
+
+### Phase A — 추천 + YAML 프로파일
+
+- [x] **`strategy/indicators.py`** · 순수함수 인디케이터 헬퍼 (sma/ema/rsi_wilder/atr/bollinger/cross_above·below + rsi_wilder_seed·step). 부작용 없음.
+- [x] **`sma_crossover.py` / `rsi_reversion.py` 리팩터링** · indicators 호출로 위임. 기존 9건 단위테스트 무수정 통과 확인 (회귀 게이트).
+- [x] **`strategy/scanner.py`** · 일봉 DataFrame → MarketRegime(추세상/추세하/박스/고변동성). 기울기·ATR%·밴드폭 휴리스틱, 임계값 모듈 상수.
+- [x] **`strategy/profile.py`** · pydantic `StrategyProfile` (name/symbol/strategy/params/weight/notes/created_at/last_advised_at). `dump_yaml` 가 한국어 헤더 주석 포함, `load_yaml` 가 라운드트립.
+- [x] **`strategy/suggest.py`** · 정적 PRESETS 매핑 (각 regime → StrategyPreset). `recommend(report, symbol, now=...)` 결정론.
+- [x] **`cli.py strategy suggest`** · `auto-trade strategy suggest --symbol 005930` → 일봉 조회 → 분석 → `strategies/profiles/auto_<symbol>.yaml` 저장 + Rich 표.
+- [x] **`backtest`/`paper` 에 `--profile`** · YAML 로드 → `registry.get(...)` 으로 인스턴스화. 기존 `--strategy/--symbol(s)` 와 mutually exclusive.
+- [x] **PyYAML + types-PyYAML** 의존성 추가, `strategies/profiles/.gitkeep` 생성.
+- [x] **테스트 27건 신규** — indicators(11) / scanner(5) / profile_yaml(5) / suggest(5) / cli_profile(3, 한국어 줄바꿈 정규화 + structlog 리셋 픽스처). 기존 9건 SMA/RSI 테스트 무수정 통과.
+
+### Phase B — Claude API 방향성 조정
+
+- [x] **`config.Settings`** · `anthropic_api_key`(SecretStr) / `anthropic_model`(기본 `claude-opus-4-7`) / `has_anthropic` 프로퍼티. `.env.example` 안내 추가.
+- [x] **`strategy/llm_advisor.py`** · pydantic `AdvisorChange`/`AdvisorResponse`. `advise(profile, df, report, *, client, model)`. system 프롬프트 캐싱(`cache_control: ephemeral`) + `propose_change` tool_use 강제 + OHLC 풀시리즈 대신 요약(min/max/mean/std) 전송 → 호출당 입력 토큰 1k 미만 목표.
+- [x] **`cli.py strategy advise`** · `--profile <yaml> [--dry-run]`. 키 없으면 `Exit(1)`. 변경 noop 면 백업·갱신 둘 다 skip. 변경 있으면 `<path>.bak` 백업 후 `last_advised_at` 갱신.
+- [x] **`anthropic` SDK** 의존성 추가 (Phase B 만 사용, Phase A 는 키 없어도 동작).
+- [x] **테스트 9건 신규** — `test_llm_advisor.py`(5: tool_use 파싱 / system 캐시 검증 / dict block 호환 / no-tool-use 거절 / weight 범위 ValidationError) + `test_cli_advise.py`(4: dry-run 무수정 / 백업+갱신 / no-change skip / 키 없음 Exit(1)).
+
+### 품질 게이트 (2026-04-26)
+
+- 단위 95 → **133건** (+38). 통합 4건 그대로 통과.
+- `uv run ruff check` / `ruff format --check` / `mypy` 전부 클린.
+
+### 체험 확인
+
+- [ ] 모의투자 키 + 일봉 가능 시: `uv run auto-trade strategy suggest --symbol 005930` → `strategies/profiles/auto_005930.yaml` 생성 → 메모장으로 RSI period 만 16 → 13 으로 바꿔보기 → `uv run auto-trade backtest --profile strategies/profiles/auto_005930.yaml --from 2025-01-01` 실행 → 결과 차이 확인.
+- [ ] (Phase B) `ANTHROPIC_API_KEY` 채운 뒤 `uv run auto-trade strategy advise --profile … --dry-run` → Advisor 제안 표 출력 + 파일 무수정 확인.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
 - **텔레그램 v3** · `/pause` `/resume` `/stop` 제어 명령 (러너 상태 머신 추가 필요).
+- **인디케이터 캐시** · `data/cache/<symbol>_daily.parquet` 으로 차트 API 호출 절약.
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후).

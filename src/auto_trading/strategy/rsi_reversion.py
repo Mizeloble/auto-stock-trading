@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections import deque
 
+from . import indicators as ind
 from .base import Bar, Side, Signal, Strategy
 from .registry import register
 
@@ -53,29 +54,19 @@ class RsiReversion(Strategy):
             return []
 
         if self._avg_gain is None or self._avg_loss is None:
-            # 최초 계산: 단순평균으로 초기화
-            gains, losses = 0.0, 0.0
-            closes = list(self._closes)
-            for i in range(1, len(closes)):
-                delta = closes[i] - closes[i - 1]
-                if delta >= 0:
-                    gains += delta
-                else:
-                    losses += -delta
-            self._avg_gain = gains / period
-            self._avg_loss = losses / period
+            seed = ind.rsi_wilder_seed(list(self._closes), period)
+            assert seed is not None  # len 체크 통과 후 보장
+            self._avg_gain, self._avg_loss = seed
+            if self._avg_loss == 0:
+                rsi = 100.0
+            else:
+                rs = self._avg_gain / self._avg_loss
+                rsi = 100.0 - (100.0 / (1.0 + rs))
         else:
             delta = self._closes[-1] - self._closes[-2]
-            gain = delta if delta > 0 else 0.0
-            loss = -delta if delta < 0 else 0.0
-            self._avg_gain = (self._avg_gain * (period - 1) + gain) / period
-            self._avg_loss = (self._avg_loss * (period - 1) + loss) / period
-
-        if self._avg_loss == 0:
-            rsi = 100.0
-        else:
-            rs = self._avg_gain / self._avg_loss
-            rsi = 100.0 - (100.0 / (1.0 + rs))
+            self._avg_gain, self._avg_loss, rsi = ind.rsi_wilder_step(
+                self._avg_gain, self._avg_loss, delta, period
+            )
 
         zone = "oversold" if rsi <= oversold else "overbought" if rsi >= overbought else "neutral"
         signals: list[Signal] = []

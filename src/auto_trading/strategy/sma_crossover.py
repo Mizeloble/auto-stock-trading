@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import deque
 
+from . import indicators as ind
 from .base import Bar, Side, Signal, Strategy
 from .registry import register
 
@@ -39,8 +40,9 @@ class SmaCrossover(Strategy):
             return []
 
         prices = list(self._prices)
-        short_ma = sum(prices[-short:]) / short
-        long_ma = sum(prices[-long:]) / long
+        short_ma = ind.sma(prices, short)
+        long_ma = ind.sma(prices, long)
+        assert short_ma is not None and long_ma is not None  # len 체크 통과 후 보장
         diff = short_ma - long_ma
 
         signals: list[Signal] = []

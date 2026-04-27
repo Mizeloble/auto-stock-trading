@@ -29,9 +29,12 @@ from .market.quote import get_quote
 from .notify.factory import build_command_handler, build_notifier
 from .notify.telegram_commands import TelegramCommandHandler
 from .runner import PaperRunner
-from .strategy import registry
+from .strategy import registry, scanner, suggest
+from .strategy.profile import StrategyProfile
 
 app = typer.Typer(help="키움 자동매매 봇 CLI (모의투자 기본)")
+strategy_app = typer.Typer(help="전략 추천·프로파일 관리")
+app.add_typer(strategy_app, name="strategy")
 console = Console()
 
 
@@ -124,14 +127,38 @@ def balance() -> None:
 
 @app.command()
 def backtest(
-    strategy: str = typer.Option(..., "--strategy", "-s", help="전략 이름 (예: sma_crossover)"),
-    symbol: str = typer.Option(..., "--symbol", help="종목코드"),
+    strategy: str | None = typer.Option(
+        None, "--strategy", "-s", help="전략 이름 (예: sma_crossover). --profile 과 둘 중 하나."
+    ),
+    symbol: str | None = typer.Option(None, "--symbol", help="종목코드. --profile 사용 시 생략."),
     start: str = typer.Option(..., "--from", help="YYYY-MM-DD"),
     end: str | None = typer.Option(None, "--to", help="YYYY-MM-DD, 생략 시 오늘"),
     cash: float = typer.Option(10_000_000.0, "--cash", help="초기 예수금"),
     out_dir: Path | None = typer.Option(None, "--out", help="결과 저장 폴더"),
+    profile: Path | None = typer.Option(
+        None, "--profile", help="전략 프로파일 YAML 경로. --strategy/--symbol 대체."
+    ),
 ) -> None:
     """과거 일봉으로 전략 시뮬레이션."""
+    if profile is not None and (strategy or symbol):
+        raise typer.BadParameter("--profile 과 --strategy/--symbol 은 동시에 줄 수 없습니다.")
+    if profile is None and not (strategy and symbol):
+        raise typer.BadParameter("--profile 또는 (--strategy + --symbol) 둘 중 하나가 필요합니다.")
+
+    strategy_name: str
+    if profile is not None:
+        prof = StrategyProfile.load_yaml(profile)
+        strategy_name = prof.strategy
+        symbol = prof.symbol
+        strat = registry.get(prof.strategy, **prof.params)
+        console.print(
+            f"[cyan]프로파일 로드:[/cyan] {profile.name} "
+            f"(strategy={prof.strategy}, params={prof.params})"
+        )
+    else:
+        assert strategy is not None and symbol is not None  # 위 검증 통과 후 보장
+        strategy_name = strategy
+        strat = registry.get(strategy)
 
     async def _fetch() -> list:
         base = date.fromisoformat(end) if end else date.today()
@@ -148,19 +175,21 @@ def backtest(
     df = bars_to_dataframe(bars)
     console.print(f"[dim]Bars:[/dim] {len(df)} 개 ({df.index[0].date()} → {df.index[-1].date()})")
 
-    strat = registry.get(strategy)
     bt = Backtester(strategy=strat, initial_cash=cash)
     result = bt.run(symbol, df)
 
     rep = result.report.as_dict()
-    table = Table(title=f"백테스트 결과 · {strategy} · {symbol}")
+    table = Table(title=f"백테스트 결과 · {strategy_name} · {symbol}")
     table.add_column("지표")
     table.add_column("값", justify="right")
     for k, v in rep.items():
         table.add_row(k, str(v))
     console.print(table)
 
-    out = out_dir or Path("data/backtests") / f"{strategy}_{symbol}_{datetime.now():%Y%m%d_%H%M%S}"
+    out = (
+        out_dir
+        or Path("data/backtests") / f"{strategy_name}_{symbol}_{datetime.now():%Y%m%d_%H%M%S}"
+    )
     saved = save_result(result, out)
     console.print(f"[green]결과 저장:[/green] {saved}")
 
@@ -194,13 +223,15 @@ def _parse_symbol_spec(spec: str) -> tuple[str, dict[str, object]]:
 
 @app.command()
 def paper(
-    strategy: str = typer.Option(..., "--strategy", "-s", help="전략 이름"),
-    symbols: str = typer.Option(
-        ...,
+    strategy: str | None = typer.Option(
+        None, "--strategy", "-s", help="전략 이름. --profile 과 둘 중 하나."
+    ),
+    symbols: str | None = typer.Option(
+        None,
         "--symbols",
         help=(
             "콤마 구분 종목코드. 종목별 전략 파라미터는 콜론으로 덧붙인다. "
-            "예) 005930:short=3:long=15,000660:short=5:long=20"
+            "예) 005930:short=3:long=15,000660:short=5:long=20. --profile 사용 시 생략."
         ),
     ),
     minutes: int = typer.Option(1, "--minutes", help="집계 봉 길이(분)"),
@@ -210,18 +241,35 @@ def paper(
         "--dry-run",
         help="모의투자에서도 실제 주문 전송 없이 시뮬레이션만 (전략·리스크 로직 검증용)",
     ),
+    profile: Path | None = typer.Option(
+        None, "--profile", help="전략 프로파일 YAML 경로. --strategy/--symbols 대체."
+    ),
 ) -> None:
     """실시간 틱을 받아 전략 실행. 모의투자 기본."""
-    raw_specs = [s.strip() for s in symbols.split(",") if s.strip()]
-    if not raw_specs:
-        raise typer.BadParameter("symbols 가 비었습니다")
+    if profile is not None and (strategy or symbols):
+        raise typer.BadParameter("--profile 과 --strategy/--symbols 은 동시에 줄 수 없습니다.")
+    if profile is None and not (strategy and symbols):
+        raise typer.BadParameter("--profile 또는 (--strategy + --symbols) 둘 중 하나가 필요합니다.")
 
     strategies: dict[str, object] = {}
     symbol_list: list[str] = []
-    for spec in raw_specs:
-        sym, params = _parse_symbol_spec(spec)
-        strategies[sym] = registry.get(strategy, **params)
-        symbol_list.append(sym)
+    if profile is not None:
+        prof = StrategyProfile.load_yaml(profile)
+        strategies[prof.symbol] = registry.get(prof.strategy, **prof.params)
+        symbol_list.append(prof.symbol)
+        console.print(
+            f"[cyan]프로파일 로드:[/cyan] {profile.name} "
+            f"(strategy={prof.strategy}, symbol={prof.symbol})"
+        )
+    else:
+        assert strategy is not None and symbols is not None
+        raw_specs = [s.strip() for s in symbols.split(",") if s.strip()]
+        if not raw_specs:
+            raise typer.BadParameter("symbols 가 비었습니다")
+        for spec in raw_specs:
+            sym, params = _parse_symbol_spec(spec)
+            strategies[sym] = registry.get(strategy, **params)
+            symbol_list.append(sym)
 
     runner = PaperRunner(
         strategies=strategies,  # type: ignore[arg-type]
@@ -264,6 +312,146 @@ async def _paper_with_commands(runner: PaperRunner, handler: TelegramCommandHand
             t.result()
     finally:
         await handler.aclose()
+
+
+def _build_anthropic_client() -> object:
+    """Settings 의 anthropic_api_key 로 Anthropic 클라이언트 생성. 키 없으면 Exit(1)."""
+    s = get_settings()
+    if not s.has_anthropic:
+        console.print(
+            "[red]ANTHROPIC_API_KEY 가 설정되지 않았습니다. "
+            ".env 의 ANTHROPIC_API_KEY 를 채우세요.[/red]"
+        )
+        raise typer.Exit(code=1)
+    from anthropic import Anthropic
+
+    return Anthropic(api_key=s.anthropic_api_key.get_secret_value())
+
+
+@strategy_app.command("advise")
+def strategy_advise(
+    profile: Path = typer.Option(..., "--profile", help="갱신할 프로파일 YAML 경로"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="변경안만 미리보기, 파일은 수정 안 함"),
+    lookback: int = typer.Option(
+        scanner.DEFAULT_LOOKBACK,
+        "--lookback",
+        help="시장국면 분석에 쓸 최근 봉 수",
+    ),
+) -> None:
+    """Claude API 로 프로파일의 전략·파라미터·비중을 재조정 (사람이 명시 트리거)."""
+    from datetime import datetime as _dt
+
+    from ._common import KST
+    from .strategy import llm_advisor as advisor
+
+    client = _build_anthropic_client()
+    prof = StrategyProfile.load_yaml(profile)
+
+    async def _fetch() -> list:
+        async with KiwoomRestClient() as kc:
+            return await get_daily_bars(kc, prof.symbol, max_pages=2)
+
+    bars = asyncio.run(_fetch())
+    if not bars:
+        console.print("[red]일봉을 가져오지 못했습니다.[/red]")
+        raise typer.Exit(code=1)
+
+    df = bars_to_dataframe(bars)
+    report = scanner.classify(df, lookback=lookback)
+    response = advisor.advise(
+        prof,
+        df,
+        report,
+        client=client,  # type: ignore[arg-type]
+        model=get_settings().anthropic_model,
+    )
+
+    table = Table(title=f"Advisor 제안 · {prof.symbol}")
+    table.add_column("항목")
+    table.add_column("기존")
+    table.add_column("제안")
+    table.add_row("strategy", prof.strategy, response.change.strategy)
+    table.add_row("params", str(prof.params), str(response.change.params))
+    table.add_row("weight", f"{prof.weight}", f"{response.change.weight}")
+    console.print(table)
+    console.print(f"[dim]근거:[/dim] {response.reason_ko}")
+    console.print(f"[dim]confidence:[/dim] {response.confidence:.2f}")
+
+    no_change = (
+        prof.strategy == response.change.strategy
+        and prof.params == response.change.params
+        and prof.weight == response.change.weight
+    )
+    if no_change:
+        console.print("[yellow]변경 없음 — 파일·백업 모두 그대로 둡니다.[/yellow]")
+        return
+    if dry_run:
+        console.print("[yellow]--dry-run 모드: 파일을 수정하지 않습니다.[/yellow]")
+        return
+
+    backup = profile.with_suffix(profile.suffix + ".bak")
+    backup.write_bytes(profile.read_bytes())
+    updated = prof.model_copy(
+        update={
+            "strategy": response.change.strategy,
+            "params": dict(response.change.params),
+            "weight": response.change.weight,
+            "notes": f"[advisor] {response.reason_ko}",
+            "last_advised_at": _dt.now(tz=KST),
+        }
+    )
+    updated.dump_yaml(profile)
+    console.print(f"[green]프로파일 갱신:[/green] {profile} (백업: {backup.name})")
+
+
+@strategy_app.command("suggest")
+def strategy_suggest(
+    symbol: str = typer.Option(..., "--symbol", help="종목코드 예: 005930"),
+    out: Path = typer.Option(
+        Path("strategies/profiles"),
+        "--out",
+        help="프로파일 YAML 저장 폴더 (자동 생성). 파일명은 auto_<symbol>.yaml.",
+    ),
+    lookback: int = typer.Option(
+        scanner.DEFAULT_LOOKBACK,
+        "--lookback",
+        help="시장국면 분석에 쓸 최근 봉 수 (기본 60).",
+    ),
+) -> None:
+    """최근 차트 패턴을 분석해 어울리는 전략을 추천하고 YAML 프로파일로 저장."""
+
+    async def _fetch() -> list:
+        async with KiwoomRestClient() as client:
+            return await get_daily_bars(client, symbol, max_pages=2)
+
+    bars = asyncio.run(_fetch())
+    if not bars:
+        console.print("[red]일봉 데이터를 가져오지 못했습니다. 종목코드를 확인하세요.[/red]")
+        raise typer.Exit(code=1)
+
+    df = bars_to_dataframe(bars)
+    report = scanner.classify(df, lookback=lookback)
+    profile = suggest.recommend(report, symbol)
+
+    table = Table(title=f"시장국면 · {symbol}")
+    table.add_column("항목")
+    table.add_column("값", justify="right")
+    table.add_row("국면", report.regime.value)
+    for k, v in report.metrics.items():
+        table.add_row(k, f"{v:,.4f}" if isinstance(v, float) else str(v))
+    console.print(table)
+    console.print(f"[dim]요약:[/dim] {report.summary_ko}")
+    console.print(
+        f"[green]추천 전략:[/green] {profile.strategy} "
+        f"params={profile.params} weight={profile.weight}"
+    )
+
+    out_path = out / f"auto_{symbol}.yaml"
+    profile.dump_yaml(out_path)
+    console.print(f"[green]프로파일 저장:[/green] {out_path}")
+    console.print(
+        f"[dim]다음 단계:[/dim] uv run auto-trade backtest --profile {out_path} --from 2025-01-01"
+    )
 
 
 if __name__ == "__main__":

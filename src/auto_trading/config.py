@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # 비어있으면 인커밍 명령 비활성 — 봇은 어떤 메시지에도 응답하지 않는다.
     telegram_allowed_chat_ids: str = ""
 
+    # Claude API (선택). 키가 있을 때만 `auto-trade strategy advise` 가 동작.
+    # 모델 ID 는 환경별 override 가능 — Sonnet 계열로 비용 낮출 수 있음.
+    anthropic_api_key: SecretStr = SecretStr("")
+    anthropic_model: str = "claude-opus-4-7"
+
     @property
     def rest_base_url(self) -> str:
         return (
@@ -68,6 +73,10 @@ class Settings(BaseSettings):
     @property
     def has_telegram_commands(self) -> bool:
         return self.has_telegram and bool(self.parsed_allowed_chat_ids)
+
+    @property
+    def has_anthropic(self) -> bool:
+        return bool(self.anthropic_api_key.get_secret_value())
 
 
 @lru_cache(maxsize=1)
