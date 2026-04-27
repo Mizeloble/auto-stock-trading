@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,6 +16,16 @@ from auto_trading._common import Bar
 from auto_trading.strategy.profile import StrategyProfile
 
 runner = CliRunner()
+
+# CI(no-TTY)와 로컬(TTY) 모두에서 안정적으로 substring 매칭하기 위해 ANSI/박스
+# 문자/개행을 모두 평문으로 정규화. Rich 가 토큰 사이에 ANSI escape 를 끼워
+# 넣어 `--profile` 같은 substring 이 안 걸리는 경우를 방지.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_BOX_RE = re.compile(r"[│╭╮╰╯─┌┐└┘├┤┬┴┼]+")
+
+
+def _plain(output: str) -> str:
+    return _BOX_RE.sub(" ", _ANSI_RE.sub("", output)).replace("\n", " ")
 
 
 @pytest.fixture(autouse=True)
@@ -102,13 +113,15 @@ def test_backtest_rejects_profile_with_strategy_combo(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code != 0
-    assert "동시에 줄 수 없습니다" in result.output
+    plain = _plain(result.output)
+    assert "동시에" in plain and "줄 수 없습니다" in plain
 
 
 def test_backtest_requires_one_of_profile_or_strategy() -> None:
     result = runner.invoke(cli.app, ["backtest", "--from", "2025-01-01"])
     assert result.exit_code != 0
-    # rich/typer 가 한국어 문장을 줄바꿈하므로 짧은 substring 으로 확인
-    normalized = result.output.replace("\n", " ").replace("│", "")
-    assert "--profile" in normalized
-    assert "필요합니다" in normalized
+    plain = _plain(result.output)
+    # 핵심: 옵션 누락에 대한 BadParameter 가 떴는지 확인.
+    # 한국어 메시지는 패널 폭에 따라 wrap 되므로 짧은 토큰만 검사.
+    assert "--profile" in plain
+    assert "필요합니다" in plain
