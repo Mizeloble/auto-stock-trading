@@ -37,10 +37,15 @@ log = structlog.get_logger(__name__)
 
 
 StateProvider = Callable[[], RunnerStateSnapshot]
+ControlAction = Callable[[], None]
 
 
 class TelegramCommandHandler:
-    """텔레그램 봇으로 들어오는 슬래시 명령을 처리하는 long-poll 핸들러."""
+    """텔레그램 봇으로 들어오는 슬래시 명령을 처리하는 long-poll 핸들러.
+
+    on_pause/on_resume/on_stop 은 선택. 안 넘기면 해당 명령은 "비활성" 응답.
+    러너의 동기 메서드(`runner.pause` 등)를 그대로 바인딩해 넘기는 게 표준 사용법.
+    """
 
     def __init__(
         self,
@@ -49,6 +54,10 @@ class TelegramCommandHandler:
         state_provider: StateProvider,
         client: httpx.AsyncClient | None = None,
         poll_timeout: int = 30,
+        *,
+        on_pause: ControlAction | None = None,
+        on_resume: ControlAction | None = None,
+        on_stop: ControlAction | None = None,
     ) -> None:
         if not token:
             raise ValueError("TelegramCommandHandler 는 token 이 필요")
@@ -63,6 +72,9 @@ class TelegramCommandHandler:
         self._owns_client = client is None
         self._poll_timeout = poll_timeout
         self._offset: int = 0
+        self._on_pause = on_pause
+        self._on_resume = on_resume
+        self._on_stop = on_stop
 
     def __repr__(self) -> str:
         return f"TelegramCommandHandler(token={_mask(self._token)!r}, allowed={len(self._allowed)})"
@@ -149,6 +161,23 @@ class TelegramCommandHandler:
     def _handle_command(self, cmd: str) -> str:
         if cmd in ("/start", "/help"):
             return HELP_TEXT
+        if cmd == "/pause":
+            if self._on_pause is None:
+                return "이 봇 인스턴스에선 /pause 가 비활성입니다."
+            self._on_pause()
+            return (
+                "⏸ 일시정지 — 시그널은 계속 기록되지만 주문 송신은 보류됩니다.\n/resume 으로 복귀."
+            )
+        if cmd == "/resume":
+            if self._on_resume is None:
+                return "이 봇 인스턴스에선 /resume 이 비활성입니다."
+            self._on_resume()
+            return "▶ 재개 — 정상 매매 모드로 복귀."
+        if cmd == "/stop":
+            if self._on_stop is None:
+                return "이 봇 인스턴스에선 /stop 이 비활성입니다."
+            self._on_stop()
+            return "⏹ 종료 요청됨 — 다음 봉에서 graceful shutdown.\n되돌릴 수 없습니다."
         state = self._state_provider()
         if cmd == "/status":
             return format_status(state, now=datetime.now())

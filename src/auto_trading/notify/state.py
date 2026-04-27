@@ -30,6 +30,9 @@ class RunnerStateSnapshot:
     account: AccountState | None  # 리스크 평가용 derived
     recent_signals: dict[str, Signal]  # 종목별 최신 1건
     balance_failures: int
+    # 텔레그램 v3 — "running" / "paused" / "stopping" 중 하나.
+    # 기본값 "running" 으로 v2 까지의 RunnerStateSnapshot 사용처(테스트 등) 와 호환.
+    control_state: str = "running"
 
 
 # ---- 포맷터 ----------------------------------------------------------------
@@ -41,8 +44,18 @@ HELP_TEXT = (
     "/positions — 보유 종목 요약\n"
     "/pnl — 당일 손익 + 누적 평가손익\n"
     "/last_signal — 종목별 최근 시그널\n"
+    "/pause — 주문 송신만 일시 보류 (시그널은 계속 기록)\n"
+    "/resume — /pause 해제, 정상 매매 복귀\n"
+    "/stop — 다음 봉에서 graceful 종료 (되돌릴 수 없음)\n"
     "/help — 이 도움말"
 )
+
+
+CONTROL_LABEL_KO: dict[str, str] = {
+    "running": "▶ 운영중",
+    "paused": "⏸ 일시정지",
+    "stopping": "⏹ 종료중",
+}
 
 
 def _won(value: Decimal | float | int) -> str:
@@ -80,8 +93,10 @@ def format_status(state: RunnerStateSnapshot, *, now: datetime | None = None) ->
     strat_str = (
         ", ".join(f"{s}={state.strategies[s]}" for s in state.symbols) if state.strategies else "-"
     )
+    control_label = CONTROL_LABEL_KO.get(state.control_state, state.control_state)
     lines = [
         f"📊 러너 상태{dry}",
+        f"제어: {control_label}",
         f"모드: {state.mode}",
         f"가동: {_uptime(state.started_at, now)}",
         f"종목: {', '.join(state.symbols) if state.symbols else '-'}",

@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 
 import structlog
 
@@ -33,6 +34,20 @@ from .risk.manager import AccountState, Decision, RiskManager
 from .strategy.base import Signal, Strategy
 
 log = structlog.get_logger(__name__)
+
+
+class RunnerControlState(StrEnum):
+    """텔레그램 v3 (/pause /resume /stop) 으로 외부에서 토글 가능한 러너 제어 상태.
+
+    - RUNNING : 정상 — 시그널·리스크·주문 전체 실행
+    - PAUSED  : 시그널 기록·리스크 평가는 그대로, 실제 주문 전송만 건너뜀
+                (텔레그램 /last_signal 정확도 유지하면서 일시 안전 모드)
+    - STOPPING: 다음 tick 경계에서 graceful break, finally 블록으로 정리
+    """
+
+    RUNNING = "running"
+    PAUSED = "paused"
+    STOPPING = "stopping"
 
 
 @dataclass
@@ -110,6 +125,8 @@ class PaperRunner:
     _account: AccountState | None = field(default=None, init=False)
     _recent_signals: dict[str, Signal] = field(default_factory=dict, init=False)
     _started_at: datetime | None = field(default=None, init=False)
+    # 텔레그램 v3 — 외부에서 pause/resume/request_stop 으로 토글
+    _control_state: RunnerControlState = field(default=RunnerControlState.RUNNING, init=False)
 
     def __post_init__(self) -> None:
         # strategies 가 비어있으면 symbols 전부에 공통 strategy 를 복제 없이 공유.
@@ -155,6 +172,10 @@ class PaperRunner:
                     strat.reset()
                 try:
                     async for tick in ticks(ws):
+                        # 외부 /stop 으로 STOPPING 진입 시 다음 tick 경계에서 graceful break.
+                        if self._control_state is RunnerControlState.STOPPING:
+                            log.info("runner.stop_requested", reason="control_state=stopping")
+                            break
                         bar = aggregator.ingest(tick)
                         if bar is None:
                             continue
@@ -240,6 +261,16 @@ class PaperRunner:
                 )
                 continue
             order = decision.order
+            # /pause 진입 시 — 시그널·리스크는 그대로 통과시키고 실제 주문 송신만 건너뜀.
+            # 이래야 텔레그램 /last_signal 이 "지금 무엇을 보고 있는지" 정확히 보여줌.
+            if self._control_state is RunnerControlState.PAUSED:
+                log.info(
+                    "runner.order_skipped_paused",
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    qty=order.quantity,
+                )
+                continue
             if self.dry_run:
                 log.info(
                     "runner.order_simulated",
@@ -302,4 +333,29 @@ class PaperRunner:
             account=self._account,
             recent_signals=dict(self._recent_signals),
             balance_failures=self._balance_failures,
+            control_state=self._control_state.value,
         )
+
+    # ---- 텔레그램 v3 외부 제어 (모두 동기. async loop 가 폴링) -------------
+
+    def pause(self) -> None:
+        """주문 송신을 일시 보류. 시그널 기록·리스크 평가는 그대로 진행.
+
+        STOPPING 상태에서는 무시 — 종료 진행 중에 일시정지 의미 없음.
+        """
+        if self._control_state is RunnerControlState.STOPPING:
+            return
+        self._control_state = RunnerControlState.PAUSED
+        log.info("runner.control_state_changed", state="paused")
+
+    def resume(self) -> None:
+        """일시 보류 해제. STOPPING 에서는 복귀 불가."""
+        if self._control_state is RunnerControlState.STOPPING:
+            return
+        self._control_state = RunnerControlState.RUNNING
+        log.info("runner.control_state_changed", state="running")
+
+    def request_stop(self) -> None:
+        """다음 tick 경계에서 graceful 종료 요청. 한 번 진입하면 되돌릴 수 없음."""
+        self._control_state = RunnerControlState.STOPPING
+        log.info("runner.control_state_changed", state="stopping")

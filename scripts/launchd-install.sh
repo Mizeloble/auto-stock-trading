@@ -1,0 +1,55 @@
+#!/bin/zsh
+# launchd 에 paper / paper-stop 두 개 잡 등록.
+#
+# 무엇/왜:
+# - ~/Library/LaunchAgents/ 에 plist 두 개 복사 후 bootstrap 으로 등록
+# - 등록 후엔 평일 08:55 자동 시동 / 15:35 자동 종료 사이클이 돌아감
+# - bootstrap 은 macOS Catalina 이후 권장 명령. 구식 `launchctl load` 와 다름
+#
+# 어떻게 확인:
+# - launchctl list | grep mizeloble.auto-trade
+# - 실행 잡 두 개 보이면 성공
+
+set -euo pipefail
+
+PROJECT_DIR="/Users/jjmize/Project/auto-stock-trading"
+PLIST_SRC="$PROJECT_DIR/scripts/launchd"
+PLIST_DST="$HOME/Library/LaunchAgents"
+LABELS=(
+  "com.mizeloble.auto-trade.paper"
+  "com.mizeloble.auto-trade.paper-stop"
+)
+
+mkdir -p "$PLIST_DST"
+mkdir -p "$PROJECT_DIR/logs"
+
+# 스크립트 실행권한 보장
+chmod +x "$PROJECT_DIR/scripts/paper-day.sh" "$PROJECT_DIR/scripts/paper-stop.sh"
+
+for label in $LABELS; do
+  src="$PLIST_SRC/$label.plist"
+  dst="$PLIST_DST/$label.plist"
+
+  if [[ ! -f "$src" ]]; then
+    echo "ERROR: plist 원본 없음: $src" >&2
+    exit 1
+  fi
+
+  # 이미 등록돼 있으면 한 번 정리 (재등록을 위해)
+  if launchctl print "gui/$UID/$label" >/dev/null 2>&1; then
+    echo "  - 기존 등록 해제: $label"
+    launchctl bootout "gui/$UID/$label" 2>/dev/null || true
+  fi
+
+  cp "$src" "$dst"
+  echo "  - 복사: $dst"
+
+  launchctl bootstrap "gui/$UID" "$dst"
+  echo "  - 등록: $label"
+done
+
+echo
+echo "✅ 등록 완료. 다음 평일 08:55 KST 부터 자동 시동 / 15:35 자동 종료."
+echo "  확인: launchctl list | grep mizeloble.auto-trade"
+echo "  강제 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.paper"
+echo "  강제 즉시 종료(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.paper-stop"

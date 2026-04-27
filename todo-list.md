@@ -226,13 +226,49 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ### 체험 확인
 
-- [ ] 모의투자 키 + 일봉 가능 시: `uv run auto-trade strategy suggest --symbol 005930` → `strategies/profiles/auto_005930.yaml` 생성 → 메모장으로 RSI period 만 16 → 13 으로 바꿔보기 → `uv run auto-trade backtest --profile strategies/profiles/auto_005930.yaml --from 2025-01-01` 실행 → 결과 차이 확인.
-- [ ] (Phase B) `ANTHROPIC_API_KEY` 채운 뒤 `uv run auto-trade strategy advise --profile … --dry-run` → Advisor 제안 표 출력 + 파일 무수정 확인.
+- [x] 모의투자 키 + 일봉 가능 시: `uv run auto-trade strategy suggest --symbol 005930` → `strategies/profiles/auto_005930.yaml` 생성 → 메모장으로 RSI period 만 16 → 13 으로 바꿔보기 → `uv run auto-trade backtest --profile strategies/profiles/auto_005930.yaml --from 2025-01-01` 실행 → 결과 차이 확인. (2026-04-27 검증: 시장국면=high_vol → rsi_reversion period=7/oversold=25/overbought=75/weight=0.5 추천. period 7 → 5 편집 후 320봉 백테스트에서 `total_return_pct` 11.36% → 75.34%, `sharpe` 0.878 → 2.598, `num_trades` 2 → 12 로 명확히 변동 — 프로파일 → 전략 인스턴스화 경로 정상.)
+- [x] (Phase B) `ANTHROPIC_API_KEY` 채운 뒤 `uv run auto-trade strategy advise --profile … --dry-run` → Advisor 제안 표 출력 + 파일 무수정 확인. (2026-04-27 검증: claude-opus-4-7 응답으로 params 5/25/75 → 7/20/80, weight 0.5 → 0.4, confidence 0.70. dry-run 무수정 후 정식 실행 → `auto_005930.yaml.bak` 백업 + `last_advised_at` + `notes`에 `[advisor] …` 갱신까지 정상.)
+
+### 사이드 픽스 (2026-04-27)
+
+- [x] **`config.Settings`** · `env_ignore_empty=True` 추가. 일부 호스트 환경에서 `ANTHROPIC_API_KEY=""` 가 미리 export 되어 `.env` 의 실제 키를 덮어쓰던 문제 방지. 단위 133 / ruff / mypy 클린 유지.
+
+---
+
+## 🤖 18단계 · 텔레그램 v3 (원격 제어) — **✅ 완료** (2026-04-28)
+
+회사에서 폰으로 paper 러너를 일시정지/재개/종료할 수 있게 — 자동 운영 중 이상 동작 발견 시 즉시 안전 모드.
+
+- [x] **`runner.RunnerControlState`** · `RUNNING`/`PAUSED`/`STOPPING` StrEnum. PAUSED 는 시그널·리스크 평가는 그대로 하고 `place_order` 만 건너뜀(텔레그램 `/last_signal` 정확도 유지). STOPPING 은 다음 tick 경계에서 graceful break, finally 가 ws.stop + notifier "runner.stopped" 까지 마무리. STOPPING 진입 후 pause/resume 무시(되돌릴 수 없게).
+- [x] **`PaperRunner.pause()` / `resume()` / `request_stop()`** · 동기 메서드. async 루프가 매 tick 폴링하는 패턴이라 락·이벤트 불필요.
+- [x] **`TelegramCommandHandler`** · `on_pause`/`on_resume`/`on_stop` 옵셔널 콜백 3개 추가. 미주입 시 "이 봇 인스턴스에선 … 비활성" 응답(기존 v2 호환). `/pause` `/resume` `/stop` dispatch + `HELP_TEXT` 갱신.
+- [x] **`format_status`** · `control_state` 한국어 라벨(`▶ 운영중` / `⏸ 일시정지` / `⏹ 종료중`) 노출. RunnerStateSnapshot 에 `control_state: str = "running"` 필드 추가(기본값으로 v2 사용처 호환).
+- [x] **`build_command_handler`** · 콜백 3개 keyword-only 인자로 전달. `cli.py paper` 가 `runner.pause`/`runner.resume`/`runner.request_stop` 그대로 바인딩.
+- [x] **테스트 11건 신규** — runner_state(5: pause skip / running 비교군 / resume / stop terminal / snapshot value) + telegram_commands(6: dispatch 3건 / 비활성 응답 / status 라벨 / HELP_TEXT 회귀).
+- [x] **품질 게이트** · 단위 133 → 144건 (+11) / ruff / ruff-format / mypy 전부 클린.
+
+## 🖥 19단계 · 맥북 launchd 자동 운영 — **✅ 완료** (2026-04-28)
+
+집 맥북에서 평일 장중에만 paper 러너 자동 실행 + 회사에선 텔레그램 v2/v3 로 모니터링·제어. 며칠~몇 주 굴려보고 가치 확인되면 클라우드(Oracle 무료 티어 등)로 졸업.
+
+- [x] **`scripts/paper-day.sh`** · 평일 08:55 KST 트리거. `caffeinate -i` 로 시스템 sleep 차단 후 `uv run auto-trade paper --profile … --dry-run` 실행. 표준출력 → `logs/paper-YYYY-MM-DD.log`.
+- [x] **`scripts/paper-stop.sh`** · 평일 15:35 KST 트리거. `pkill -TERM -f "auto-trade paper"` 로 SIGTERM 만 — 러너 finally 블록(ws.stop + notifier "runner.stopped") 까지 정상 동작.
+- [x] **`scripts/launchd/com.mizeloble.auto-trade.paper.plist`** + **paper-stop.plist** · `StartCalendarInterval` 로 월~금 (Weekday 1~5) 트리거. `RunAtLoad=false` / `KeepAlive=false` (장 마감 종료를 비정상 죽음으로 오인해 재시동하지 않게).
+- [x] **`scripts/launchd-install.sh` / `launchd-uninstall.sh`** · `launchctl bootstrap`/`bootout` 으로 등록·해제 자동화. 기존 등록 자동 정리 후 재등록.
+- [x] **`scripts/launchd/README.md`** · 한국어 운영 가이드 (사전 준비·등록·강제 시동 테스트·흔한 막힘).
+- [x] **시동 검증 (2026-04-27)** · `paper-day.sh` 백그라운드 → `paper-stop.sh` 로 정리 흐름 e2e 통과. 텔레그램 시작 푸시 200 OK / 키움 토큰·잔고·`ws.subscribe`·`ws.connected` 로그 정상. 8단계 체험 확인 기준(`ws.connected`/`ws.subscribe`) 도 함께 충족.
+
+### 체험 확인
+
+- [ ] **첫 등록**: `./scripts/launchd-install.sh` → `launchctl list | grep mizeloble.auto-trade` 두 줄 보이면 성공.
+- [ ] **강제 즉시 시동(장 외)**: `launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.paper` → 텔레그램 시작 푸시 도착하면 시동 OK. `kickstart -k …paper-stop` 으로 정리.
+- [ ] **첫 자동 평일 운영**: 다음 평일 09:00 직전 폰에서 시작 푸시 + `/status` 응답 정상이면 통과. `logs/paper-YYYY-MM-DD.log` 에 `runner.bar` 누적 확인.
+- [ ] **회사에서 v3 명령 검증**: 폰에서 `/pause` → 응답 + 다음 신호에서 `runner.order_skipped_paused` 로그. `/resume` 으로 복귀 후 `/stop` 으로 graceful 종료.
 
 ---
 
 ## 🚀 남은 과제 (선택)
 
-- **텔레그램 v3** · `/pause` `/resume` `/stop` 제어 명령 (러너 상태 머신 추가 필요).
 - **인디케이터 캐시** · `data/cache/<symbol>_daily.parquet` 으로 차트 API 호출 절약.
+- **클라우드 이전** · 며칠 launchd 운영 후 가치 확인되면 Oracle 무료 티어/Hetzner 로 systemd 이전. `--dry-run` 그대로 검증 후 떼면 실거래 후보.
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후).

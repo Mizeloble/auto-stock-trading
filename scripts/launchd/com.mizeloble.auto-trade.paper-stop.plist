@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mizeloble.auto-trade.paper-stop</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jjmize/Project/auto-stock-trading/scripts/paper-stop.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jjmize/Project/auto-stock-trading</string>
+
+    <!-- 평일(월~금) 15:35 KST 트리거. 장 마감(15:30) 후 5분 여유. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>15</integer>
+            <key>Minute</key><integer>35</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>15</integer>
+            <key>Minute</key><integer>35</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>15</integer>
+            <key>Minute</key><integer>35</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>15</integer>
+            <key>Minute</key><integer>35</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>15</integer>
+            <key>Minute</key><integer>35</integer>
+        </dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper-stop.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper-stop.err.log</string>
+</dict>
+</plist>
