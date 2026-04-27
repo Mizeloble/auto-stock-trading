@@ -279,7 +279,12 @@ def paper(
         dry_run=dry_run,
         notifier=build_notifier(),
     )
-    handler = build_command_handler(runner.state_snapshot)
+    handler = build_command_handler(
+        runner.state_snapshot,
+        on_pause=runner.pause,
+        on_resume=runner.resume,
+        on_stop=runner.request_stop,
+    )
     try:
         if handler is None:
             asyncio.run(runner.run())

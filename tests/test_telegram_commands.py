@@ -387,3 +387,140 @@ def test_handler_repr_does_not_leak_token() -> None:
     assert "CMDTOKEN" not in r
     assert "1234" in r
     assert "…" in r
+
+
+# ---- v3 제어 명령 (/pause /resume /stop) ---------------------------------
+
+
+def _handler_with_control(
+    state: RunnerStateSnapshot,
+    client: httpx.AsyncClient,
+    *,
+    on_pause: object = None,
+    on_resume: object = None,
+    on_stop: object = None,
+) -> TelegramCommandHandler:
+    return TelegramCommandHandler(
+        token=TOKEN,
+        allowed_chat_ids={ALLOWED},
+        state_provider=lambda: state,
+        client=client,
+        poll_timeout=1,
+        on_pause=on_pause,  # type: ignore[arg-type]
+        on_resume=on_resume,  # type: ignore[arg-type]
+        on_stop=on_stop,  # type: ignore[arg-type]
+    )
+
+
+async def test_dispatch_pause_invokes_callback_and_acknowledges() -> None:
+    """/pause → on_pause() 호출 1회 + chat 응답에 '일시정지' 안내 포함."""
+    pause_calls: list[None] = []
+
+    async with (
+        httpx.AsyncClient(base_url=TELEGRAM_API_BASE) as client,
+        respx.mock(base_url=TELEGRAM_API_BASE) as mock,
+    ):
+        send_route = mock.post(f"/bot{TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        handler = _handler_with_control(
+            _empty_state(), client, on_pause=lambda: pause_calls.append(None)
+        )
+        await handler._dispatch(
+            {
+                "update_id": 1,
+                "message": {"chat": {"id": int(ALLOWED)}, "text": "/pause"},
+            }
+        )
+
+        assert len(pause_calls) == 1
+        body = json.loads(send_route.calls[0].request.read())
+        assert "일시정지" in body["text"]
+
+
+async def test_dispatch_resume_invokes_callback_and_acknowledges() -> None:
+    resume_calls: list[None] = []
+
+    async with (
+        httpx.AsyncClient(base_url=TELEGRAM_API_BASE) as client,
+        respx.mock(base_url=TELEGRAM_API_BASE) as mock,
+    ):
+        send_route = mock.post(f"/bot{TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        handler = _handler_with_control(
+            _empty_state(), client, on_resume=lambda: resume_calls.append(None)
+        )
+        await handler._dispatch(
+            {
+                "update_id": 1,
+                "message": {"chat": {"id": int(ALLOWED)}, "text": "/resume"},
+            }
+        )
+
+        assert len(resume_calls) == 1
+        body = json.loads(send_route.calls[0].request.read())
+        assert "재개" in body["text"]
+
+
+async def test_dispatch_stop_invokes_callback_and_acknowledges() -> None:
+    stop_calls: list[None] = []
+
+    async with (
+        httpx.AsyncClient(base_url=TELEGRAM_API_BASE) as client,
+        respx.mock(base_url=TELEGRAM_API_BASE) as mock,
+    ):
+        send_route = mock.post(f"/bot{TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        handler = _handler_with_control(
+            _empty_state(), client, on_stop=lambda: stop_calls.append(None)
+        )
+        await handler._dispatch(
+            {
+                "update_id": 1,
+                "message": {"chat": {"id": int(ALLOWED)}, "text": "/stop"},
+            }
+        )
+
+        assert len(stop_calls) == 1
+        body = json.loads(send_route.calls[0].request.read())
+        assert "종료 요청" in body["text"]
+
+
+async def test_dispatch_pause_disabled_when_callback_not_provided() -> None:
+    """on_pause 미주입 → '비활성' 응답, 콜백 호출 0회 (None 호출 시도 X)."""
+    async with (
+        httpx.AsyncClient(base_url=TELEGRAM_API_BASE) as client,
+        respx.mock(base_url=TELEGRAM_API_BASE) as mock,
+    ):
+        send_route = mock.post(f"/bot{TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        handler = _handler(_empty_state(), client)  # 콜백 X
+        await handler._dispatch(
+            {
+                "update_id": 1,
+                "message": {"chat": {"id": int(ALLOWED)}, "text": "/pause"},
+            }
+        )
+
+        body = json.loads(send_route.calls[0].request.read())
+        assert "비활성" in body["text"]
+
+
+def test_format_status_includes_control_state_label() -> None:
+    """control_state 가 한국어 라벨로 변환되어 status 출력에 들어가야 한다."""
+    paused = _empty_state(control_state="paused")
+    text = format_status(paused, now=datetime(2026, 4, 25, 9, 30))
+    assert "일시정지" in text
+
+    stopping = _empty_state(control_state="stopping")
+    text = format_status(stopping, now=datetime(2026, 4, 25, 9, 30))
+    assert "종료중" in text
+
+
+def test_help_text_lists_v3_commands() -> None:
+    assert "/pause" in HELP_TEXT
+    assert "/resume" in HELP_TEXT
+    assert "/stop" in HELP_TEXT
