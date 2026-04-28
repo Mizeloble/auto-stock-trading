@@ -204,3 +204,49 @@ async def test_dry_run_skips_real_order_placement() -> None:
         await r._on_bar(rest=object(), bar=bar, account=account)  # type: ignore[arg-type]
 
     mock_place.assert_not_called()
+
+
+# ---- 텔레그램 v3 제어 (RunnerState 머신) ---------------------------------
+
+
+def test_pause_sets_state_to_paused() -> None:
+    r = _runner()
+    assert r._state is runner_module.RunnerState.RUNNING
+    r.pause()
+    assert r._state is runner_module.RunnerState.PAUSED
+
+
+def test_resume_returns_to_running_from_paused() -> None:
+    r = _runner()
+    r.pause()
+    r.resume()
+    assert r._state is runner_module.RunnerState.RUNNING
+
+
+def test_request_stop_sets_event_and_state() -> None:
+    r = _runner()
+    assert not r._stop_event.is_set()
+    r.request_stop()
+    assert r._state is runner_module.RunnerState.STOPPING
+    assert r._stop_event.is_set()
+
+
+def test_pause_after_stop_request_is_noop() -> None:
+    """STOPPING 상태에선 pause/resume 이 무시되어야 한다 (이미 종료 중)."""
+    r = _runner()
+    r.request_stop()
+    r.pause()
+    assert r._state is runner_module.RunnerState.STOPPING
+    r.resume()
+    assert r._state is runner_module.RunnerState.STOPPING
+
+
+def test_state_snapshot_reflects_current_state() -> None:
+    r = _runner()
+    assert r.state_snapshot().state == "running"
+    r.pause()
+    assert r.state_snapshot().state == "paused"
+    r.resume()
+    assert r.state_snapshot().state == "running"
+    r.request_stop()
+    assert r.state_snapshot().state == "stopping"

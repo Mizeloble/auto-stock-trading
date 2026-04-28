@@ -21,6 +21,7 @@ import respx
 from auto_trading.account.balance import AccountSnapshot, Holding
 from auto_trading.notify.state import (
     HELP_TEXT,
+    RunnerControl,
     RunnerStateSnapshot,
     format_balance,
     format_last_signal,
@@ -97,11 +98,16 @@ def _account_state() -> AccountState:
     )
 
 
-def _handler(state: RunnerStateSnapshot, client: httpx.AsyncClient) -> TelegramCommandHandler:
+def _handler(
+    state: RunnerStateSnapshot,
+    client: httpx.AsyncClient,
+    control: RunnerControl | None = None,
+) -> TelegramCommandHandler:
     return TelegramCommandHandler(
         token=TOKEN,
         allowed_chat_ids={ALLOWED},
         state_provider=lambda: state,
+        control=control,
         client=client,
         poll_timeout=1,
     )
@@ -117,6 +123,13 @@ def test_format_status_includes_mode_symbols_strategies() -> None:
     assert "005930" in text
     assert "SmaCrossover" in text
     assert "30분" in text  # uptime
+
+
+def test_format_status_renders_runner_state_label() -> None:
+    """state 필드값에 따라 한국어 라벨이 표시돼야 한다 (v3 /pause /stop 가시화)."""
+    assert "🟢 가동중" in format_status(_empty_state(state="running"))
+    assert "⏸ 일시정지" in format_status(_empty_state(state="paused"))
+    assert "⏹ 정지중" in format_status(_empty_state(state="stopping"))
 
 
 def test_format_balance_no_snapshot() -> None:
@@ -387,3 +400,112 @@ def test_handler_repr_does_not_leak_token() -> None:
     assert "CMDTOKEN" not in r
     assert "1234" in r
     assert "…" in r
+
+
+# ---- v3 제어 명령 (/pause /resume /stop) -----------------------------------
+
+
+class _RecordingControl:
+    """Mock RunnerControl — 호출 카운터만 보관."""
+
+    def __init__(self) -> None:
+        self.pause_calls = 0
+        self.resume_calls = 0
+        self.stop_calls = 0
+
+    def as_control(self) -> RunnerControl:
+        def _pause() -> None:
+            self.pause_calls += 1
+
+        def _resume() -> None:
+            self.resume_calls += 1
+
+        def _stop() -> None:
+            self.stop_calls += 1
+
+        return RunnerControl(pause=_pause, resume=_resume, request_stop=_stop)
+
+
+async def test_dispatch_pause_invokes_control_callback() -> None:
+    rec = _RecordingControl()
+    async with (
+        httpx.AsyncClient(base_url=TELEGRAM_API_BASE) as client,
+        respx.mock(base_url=TELEGRAM_API_BASE) as mock,
+    ):
+        send_route = mock.post(f"/bot{TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        handler = _handler(_empty_state(), client, control=rec.as_control())
+        update = {
+            "update_id": 1,
+            "message": {"chat": {"id": int(ALLOWED)}, "text": "/pause"},
+        }
+        await handler._dispatch(update)
+
+        assert rec.pause_calls == 1
+        body = json.loads(send_route.calls[0].request.read())
+        assert "일시정지" in body["text"]
+
+
+async def test_dispatch_resume_invokes_control_callback() -> None:
+    rec = _RecordingControl()
+    async with (
+        httpx.AsyncClient(base_url=TELEGRAM_API_BASE) as client,
+        respx.mock(base_url=TELEGRAM_API_BASE) as mock,
+    ):
+        send_route = mock.post(f"/bot{TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        handler = _handler(_empty_state(), client, control=rec.as_control())
+        update = {
+            "update_id": 1,
+            "message": {"chat": {"id": int(ALLOWED)}, "text": "/resume"},
+        }
+        await handler._dispatch(update)
+
+        assert rec.resume_calls == 1
+        body = json.loads(send_route.calls[0].request.read())
+        assert "재개" in body["text"]
+
+
+async def test_dispatch_stop_invokes_control_callback() -> None:
+    rec = _RecordingControl()
+    async with (
+        httpx.AsyncClient(base_url=TELEGRAM_API_BASE) as client,
+        respx.mock(base_url=TELEGRAM_API_BASE) as mock,
+    ):
+        send_route = mock.post(f"/bot{TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        handler = _handler(_empty_state(), client, control=rec.as_control())
+        update = {
+            "update_id": 1,
+            "message": {"chat": {"id": int(ALLOWED)}, "text": "/stop"},
+        }
+        await handler._dispatch(update)
+
+        assert rec.stop_calls == 1
+        body = json.loads(send_route.calls[0].request.read())
+        assert "정지" in body["text"]
+
+
+async def test_dispatch_control_command_without_control_returns_unset_message() -> None:
+    """control=None 인 핸들러에 /pause → 안내 응답만, 콜러블 호출은 없음."""
+    rec = _RecordingControl()  # 만들지만 주입은 안 함
+    async with (
+        httpx.AsyncClient(base_url=TELEGRAM_API_BASE) as client,
+        respx.mock(base_url=TELEGRAM_API_BASE) as mock,
+    ):
+        send_route = mock.post(f"/bot{TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        handler = _handler(_empty_state(), client, control=None)
+        update = {
+            "update_id": 1,
+            "message": {"chat": {"id": int(ALLOWED)}, "text": "/pause"},
+        }
+        await handler._dispatch(update)
+
+        assert rec.pause_calls == 0
+        body = json.loads(send_route.calls[0].request.read())
+        assert "제어 명령 미설정" in body["text"]

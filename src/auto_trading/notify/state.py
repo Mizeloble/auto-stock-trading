@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -30,6 +31,16 @@ class RunnerStateSnapshot:
     account: AccountState | None  # 리스크 평가용 derived
     recent_signals: dict[str, Signal]  # 종목별 최신 1건
     balance_failures: int
+    state: str = "running"  # RunnerState enum value: "running" | "paused" | "stopping"
+
+
+@dataclass(frozen=True)
+class RunnerControl:
+    """텔레그램 v3 제어 명령 — 핸들러가 러너를 직접 알지 않게 콜러블만 묶어 주입한다."""
+
+    pause: Callable[[], None]
+    resume: Callable[[], None]
+    request_stop: Callable[[], None]
 
 
 # ---- 포맷터 ----------------------------------------------------------------
@@ -41,8 +52,18 @@ HELP_TEXT = (
     "/positions — 보유 종목 요약\n"
     "/pnl — 당일 손익 + 누적 평가손익\n"
     "/last_signal — 종목별 최근 시그널\n"
+    "/pause — 신호·주문 일시정지 (WS 연결은 유지)\n"
+    "/resume — /pause 해제\n"
+    "/stop — 러너 종료\n"
     "/help — 이 도움말"
 )
+
+
+_STATE_LABEL = {
+    "running": "🟢 가동중",
+    "paused": "⏸ 일시정지",
+    "stopping": "⏹ 정지중",
+}
 
 
 def _won(value: Decimal | float | int) -> str:
@@ -82,6 +103,7 @@ def format_status(state: RunnerStateSnapshot, *, now: datetime | None = None) ->
     )
     lines = [
         f"📊 러너 상태{dry}",
+        f"상태: {_STATE_LABEL.get(state.state, state.state)}",
         f"모드: {state.mode}",
         f"가동: {_uptime(state.started_at, now)}",
         f"종목: {', '.join(state.symbols) if state.symbols else '-'}",

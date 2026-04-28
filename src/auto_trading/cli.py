@@ -27,6 +27,7 @@ from .kiwoom.rest import KiwoomRestClient
 from .market.chart import bars_to_dataframe, get_daily_bars
 from .market.quote import get_quote
 from .notify.factory import build_command_handler, build_notifier
+from .notify.state import RunnerControl
 from .notify.telegram_commands import TelegramCommandHandler
 from .runner import PaperRunner
 from .strategy import registry, scanner, suggest
@@ -279,7 +280,12 @@ def paper(
         dry_run=dry_run,
         notifier=build_notifier(),
     )
-    handler = build_command_handler(runner.state_snapshot)
+    control = RunnerControl(
+        pause=runner.pause,
+        resume=runner.resume,
+        request_stop=runner.request_stop,
+    )
+    handler = build_command_handler(runner.state_snapshot, control=control)
     try:
         if handler is None:
             asyncio.run(runner.run())

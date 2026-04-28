@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import enum
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -33,6 +35,14 @@ from .risk.manager import AccountState, Decision, RiskManager
 from .strategy.base import Signal, Strategy
 
 log = structlog.get_logger(__name__)
+
+
+class RunnerState(enum.Enum):
+    """러너 라이프사이클 상태. 텔레그램 v3 의 /pause /resume /stop 가 이 값을 토글한다."""
+
+    RUNNING = "running"
+    PAUSED = "paused"
+    STOPPING = "stopping"
 
 
 @dataclass
@@ -110,6 +120,9 @@ class PaperRunner:
     _account: AccountState | None = field(default=None, init=False)
     _recent_signals: dict[str, Signal] = field(default_factory=dict, init=False)
     _started_at: datetime | None = field(default=None, init=False)
+    # 텔레그램 v3 제어 — pause/resume/request_stop 이 토글한다.
+    _state: RunnerState = field(default=RunnerState.RUNNING, init=False)
+    _stop_event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
 
     def __post_init__(self) -> None:
         # strategies 가 비어있으면 symbols 전부에 공통 strategy 를 복제 없이 공유.
@@ -158,6 +171,11 @@ class PaperRunner:
                         bar = aggregator.ingest(tick)
                         if bar is None:
                             continue
+                        if self._state is RunnerState.STOPPING:
+                            break
+                        if self._state is RunnerState.PAUSED:
+                            # 분봉 집계와 WS 연결은 유지하되, 신호/주문/잔고 갱신은 모두 스킵.
+                            continue
                         await self._on_bar(rest, bar, account)
 
                         if (
@@ -174,7 +192,8 @@ class PaperRunner:
             stop_reason = f"{type(exc).__name__}: {exc}"
             raise
         finally:
-            await self.notifier.notify("runner.stopped", reason=stop_reason)
+            reason = "텔레그램 /stop 요청" if self._state is RunnerState.STOPPING else stop_reason
+            await self.notifier.notify("runner.stopped", reason=reason)
             await self.notifier.aclose()
 
     async def _snapshot_account(
@@ -302,4 +321,28 @@ class PaperRunner:
             account=self._account,
             recent_signals=dict(self._recent_signals),
             balance_failures=self._balance_failures,
+            state=self._state.value,
         )
+
+    # ---- 텔레그램 v3 제어 메서드 -----------------------------------------
+    # 동기 + 즉시 리턴. 트레이딩 핫패스(메인 루프)는 다음 봉 확정 시점에 새 상태를 반영한다.
+
+    def pause(self) -> None:
+        """다음 봉부터 신호/주문/잔고갱신을 스킵. WS 연결과 분봉 집계는 유지."""
+        if self._state is RunnerState.STOPPING:
+            return
+        self._state = RunnerState.PAUSED
+        log.info("runner.paused")
+
+    def resume(self) -> None:
+        """PAUSED → RUNNING. STOPPING 상태에서는 무시 (이미 종료 중)."""
+        if self._state is RunnerState.STOPPING:
+            return
+        self._state = RunnerState.RUNNING
+        log.info("runner.resumed")
+
+    def request_stop(self) -> None:
+        """다음 봉 확정 시점에 메인 루프 break + finally 가 ws.stop / notifier.aclose 처리."""
+        self._state = RunnerState.STOPPING
+        self._stop_event.set()
+        log.info("runner.stop_requested")

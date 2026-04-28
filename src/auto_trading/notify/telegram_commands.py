@@ -24,6 +24,7 @@ import structlog
 
 from .state import (
     HELP_TEXT,
+    RunnerControl,
     RunnerStateSnapshot,
     format_balance,
     format_last_signal,
@@ -47,6 +48,7 @@ class TelegramCommandHandler:
         token: str,
         allowed_chat_ids: set[str],
         state_provider: StateProvider,
+        control: RunnerControl | None = None,
         client: httpx.AsyncClient | None = None,
         poll_timeout: int = 30,
     ) -> None:
@@ -57,6 +59,7 @@ class TelegramCommandHandler:
         self._token = token
         self._allowed = {str(c) for c in allowed_chat_ids}
         self._state_provider = state_provider
+        self._control = control
         # long-poll 은 timeout 보다 약간 길게 (네트워크 여유)
         http_timeout = poll_timeout + 5
         self._client = client or httpx.AsyncClient(base_url=TELEGRAM_API_BASE, timeout=http_timeout)
@@ -149,6 +152,8 @@ class TelegramCommandHandler:
     def _handle_command(self, cmd: str) -> str:
         if cmd in ("/start", "/help"):
             return HELP_TEXT
+        if cmd in ("/pause", "/resume", "/stop"):
+            return self._handle_control(cmd)
         state = self._state_provider()
         if cmd == "/status":
             return format_status(state, now=datetime.now())
@@ -160,6 +165,20 @@ class TelegramCommandHandler:
             return format_pnl(state)
         if cmd == "/last_signal":
             return format_last_signal(state)
+        return HELP_TEXT
+
+    def _handle_control(self, cmd: str) -> str:
+        if self._control is None:
+            return "제어 명령 미설정 — 러너에 RunnerControl 이 주입되지 않았습니다."
+        if cmd == "/pause":
+            self._control.pause()
+            return "⏸ 일시정지됨. /resume 으로 재개."
+        if cmd == "/resume":
+            self._control.resume()
+            return "▶️ 재개됨."
+        if cmd == "/stop":
+            self._control.request_stop()
+            return "⏹ 정지 요청 보냄. 곧 종료됩니다."
         return HELP_TEXT
 
     async def _send(self, chat_id: str, text: str) -> None:

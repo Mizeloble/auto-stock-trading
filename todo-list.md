@@ -235,8 +235,26 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ---
 
+---
+
+## 🤖 18단계 · 텔레그램 v3 (제어 명령) — **✅ 완료** (2026-04-28)
+
+장중에 모바일에서 봇을 일시정지/재개/완전정지할 수 있도록 v2 인커밍 명령에 제어 3종을 추가.
+
+- [x] **`runner.py`** · `RunnerState` enum (RUNNING/PAUSED/STOPPING) + `_state` / `_stop_event` 필드 + `pause()` / `resume()` / `request_stop()` 동기 메서드. 메인 루프는 봉 확정 직후 STOPPING → break, PAUSED → continue (분봉 집계와 WS 연결은 유지, 신호·주문·잔고갱신만 스킵). `runner.stopped` 알림 사유에 "텔레그램 /stop 요청" 표기.
+- [x] **`notify/state.py`** · `RunnerStateSnapshot.state: str` 필드 + `RunnerControl` dataclass (pause/resume/request_stop 콜러블 묶음 — 핸들러가 PaperRunner 객체를 직접 알지 않게 도메인 분리). `format_status` 에 한국어 상태 라벨 (🟢 가동중 / ⏸ 일시정지 / ⏹ 정지중) + `HELP_TEXT` 에 v3 명령 3줄 추가.
+- [x] **`notify/telegram_commands.py`** · `__init__` 에 `control: RunnerControl | None` 인자 + `_handle_control()` 분기 추가. control 미설정 시 "제어 명령 미설정" 안내 응답.
+- [x] **`notify/factory.py`** · `build_command_handler` 시그니처에 `control` 파라미터 전달.
+- [x] **`cli.py paper`** · `RunnerControl(pause=runner.pause, resume=runner.resume, request_stop=runner.request_stop)` 생성해 `build_command_handler` 에 주입.
+- [x] **테스트 10건 신규** — `test_runner.py`(5: pause/resume/stop 상태 머신, STOPPING 후 pause noop, state_snapshot 반영) + `test_telegram_commands.py`(5: format_status 한국어 라벨 + /pause /resume /stop dispatch + control=None fallback).
+- [x] **품질 게이트** · 단위 133 → 143건 / ruff / ruff-format / mypy 전부 클린.
+
+### 체험 확인
+- [ ] 모바일 텔레그램에서 제어 명령 검증 — `uv run auto-trade paper -s sma_crossover --symbols 005930 --dry-run` 실행 → 봇에 `/pause` → "⏸ 일시정지됨" 응답 + `/status` 가 "⏸ 일시정지" 표시 → `/resume` → "▶️ 재개됨" → `/stop` → "⏹ 정지 요청 보냄" + 곧 `runner.stopped (텔레그램 /stop 요청)` 알림 + 프로세스 종료.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
-- **텔레그램 v3** · `/pause` `/resume` `/stop` 제어 명령 (러너 상태 머신 추가 필요).
 - **인디케이터 캐시** · `data/cache/<symbol>_daily.parquet` 으로 차트 API 호출 절약.
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후).
