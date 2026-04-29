@@ -6,10 +6,12 @@
 - getUpdates offset 전진 (배치 두 번 받았을 때)
 - sendMessage 5xx swallow
 - 알 수 없는 명령은 /help 와 동일 응답
+- run() 루프의 transport 예외(타임아웃 등) 는 debug, 그 외만 warning
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from decimal import Decimal
@@ -524,3 +526,132 @@ def test_help_text_lists_v3_commands() -> None:
     assert "/pause" in HELP_TEXT
     assert "/resume" in HELP_TEXT
     assert "/stop" in HELP_TEXT
+
+
+# ---- run() 루프 에러 분류 (cmd_poll_failed 노이즈 정리) -------------------
+
+
+class _LogSpy:
+    """structlog.get_logger 가 반환하는 객체를 흉내내는 스파이.
+
+    debug/info/warning 호출을 (event, kwargs) 튜플로 모은다.
+    """
+
+    def __init__(self) -> None:
+        self.debug_calls: list[tuple[str, dict[str, object]]] = []
+        self.info_calls: list[tuple[str, dict[str, object]]] = []
+        self.warning_calls: list[tuple[str, dict[str, object]]] = []
+
+    def debug(self, event: str, **kwargs: object) -> None:
+        self.debug_calls.append((event, kwargs))
+
+    def info(self, event: str, **kwargs: object) -> None:
+        self.info_calls.append((event, kwargs))
+
+    def warning(self, event: str, **kwargs: object) -> None:
+        self.warning_calls.append((event, kwargs))
+
+
+def test_describe_exc_falls_back_to_repr_when_str_is_empty() -> None:
+    """str(exc) 가 빈 문자열인 httpx 예외도 의미있는 라벨로 바뀌어야 한다."""
+    from auto_trading.notify.telegram_commands import _describe_exc
+
+    # ReadTimeout("") 처럼 stringify 시 빈 문자열인 예외 → repr 폴백.
+    timeout = httpx.ReadTimeout("")
+    assert str(timeout) == ""
+    described = _describe_exc(timeout)
+    assert described != ""
+    assert "ReadTimeout" in described
+
+    # 일반 예외는 그대로.
+    assert _describe_exc(ValueError("boom")) == "boom"
+
+
+async def test_run_loop_demotes_transport_error_to_debug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ReadTimeout 같은 httpx.TransportError 는 cmd_poll_failed warning 이 아니라
+    cmd_poll_transient debug 로 기록된다 — 이게 본 PR 의 노이즈 정리 핵심."""
+    from auto_trading.notify import telegram_commands as mod
+
+    async def _no_sleep(_d: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+    spy = _LogSpy()
+    monkeypatch.setattr(mod, "log", spy)
+
+    handler = TelegramCommandHandler(
+        token=TOKEN,
+        allowed_chat_ids={ALLOWED},
+        state_provider=_empty_state,
+        poll_timeout=1,
+    )
+    n = {"calls": 0}
+
+    async def _fake_poll() -> list[dict[str, object]]:
+        n["calls"] += 1
+        if n["calls"] == 1:
+            raise httpx.ReadTimeout("")  # 운영에서 관측된 빈-메시지 패턴
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(handler, "_poll", _fake_poll)
+
+    with pytest.raises(asyncio.CancelledError):
+        await handler.run()
+    await handler.aclose()
+
+    transient = [c for c in spy.debug_calls if c[0] == "notify.cmd_poll_transient"]
+    poll_failed = [c for c in spy.warning_calls if c[0] == "notify.cmd_poll_failed"]
+    assert transient, "transport timeout 은 debug 로그를 남겨야 함"
+    assert not poll_failed, "transport timeout 은 warning 으로 찍히면 안 됨"
+    _, kwargs = transient[0]
+    assert kwargs["error_type"] == "ReadTimeout"
+    assert kwargs["error"]
+    assert kwargs["error"] != ""
+
+
+async def test_run_loop_warns_with_repr_fallback_on_empty_str_exc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """transport 외 예측 못한 예외는 warning, str(exc) 가 비어있어도 error 필드는 비지 않아야 한다."""
+    from auto_trading.notify import telegram_commands as mod
+
+    async def _no_sleep(_d: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+    spy = _LogSpy()
+    monkeypatch.setattr(mod, "log", spy)
+
+    class _SilentBoom(Exception):
+        """str() 이 빈 문자열인 비-transport 예외."""
+
+    handler = TelegramCommandHandler(
+        token=TOKEN,
+        allowed_chat_ids={ALLOWED},
+        state_provider=_empty_state,
+        poll_timeout=1,
+    )
+    n = {"calls": 0}
+
+    async def _fake_poll() -> list[dict[str, object]]:
+        n["calls"] += 1
+        if n["calls"] == 1:
+            raise _SilentBoom
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(handler, "_poll", _fake_poll)
+
+    with pytest.raises(asyncio.CancelledError):
+        await handler.run()
+    await handler.aclose()
+
+    failed = [c for c in spy.warning_calls if c[0] == "notify.cmd_poll_failed"]
+    assert failed, "transport 외 예외는 여전히 warning 이어야 함"
+    _, kwargs = failed[0]
+    assert kwargs["error_type"] == "_SilentBoom"
+    assert kwargs["error"] != ""
+    assert "_SilentBoom" in str(kwargs["error"])
