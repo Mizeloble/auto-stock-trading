@@ -81,7 +81,7 @@
 - [x] **BarAggregator 테스트 2종** — 1분봉 OHLC 정확성, 5분봉 버킷 경계
 
 ### 체험 확인
-- [ ] 모의 키 세팅 후 **장중 시간** 에 `uv run auto-trade paper -s sma_crossover --symbols 005930` 실행 → 로그에 `ws.connected`, `ws.subscribe`, `runner.bar` 가 쌓이면 정상.
+- [x] 모의 키 세팅 후 **장중 시간** 에 `uv run auto-trade paper -s sma_crossover --symbols 005930` 실행 → 로그에 `ws.connected`, `ws.subscribe`, `runner.bar` 가 쌓이면 정상. (2026-04-29 launchd 09:00 자동 시동 + 다중 종목(005930+000660) sma_crossover 1회 검증 — `runner.order_simulated` 005930 buy 44주·000660 buy 7주 흐름 확인. `logs/paper-2026-04-29.log`)
 
 ---
 
@@ -262,7 +262,7 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 - [ ] **첫 등록**: `./scripts/launchd-install.sh` → `launchctl list | grep mizeloble.auto-trade` 두 줄 보이면 성공.
 - [ ] **강제 즉시 시동(장 외)**: `launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.paper` → 텔레그램 시작 푸시 도착하면 시동 OK. `kickstart -k …paper-stop` 으로 정리.
-- [ ] **첫 자동 평일 운영**: 다음 평일 09:00 직전 폰에서 시작 푸시 + `/status` 응답 정상이면 통과. `logs/paper-YYYY-MM-DD.log` 에 `runner.bar` 누적 확인.
+- [x] **첫 자동 평일 운영**: 다음 평일 09:00 직전 폰에서 시작 푸시 + `/status` 응답 정상이면 통과. `logs/paper-YYYY-MM-DD.log` 에 `runner.bar` 누적 확인. (2026-04-29 자동 시동 → 매수 시뮬 2건 + `/pause` 명령 응답 200 OK 확인. 모바일 푸시·`/status` 응답·`/resume`·`/stop` 일부는 미확인 — 차주 평일 운영에서 마저 검증.)
 - [ ] **회사에서 v3 명령 검증**: 폰에서 `/pause` → 응답 + 다음 신호에서 `runner.order_skipped_paused` 로그. `/resume` 으로 복귀 후 `/stop` 으로 graceful 종료.
 
 ---

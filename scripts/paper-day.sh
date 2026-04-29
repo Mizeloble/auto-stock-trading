@@ -21,10 +21,9 @@ mkdir -p logs
 
 LOG="logs/paper-$(date +%Y-%m-%d).log"
 
-# 다중 종목 검증용 (2026-04-29) — 005930 + 000660 둘 다 구독, sma_crossover 기본값.
-# --dry-run 은 모의 주문(시뮬레이션)만 로깅. 단일 프로파일로 되돌리려면 git revert.
+# 동작은 strategies/profiles/auto_005930.yaml 의 내용으로 결정 — 전략·파라미터 변경은
+# YAML 만 수정하면 다음 시동 때 자동 반영. --dry-run 은 모의 주문(시뮬레이션)만 로깅.
 exec "$CAFFEINATE" -i "$UV_BIN" run auto-trade paper \
-  --strategy sma_crossover \
-  --symbols 005930,000660 \
+  --profile strategies/profiles/auto_005930.yaml \
   --dry-run \
   >> "$LOG" 2>&1
