@@ -204,3 +204,44 @@ async def test_dry_run_skips_real_order_placement() -> None:
         await r._on_bar(rest=object(), bar=bar, account=account)  # type: ignore[arg-type]
 
     mock_place.assert_not_called()
+
+
+async def test_install_signal_handlers_routes_sigterm_and_sigint_to_request_stop() -> None:
+    """SIGTERM/SIGINT 둘 다 request_stop 으로 라우팅돼야 launchd paper-stop 후
+    finally 블록(runner.stopped 푸시) 이 정상 동작."""
+    import signal as _signal
+
+    from auto_trading.runner import RunnerControlState
+
+    r = _runner()
+    registered: dict[int, object] = {}
+
+    class _LoopStub:
+        def add_signal_handler(self, sig: int, callback: object) -> None:
+            registered[sig] = callback
+
+    with patch("auto_trading.runner.asyncio.get_running_loop", return_value=_LoopStub()):
+        r._install_signal_handlers()
+
+    # 핸들러가 등록됐고, 호출하면 실제로 STOPPING 진입.
+    assert _signal.SIGTERM in registered
+    assert _signal.SIGINT in registered
+    assert callable(registered[_signal.SIGTERM])
+
+    assert r._control_state is RunnerControlState.RUNNING
+    registered[_signal.SIGTERM]()  # type: ignore[operator]
+    assert r._control_state is RunnerControlState.STOPPING
+
+
+async def test_install_signal_handlers_tolerates_unsupported_platform() -> None:
+    """Windows/별도 스레드에서 add_signal_handler 가 실패해도 silently swallow."""
+    r = _runner()
+
+    class _FailingLoop:
+        def add_signal_handler(self, sig: int, callback: object) -> None:
+            raise NotImplementedError("not supported")
+
+    with patch("auto_trading.runner.asyncio.get_running_loop", return_value=_FailingLoop()):
+        r._install_signal_handlers()  # raise 하면 실패
+
+    # 별도 어설션 없이 통과 = swallow 정상
