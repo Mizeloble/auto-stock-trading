@@ -40,6 +40,11 @@ StateProvider = Callable[[], RunnerStateSnapshot]
 ControlAction = Callable[[], None]
 
 
+def _describe_exc(exc: BaseException) -> str:
+    """str(exc) 가 비어있는 httpx 예외(ReadTimeout 등) 까지 의미있는 라벨로."""
+    return str(exc) or repr(exc)
+
+
 class TelegramCommandHandler:
     """텔레그램 봇으로 들어오는 슬래시 명령을 처리하는 long-poll 핸들러.
 
@@ -86,9 +91,23 @@ class TelegramCommandHandler:
             while True:
                 try:
                     updates = await self._poll()
+                except httpx.TransportError as exc:
+                    # long-poll 중 타임아웃·일시 네트워크 끊김은 정상 운영 일부 —
+                    # warning 으로 띄우면 로그가 시끄러워서 debug 로 강등.
+                    log.debug(
+                        "notify.cmd_poll_transient",
+                        error_type=type(exc).__name__,
+                        error=_describe_exc(exc),
+                    )
+                    await asyncio.sleep(2.0)
+                    continue
                 except Exception as exc:
-                    # 네트워크 오류는 짧게 쉬고 재시도 — 트레이딩을 막지 않음.
-                    log.warning("notify.cmd_poll_failed", error=str(exc))
+                    # 그 외 예측 못한 에러만 warning — 트레이딩은 막지 않음.
+                    log.warning(
+                        "notify.cmd_poll_failed",
+                        error_type=type(exc).__name__,
+                        error=_describe_exc(exc),
+                    )
                     await asyncio.sleep(2.0)
                     continue
                 for update in updates:
@@ -153,7 +172,12 @@ class TelegramCommandHandler:
         try:
             reply = self._handle_command(cmd)
         except Exception as exc:
-            log.warning("notify.cmd_dispatch_failed", cmd=cmd, error=str(exc))
+            log.warning(
+                "notify.cmd_dispatch_failed",
+                cmd=cmd,
+                error_type=type(exc).__name__,
+                error=_describe_exc(exc),
+            )
             reply = "처리 중 오류가 발생했습니다."
 
         await self._send(chat_id_str, reply)
@@ -205,4 +229,8 @@ class TelegramCommandHandler:
                     body=resp.text[:200],
                 )
         except Exception as exc:
-            log.warning("notify.cmd_send_failed", error=str(exc))
+            log.warning(
+                "notify.cmd_send_failed",
+                error_type=type(exc).__name__,
+                error=_describe_exc(exc),
+            )
