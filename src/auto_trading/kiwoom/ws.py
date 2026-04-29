@@ -28,6 +28,16 @@ from .auth import TokenProvider
 
 log = structlog.get_logger(__name__)
 
+# 키움 모의서버(`mockapi.kiwoom.com`) 는 LOGIN/REG 후 약 5~6 분 idle 이면 close frame 없이
+# TCP 를 끊는다. 이 시간 이상 유지된 뒤 끊긴 건 정상 재접속 사이클로 보고 INFO 로 기록해
+# 운영 로그 노이즈를 줄인다. 짧게 끊기면 진짜 문제 신호로 WARNING 유지.
+_EXPECTED_IDLE_DISCONNECT_SECONDS = 120.0
+
+# WS keepalive 는 키움 서버에 다소 공격적이라 ping_interval/ping_timeout 을 완화.
+# (라이브러리 기본 20s/20s → 이전 30s/20s → 60s/30s 로 여유)
+_WS_PING_INTERVAL = 60
+_WS_PING_TIMEOUT = 30
+
 
 @dataclass
 class Subscription:
@@ -82,13 +92,20 @@ class KiwoomWebSocket:
 
     async def _run_loop(self) -> None:
         backoff = 1.0
+        loop = asyncio.get_event_loop()
         while not self._stop.is_set():
+            connected_at: float | None = None
             try:
                 token = await self._token_provider.get_token()
-                async with websockets.connect(self._settings.ws_url, ping_interval=30) as ws:
+                async with websockets.connect(
+                    self._settings.ws_url,
+                    ping_interval=_WS_PING_INTERVAL,
+                    ping_timeout=_WS_PING_TIMEOUT,
+                ) as ws:
                     self._conn = ws
                     await self._handshake(ws, token)
                     await self._subscribe(ws)
+                    connected_at = loop.time()
                     log.info("ws.connected", url=self._settings.ws_url)
                     backoff = 1.0
                     async for raw in ws:
@@ -103,7 +120,17 @@ class KiwoomWebSocket:
             except (ConnectionClosed, OSError) as exc:
                 if self._stop.is_set():
                     return
-                log.warning("ws.disconnect", error=str(exc), backoff=backoff, exc_info=exc)
+                uptime = loop.time() - connected_at if connected_at is not None else 0.0
+                fields = {
+                    "error": str(exc),
+                    "uptime_seconds": round(uptime, 1),
+                    "backoff": backoff,
+                }
+                if uptime >= _EXPECTED_IDLE_DISCONNECT_SECONDS:
+                    # 모의서버 idle 타임아웃으로 추정 — 재접속 루프가 처리하므로 INFO.
+                    log.info("ws.disconnect", **fields)
+                else:
+                    log.warning("ws.disconnect", **fields, exc_info=exc)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
 
