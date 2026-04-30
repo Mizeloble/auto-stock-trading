@@ -245,3 +245,35 @@ async def test_install_signal_handlers_tolerates_unsupported_platform() -> None:
         r._install_signal_handlers()  # raise 하면 실패
 
     # 별도 어설션 없이 통과 = swallow 정상
+
+
+async def test_request_stop_signals_active_ws_to_unblock_main_loop() -> None:
+    """request_stop 은 ws.signal_stop 을 호출해 ticks() 를 즉시 종료시켜야 한다.
+
+    이게 빠지면 4/30 launchd auto-stop 처럼 main loop 가 다음 tick 을 영원히 기다림.
+    """
+
+    class _StubWs:
+        def __init__(self) -> None:
+            self.signal_stop_called = False
+
+        def signal_stop(self) -> None:
+            self.signal_stop_called = True
+
+    r = _runner()
+    fake_ws = _StubWs()
+    r._ws = fake_ws  # type: ignore[assignment]
+    r.request_stop()
+
+    assert fake_ws.signal_stop_called, "request_stop 이 ws.signal_stop 을 호출해야 함"
+
+
+async def test_request_stop_without_active_ws_is_noop() -> None:
+    """run() 시작 전 또는 finally 진입 후엔 _ws 가 None — request_stop 이 attribute
+    오류 없이 STOPPING 만 진입해야 한다."""
+    from auto_trading.runner import RunnerControlState
+
+    r = _runner()
+    assert r._ws is None
+    r.request_stop()  # raise 안 해야 함
+    assert r._control_state is RunnerControlState.STOPPING

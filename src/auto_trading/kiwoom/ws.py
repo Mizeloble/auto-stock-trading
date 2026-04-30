@@ -67,6 +67,15 @@ class KiwoomWebSocket:
         self._subscriptions = subscriptions
         self._task = asyncio.create_task(self._run_loop(), name="kiwoom-ws")
 
+    def signal_stop(self) -> None:
+        """동기 컨텍스트(예: 시그널 핸들러·request_stop) 에서 ws 루프 종료 신호만 발사.
+
+        실제 cleanup(연결 닫기·태스크 await·토큰 클라이언트 정리) 은 `stop()` 이 처리.
+        이 메서드는 `messages()` 의 1초 폴링 루프와 `_run_loop()` 의 재접속 루프가
+        다음 사이클에 _stop 을 보고 빠져나오게만 함 — main loop hang 방지용.
+        """
+        self._stop.set()
+
     async def stop(self) -> None:
         self._stop.set()
         if self._conn is not None:

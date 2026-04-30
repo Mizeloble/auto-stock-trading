@@ -239,3 +239,28 @@ async def test_run_loop_logs_long_idle_disconnect_as_info(
     assert disconnects[0]["uptime_seconds"] >= ws_module._EXPECTED_IDLE_DISCONNECT_SECONDS
     # WARNING 으로 잘못 떨어지는 회귀가 없는지 함께 확인
     assert all(e["log_level"] != "warning" for e in disconnects)
+
+
+async def test_signal_stop_unblocks_messages_within_one_second() -> None:
+    """signal_stop() 후 1초 안에 messages() 가 종료돼야 — main loop hang 방지."""
+    ws = KiwoomWebSocket.__new__(KiwoomWebSocket)
+    ws._stop = asyncio.Event()
+    ws._queue = asyncio.Queue()
+
+    # 큐가 비어 있는 상태에서 messages() 가 1초 폴링 루프에 진입.
+    aiter = ws.messages().__aiter__()
+
+    async def consume() -> None:
+        async for _ in aiter:
+            return  # 메시지 오면 즉시 종료
+        # 메시지 없이 _stop 으로 종료된 경우 여기 도달
+
+    consumer = asyncio.create_task(consume())
+    await asyncio.sleep(0.1)
+    assert not consumer.done(), "stop 신호 전엔 messages() 가 대기 상태여야 함"
+
+    ws.signal_stop()  # 시그널만 발사 (sync, await 없음)
+
+    # ws.messages() 의 1초 timeout 다음 사이클에서 _stop 보고 종료해야 함.
+    await asyncio.wait_for(consumer, timeout=2.0)
+    assert ws._stop.is_set()
