@@ -130,6 +130,8 @@ class PaperRunner:
     _started_at: datetime | None = field(default=None, init=False)
     # 텔레그램 v3 — 외부에서 pause/resume/request_stop 으로 토글
     _control_state: RunnerControlState = field(default=RunnerControlState.RUNNING, init=False)
+    # request_stop 시 ws.messages() 루프에 즉시 신호를 주기 위한 활성 ws 참조.
+    _ws: KiwoomWebSocket | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         # strategies 가 비어있으면 symbols 전부에 공통 strategy 를 복제 없이 공유.
@@ -184,6 +186,8 @@ class PaperRunner:
                     settings=self._settings,
                     token_provider=rest.token_provider,
                 )
+                # request_stop 이 ws.signal_stop 을 부를 수 있게 활성 ws 참조 보관.
+                self._ws = ws
                 await ws.start([Subscription(symbols=self.symbols, types=["0B"])])
 
                 aggregator = _BarAggregator(minutes=self.bar_minutes)
@@ -209,6 +213,7 @@ class PaperRunner:
                             account = await self._snapshot_account(rest, previous=account)
                             last_refresh = datetime.now()
                 finally:
+                    self._ws = None
                     await ws.stop()
         except KeyboardInterrupt:
             stop_reason = "KeyboardInterrupt"
@@ -378,6 +383,18 @@ class PaperRunner:
         log.info("runner.control_state_changed", state="running")
 
     def request_stop(self) -> None:
-        """다음 tick 경계에서 graceful 종료 요청. 한 번 진입하면 되돌릴 수 없음."""
+        """graceful 종료 요청. 한 번 진입하면 되돌릴 수 없음.
+
+        무엇/왜:
+        - control_state 만 바꾸면 ticks(ws) 가 다음 메시지를 영원히 기다릴 때
+          (예: 장 마감 후 키움이 0B 시세를 안 보낼 때) STOPPING 체크 코드까지
+          못 도달해 main loop hang. 4/30 launchd 자동 정지에서 7시간 hang 실증.
+        - 그래서 ws.signal_stop() 을 같이 호출 — ws.messages() 의 1초 폴링
+          루프가 다음 사이클에서 _stop 을 보고 즉시 종료 → ticks() 종료 →
+          main loop 의 `async for` 정상 break → finally → notifier "runner.stopped".
+        """
         self._control_state = RunnerControlState.STOPPING
         log.info("runner.control_state_changed", state="stopping")
+        ws = self._ws
+        if ws is not None:
+            ws.signal_stop()
