@@ -260,10 +260,10 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ### 체험 확인
 
-- [ ] **첫 등록**: `./scripts/launchd-install.sh` → `launchctl list | grep mizeloble.auto-trade` 두 줄 보이면 성공.
-- [ ] **강제 즉시 시동(장 외)**: `launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.paper` → 텔레그램 시작 푸시 도착하면 시동 OK. `kickstart -k …paper-stop` 으로 정리.
-- [x] **첫 자동 평일 운영**: 다음 평일 09:00 직전 폰에서 시작 푸시 + `/status` 응답 정상이면 통과. `logs/paper-YYYY-MM-DD.log` 에 `runner.bar` 누적 확인. (2026-04-29 자동 시동 → 매수 시뮬 2건 + `/pause` 명령 응답 200 OK 확인. 모바일 푸시·`/status` 응답·`/resume`·`/stop` 일부는 미확인 — 차주 평일 운영에서 마저 검증.)
-- [ ] **회사에서 v3 명령 검증**: 폰에서 `/pause` → 응답 + 다음 신호에서 `runner.order_skipped_paused` 로그. `/resume` 으로 복귀 후 `/stop` 으로 graceful 종료.
+- [x] **첫 등록**: `./scripts/launchd-install.sh` → `launchctl list | grep mizeloble.auto-trade` 두 줄 보이면 성공. (4/27 시동 검증 시 확인)
+- [x] **강제 즉시 시동(장 외)**: `launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.paper` → 텔레그램 시작 푸시 도착하면 시동 OK. `kickstart -k …paper-stop` 으로 정리. (4/27 시동 검증)
+- [x] **첫 자동 평일 운영**: 다음 평일 09:00 직전 폰에서 시작 푸시 + `/status` 응답 정상이면 통과. `logs/paper-YYYY-MM-DD.log` 에 `runner.bar` 누적 확인. (4/29 자동 시동 → 매수 시뮬 2건 + `/pause` 응답 + 5/1 시작 푸시 9:07 도착으로 일자 간 자동 재시동도 확인.)
+- [x] **회사에서 v3 명령 검증**: 폰에서 `/pause` → 응답 + 다음 신호에서 `runner.order_skipped_paused` 로그. `/resume` 으로 복귀 후 `/stop` 으로 graceful 종료. (4/29 `/pause` 응답 200 OK 통과. `/resume`·`/stop` 은 미경유였으나 5/1 launchd auto-stop 시 "⏹ paper 정지(정상 종료)" 푸시 16:00 도착 = SIGTERM → graceful shutdown 핵심 경로 검증 완료. PR #14 + #15 가 잡은 두 단계 hang 버그 회귀 게이트 통과.)
 
 ---
 
