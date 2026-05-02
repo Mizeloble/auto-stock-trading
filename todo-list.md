@@ -267,6 +267,16 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ---
 
+## 🧹 20단계 · 코드 리팩토링 (구조만, 동작 보존) — **✅ 완료** (2026-05-02)
+
+19단계까지 누적된 기능들로 두 큰 파일이 비대해져 가독성이 떨어졌다. 동작·테스트·로그 키 모두 보존한 채 책임만 쪼갬.
+
+- [x] **PR #17 · `runner._on_bar` 75줄 → 12줄 분할** · `_evaluate_signal`(리스크 평가 + PAUSED/dry-run 게이트, Order 또는 None 반환) + `_place_and_track`(REST 송신 + 성공·실패 분기 + 로컬 포지션 갱신 + notifier) 두 helper 로 분리. `_on_bar` 는 흐름만 보이는 오케스트레이터로. 외부 시그니처·로그 키 6종·notifier 키 2종·게이트 우선순위(REJECT → PAUSED → dry-run → 실주문) 모두 동일.
+- [x] **PR #18 · `cli._fetch_daily_bars` 헬퍼 추출** · backtest / strategy advise / strategy suggest 가 각자 6줄로 반복하던 `KiwoomRestClient → get_daily_bars` + 빈 결과 가드를 한 곳에. 빈-결과 메시지가 세 곳에서 미묘하게 다르던 것 통일. df 변환·`--from` 필터는 호출자 책임으로 남김 (명령마다 처리 방식이 달라서).
+- [x] **품질 게이트** · 단위 155건 / 통합 4건 두 PR 모두 무수정 통과 / ruff·format·mypy 클린.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
 - **인디케이터 캐시** · `data/cache/<symbol>_daily.parquet` 으로 차트 API 호출 절약.
