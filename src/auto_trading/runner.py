@@ -26,7 +26,7 @@ import structlog
 
 from ._common import Bar, Side
 from .account.balance import AccountSnapshot, get_balance
-from .account.orders import place_order
+from .account.orders import Order, place_order
 from .config import Settings, get_settings
 from .kiwoom.rest import KiwoomRestClient
 from .kiwoom.ws import KiwoomWebSocket, Subscription
@@ -278,72 +278,90 @@ class PaperRunner:
         for signal in strat.on_bar(bar):
             # 시그널은 리스크 거절·체결 여부와 무관하게 이력에 기록 (텔레그램 /last_signal 용).
             self._recent_signals[signal.symbol] = signal
-            decision = self.risk.evaluate(signal, price=bar.close, account=account)
-            if decision.decision is Decision.REJECT or decision.order is None:
-                log.info(
-                    "runner.signal_rejected",
-                    symbol=signal.symbol,
-                    side=signal.side.value,
-                    reason=decision.reason,
-                )
+            order = await self._evaluate_signal(signal, bar, account)
+            if order is None:
                 continue
-            order = decision.order
-            # /pause 진입 시 — 시그널·리스크는 그대로 통과시키고 실제 주문 송신만 건너뜀.
-            # 이래야 텔레그램 /last_signal 이 "지금 무엇을 보고 있는지" 정확히 보여줌.
-            if self._control_state is RunnerControlState.PAUSED:
-                log.info(
-                    "runner.order_skipped_paused",
-                    symbol=order.symbol,
-                    side=order.side.value,
-                    qty=order.quantity,
-                )
-                continue
-            if self.dry_run:
-                log.info(
-                    "runner.order_simulated",
-                    symbol=order.symbol,
-                    side=order.side.value,
-                    qty=order.quantity,
-                    price=float(order.price) if order.price else bar.close,
-                )
-                continue
-            try:
-                result = await place_order(rest, order)
-                log.info(
-                    "runner.order_accepted",
-                    order_no=result.order_no,
-                    symbol=order.symbol,
-                    side=order.side.value,
-                    qty=order.quantity,
-                )
-                await self.notifier.notify(
-                    "runner.order_accepted",
-                    order_no=result.order_no,
-                    symbol=order.symbol,
-                    side=order.side.value,
-                    qty=order.quantity,
-                )
-                # 로컬 포지션 즉시 갱신 (다음 snapshot 까지의 공백 메움)
-                delta = order.quantity if order.side is Side.BUY else -order.quantity
-                account.positions[order.symbol] = max(
-                    0, account.positions.get(order.symbol, 0) + delta
-                )
-                if order.side is Side.BUY:
-                    account.avg_prices[order.symbol] = float(order.price or Decimal(str(bar.close)))
-            except Exception as exc:
-                log.error(
-                    "runner.order_failed",
-                    error=str(exc),
-                    symbol=order.symbol,
-                    exc_info=exc,
-                )
-                await self.notifier.notify(
-                    "runner.order_failed",
-                    error=str(exc),
-                    symbol=order.symbol,
-                    side=order.side.value,
-                    qty=order.quantity,
-                )
+            await self._place_and_track(rest, order, bar, account)
+
+    async def _evaluate_signal(
+        self, signal: Signal, bar: Bar, account: AccountState
+    ) -> Order | None:
+        """리스크 평가 + PAUSED/dry-run 게이트.
+
+        None 반환 케이스(각각 로그 한 줄):
+        - 리스크 매니저 REJECT → `runner.signal_rejected`
+        - PAUSED → `runner.order_skipped_paused` (텔레그램 /last_signal 정확도 위해 시그널·리스크는 그대로)
+        - dry_run → `runner.order_simulated`
+        Order 반환 시 호출자가 _place_and_track 으로 실제 송신.
+        """
+        decision = self.risk.evaluate(signal, price=bar.close, account=account)
+        if decision.decision is Decision.REJECT or decision.order is None:
+            log.info(
+                "runner.signal_rejected",
+                symbol=signal.symbol,
+                side=signal.side.value,
+                reason=decision.reason,
+            )
+            return None
+        order = decision.order
+        if self._control_state is RunnerControlState.PAUSED:
+            log.info(
+                "runner.order_skipped_paused",
+                symbol=order.symbol,
+                side=order.side.value,
+                qty=order.quantity,
+            )
+            return None
+        if self.dry_run:
+            log.info(
+                "runner.order_simulated",
+                symbol=order.symbol,
+                side=order.side.value,
+                qty=order.quantity,
+                price=float(order.price) if order.price else bar.close,
+            )
+            return None
+        return order
+
+    async def _place_and_track(
+        self, rest: KiwoomRestClient, order: Order, bar: Bar, account: AccountState
+    ) -> None:
+        """REST 송신 + 성공·실패 분기. 성공 시 로컬 포지션·평단 즉시 갱신, notifier 양방향."""
+        try:
+            result = await place_order(rest, order)
+            log.info(
+                "runner.order_accepted",
+                order_no=result.order_no,
+                symbol=order.symbol,
+                side=order.side.value,
+                qty=order.quantity,
+            )
+            await self.notifier.notify(
+                "runner.order_accepted",
+                order_no=result.order_no,
+                symbol=order.symbol,
+                side=order.side.value,
+                qty=order.quantity,
+            )
+            # 로컬 포지션 즉시 갱신 (다음 snapshot 까지의 공백 메움)
+            delta = order.quantity if order.side is Side.BUY else -order.quantity
+            account.positions[order.symbol] = max(0, account.positions.get(order.symbol, 0) + delta)
+            if order.side is Side.BUY:
+                account.avg_prices[order.symbol] = float(order.price or Decimal(str(bar.close)))
+        except Exception as exc:
+            log.error(
+                "runner.order_failed",
+                error=str(exc),
+                symbol=order.symbol,
+                exc_info=exc,
+            )
+            await self.notifier.notify(
+                "runner.order_failed",
+                error=str(exc),
+                symbol=order.symbol,
+                side=order.side.value,
+                qty=order.quantity,
+            )
 
     def state_snapshot(self) -> RunnerStateSnapshot:
         """텔레그램 명령 핸들러가 호출하는 읽기 전용 스냅샷.
