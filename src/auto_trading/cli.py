@@ -38,6 +38,30 @@ app.add_typer(strategy_app, name="strategy")
 console = Console()
 
 
+def _fetch_daily_bars(
+    symbol: str,
+    *,
+    base_dt: date | None = None,
+    max_pages: int = 10,
+) -> list:
+    """일봉 fetch + 빈 결과 가드.
+
+    backtest/advise/suggest 셋이 같은 `KiwoomRestClient → get_daily_bars` 패턴을
+    공유. 빈 결과면 사용자에게 안내 메시지 후 `typer.Exit(1)`. df 변환·기간 필터는
+    호출자 책임 — 명령마다 lookback·`--from` 처리 방식이 다름.
+    """
+
+    async def _run() -> list:
+        async with KiwoomRestClient() as client:
+            return await get_daily_bars(client, symbol, base_dt=base_dt, max_pages=max_pages)
+
+    bars = asyncio.run(_run())
+    if not bars:
+        console.print("[red]일봉 데이터를 가져오지 못했습니다. 종목코드/기간을 확인하세요.[/red]")
+        raise typer.Exit(code=1)
+    return bars
+
+
 def _setup_logging() -> None:
     level = getattr(logging, get_settings().log_level.upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(message)s")
@@ -160,16 +184,12 @@ def backtest(
         strategy_name = strategy
         strat = registry.get(strategy)
 
-    async def _fetch() -> list:
-        base = date.fromisoformat(end) if end else date.today()
-        async with KiwoomRestClient() as client:
-            return await get_daily_bars(client, symbol, base_dt=base, max_pages=10)
-
+    base = date.fromisoformat(end) if end else date.today()
     start_date = date.fromisoformat(start)
-    bars = asyncio.run(_fetch())
+    bars = _fetch_daily_bars(symbol, base_dt=base, max_pages=10)
     bars = [b for b in bars if b.ts.date() >= start_date]
     if not bars:
-        console.print("[red]데이터를 가져오지 못했습니다. 종목코드/기간을 확인하세요.[/red]")
+        console.print(f"[red]요청한 기간({start}~)에 해당하는 봉이 없습니다.[/red]")
         raise typer.Exit(code=1)
 
     df = bars_to_dataframe(bars)
@@ -352,15 +372,7 @@ def strategy_advise(
     client = _build_anthropic_client()
     prof = StrategyProfile.load_yaml(profile)
 
-    async def _fetch() -> list:
-        async with KiwoomRestClient() as kc:
-            return await get_daily_bars(kc, prof.symbol, max_pages=2)
-
-    bars = asyncio.run(_fetch())
-    if not bars:
-        console.print("[red]일봉을 가져오지 못했습니다.[/red]")
-        raise typer.Exit(code=1)
-
+    bars = _fetch_daily_bars(prof.symbol, max_pages=2)
     df = bars_to_dataframe(bars)
     report = scanner.classify(df, lookback=lookback)
     response = advisor.advise(
@@ -425,15 +437,7 @@ def strategy_suggest(
 ) -> None:
     """최근 차트 패턴을 분석해 어울리는 전략을 추천하고 YAML 프로파일로 저장."""
 
-    async def _fetch() -> list:
-        async with KiwoomRestClient() as client:
-            return await get_daily_bars(client, symbol, max_pages=2)
-
-    bars = asyncio.run(_fetch())
-    if not bars:
-        console.print("[red]일봉 데이터를 가져오지 못했습니다. 종목코드를 확인하세요.[/red]")
-        raise typer.Exit(code=1)
-
+    bars = _fetch_daily_bars(symbol, max_pages=2)
     df = bars_to_dataframe(bars)
     report = scanner.classify(df, lookback=lookback)
     profile = suggest.recommend(report, symbol)
