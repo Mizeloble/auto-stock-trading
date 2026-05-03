@@ -96,6 +96,7 @@ uv run auto-trade quote 005930
 | `uv run auto-trade backtest --profile <yaml> --from 2024-01-01` | 과거 데이터로 시뮬레이션 |
 | `uv run auto-trade paper --profile <yaml> --dry-run` | 실시간으로 동작은 하되 **주문은 안 보냄** (안전 시운전) |
 | `uv run auto-trade paper --profile <yaml>` | 실시간 모의투자 매매 (주문 전송 ON, 단 모의계좌이므로 가상 돈) |
+| `uv run auto-trade paper-day --top-n 3 --dry-run` | **day-trade 모드**: 매일 거래량 상위 3종목 자동 선정 → 즉시 매수 → 15:15 일괄 청산. 자세히는 §11. |
 | `uv run auto-trade strategy advise --profile <yaml>` | (선택) Claude 가 YAML 의 숫자를 조언으로 갱신 |
 
 > 윈도우 PowerShell 에서 줄을 `\` 로 이어 적을 땐 `` ` `` 백틱을 쓰세요.
@@ -167,7 +168,7 @@ uv run auto-trade paper --profile strategies/profiles/auto_005930.yaml
 
 ---
 
-## 5. 내장 전략 두 가지
+## 5. 내장 전략 세 가지
 
 ### 5-1. SMA 골든크로스 (`sma_crossover`)
 
@@ -181,7 +182,13 @@ uv run auto-trade paper --profile strategies/profiles/auto_005930.yaml
 - **언제 잘 통하나** — 박스권(가격이 위아래로 왔다갔다) 일 때.
 - **파라미터** — `period` (기본 14), `oversold` (기본 30), `overbought` (기본 70).
 
-> 두 전략 모두 `Signal` 만 반환합니다 — 실제 주문은 다음 단계의 **리스크 매니저** 가 결정합니다.
+### 5-3. 당일 모멘텀 (`intraday_momentum`) — day-trade 전용
+
+- **무엇** — 발굴된 종목의 첫 봉이 들어오는 순간 BUY 시그널 한 번만 발사. 이후 침묵.
+- **언제 잘 통하나** — day-trade 모드(§11) 의 균등 매수에만 사용. 직접 호출은 비권장.
+- **파라미터** — `weight` (기본 1.0). orchestrator 가 자동으로 1/N 로 분할 주입.
+
+> 세 전략 모두 `Signal` 만 반환합니다 — 실제 주문은 다음 단계의 **리스크 매니저** 가 결정합니다.
 
 ---
 
@@ -264,18 +271,89 @@ uv run auto-trade strategy advise --profile strategies/profiles/auto_005930.yaml
 
 ## 10. (선택) 매일 자동으로 켜고 끄기 — macOS launchd
 
-회사 가 있을 때도 **08:55 자동 시작 / 15:35 자동 종료** 로 돌릴 수 있습니다.
+회사 가 있을 때도 **08:55 자동 시작 / 15:35 자동 종료** 로 돌릴 수 있습니다. 두 가지 운영 모드 중 하나만 활성화하세요:
 
-```bash
-chmod +x scripts/launchd-install.sh scripts/launchd-uninstall.sh
-./scripts/launchd-install.sh
-```
+| 모드 | 등록 명령 | 종료 |
+|---|---|---|
+| **swing** (`paper`, 기존) — 종목 미리 정함, 다음날도 보유 | `./scripts/launchd-install.sh` | 15:35 SIGTERM (별도 stop plist) |
+| **day-trade** (`paper-day`, §11) — 매일 자동 발굴, 그날 청산 | `launchctl bootstrap gui/$UID scripts/launchd/com.mizeloble.auto-trade.paper-day.plist` | 15:15 러너 자체 청산 후 종료 |
 
 자세한 내용·해제 방법은 [scripts/launchd/README.md](scripts/launchd/README.md) 참고.
 
 ---
 
-## 11. 자주 막히는 곳 (트러블슈팅)
+## 11. (선택) Day-trade 모드 — 매일 자동 종목 발굴
+
+**무엇** — 종목을 미리 정해 들고 가는 swing(`paper`) 와 달리, 매일 아침 거래량 상위 종목을 자동으로 골라 그날 안에 청산하는 모드.
+
+**왜 쓰나** — 다음날 갭 리스크(밤사이 호재/악재로 갑자기 가격이 튀거나 빠지는 위험) 를 0 으로 만들고 싶을 때. 시장 변동성을 그날그날 따라감.
+
+### 흐름 한눈에
+
+```
+09:00      paper-day 시동 → 텔레그램 시작 푸시
+09:00:30   거래량 상위 N종목 발굴 (KOSPI+KOSDAQ 통합)
+           → ETF/ETN/SPAC 자동 제외 (인버스 ETF 가 거래량 상위 자주 점령)
+           → 종목 소속 시장(KOSPI/KOSDAQ) 5/20일선 게이트 통과 종목만
+09:00~     첫 봉에 균등 분할 매수 (weight=1/N, 리스크 매니저가 종목당 20% 캡)
+15:15      보유 전부 시장가 매도 → graceful 종료
+           → 텔레그램 청산 완료 + 종료 푸시
+```
+
+### 첫 실행 — dry-run (안전 시운전)
+
+```bash
+uv run auto-trade paper-day --top-n 3 --dry-run
+```
+
+- `--top-n 3` : 후보 종목 수 (3종목 권장 — 리스크 매니저 캡과 잘 맞고 모니터링 부담 적음)
+- `--dry-run` : 실제 주문 안 보냄. 시그널/리스크 로직만 검증.
+- `--liquidate 15:15` : 청산 시각 (기본 15:15 KST. 정규장 마감 15:30 직전).
+- `--include-etf` : (선택) ETF/ETN/SPAC 도 매수 대상에 포함. 기본은 제외 (일반 주식 day-trade 의도).
+- `--discover-delay 30` : 09:00 직후 거래량 데이터 안정화 대기 초. 빠른 검증 시 0.
+
+### 결과 해석 — 로그 키워드
+
+| 로그 키 | 의미 |
+|---|---|
+| `runner.awaiting_universe` | 발굴 대기 중. 09:00:30 까지 기다림. |
+| `market.rank.top_volume excluded_count=N` | 거래량 상위에서 ETF/ETN/SPAC N개 자동 제외됨. |
+| `market.index.gate above=true/false` | 시장 5/20일선 게이트 결과. False 면 그 시장 종목 매수 차단. |
+| `daytrade.universe_chosen symbols=[...]` | 게이트 통과해 매수 대상이 된 종목들. |
+| `runner.order_simulated side=buy ...` | dry-run 매수 시뮬 (×N). |
+| `runner.liquidate_simulated side=sell ...` | 15:15 dry-run 청산 시뮬. |
+| `runner.stopped` | graceful 종료 완료. |
+
+### 텔레그램 알림 (설정돼 있으면)
+
+- `🔎 발굴 완료 · 매수 후보 N건` (선정/차단/메모)
+- `✅ 체결 접수` (매수 N건)
+- `🧹 청산 완료 (dry-run) · N종목`
+- `⏹ paper 정지 (정상 종료)`
+
+`/status` 보내면 `▶ 운영중 · day-trade (청산 15:15)` 처럼 모드 표시.
+
+### 매수가 안 들어가는 경우
+
+- **모든 후보가 게이트 차단**: 약세장(시장 5/20일선 아래) 이라 보호 차원. **매수 0** + 즉시 종료. 정상.
+- **발굴 결과 0건**: 키움 응답 이상 — 로그 `daytrade.discovery_failed` 확인.
+- 스크린샷 예시: 5/3 mock 데이터에서 KOSPI/KOSDAQ 둘 다 5일선 아래 → 후보 3건 모두 차단 → 매수 없이 종료.
+
+### swing vs day-trade 결정
+
+| 항목 | swing (`paper`) | day-trade (`paper-day`) |
+|---|---|---|
+| 종목 결정 | YAML 에 미리 명시 | 매일 09:00 자동 발굴 |
+| 매수 시점 | 전략 신호 발생 시 | 발굴 직후 즉시 균등 매수 |
+| 청산 | 외부 stop 시각 (다음날도 보유 가능) | 15:15 자동 일괄 매도 |
+| 다음날 갭 리스크 | 있음 | **없음** (당일 청산) |
+| 적합한 사람 | 종목 분석 좋아함, 며칠 보유 OK | 종목 고르기 귀찮음, 갭 리스크 싫음 |
+
+> 처음엔 둘 다 dry-run 으로 일주일씩 돌려보고 어느 쪽이 본인 성향에 맞는지 보세요. 동시 운영은 권장 X (launchd plist 충돌).
+
+---
+
+## 12. 자주 막히는 곳 (트러블슈팅)
 
 | 증상 | 원인/해결 |
 |---|---|
@@ -283,6 +361,7 @@ chmod +x scripts/launchd-install.sh scripts/launchd-uninstall.sh
 | `au10001` (rate limit) | 토큰 발급을 너무 자주 시도. 1분 정도 기다렸다 재시도 |
 | `quote` 명령에서 응답 없음 | `.env` 의 키 오타, 또는 모의투자 신청 안 됨 |
 | paper 가 곧바로 종료됨 | 장 외 시간(09:00 이전 / 15:30 이후) 또는 휴장일 |
+| `paper-day` 가 매수 0 으로 종료 | 시장 약세장 (5/20일선 아래) 또는 후보 모두 ETF/SPAC 으로 필터됨. 정상 동작. |
 | `--strategy` 와 `--profile` 둘 다 줬다고 에러 | 둘은 상호 배타. 한 쪽만 |
 | YAML 수정 후 동작 이상 | 들여쓰기(빈칸) 가 깨짐. `auto-trade strategy suggest` 를 다시 돌려 새로 만드는 게 빠름 |
 | 텔레그램 알림 안 옴 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` 둘 다 채워졌는지, chat.id 가 본인 것인지 확인 |
@@ -290,7 +369,7 @@ chmod +x scripts/launchd-install.sh scripts/launchd-uninstall.sh
 
 ---
 
-## 12. 보안 — 절대 깨지 말 것
+## 13. 보안 — 절대 깨지 말 것
 
 - `.env` 는 **git에 커밋 금지** (`.gitignore` 에 이미 등록).
 - AppKey/Secret/토큰을 **로그·스크린샷·메신저에 통째로 붙여넣지 않기**. 봇은 자동 마스킹하지만 사람이 실수할 수 있음.
@@ -299,7 +378,7 @@ chmod +x scripts/launchd-install.sh scripts/launchd-uninstall.sh
 
 ---
 
-## 13. 폴더가 어떻게 생겼는지 (지도)
+## 14. 폴더가 어떻게 생겼는지 (지도)
 
 ```
 auto-stock-trading/
@@ -317,23 +396,27 @@ auto-stock-trading/
     ├── runner.py          ← 실시간 매매 루프
     ├── config.py          ← .env 로드
     ├── kiwoom/            ← 키움 API 클라이언트
-    ├── market/            ← 시세 수신
+    ├── market/            ← 시세·거래량 순위·지수 일봉
     ├── account/           ← 잔고·주문
     ├── strategy/          ← 전략 + 추천 + Claude 조언
+    ├── daytrade/          ← day-trade 발굴·게이트·universe 주입 오케스트레이터
     ├── risk/              ← 리스크 한도
     └── notify/            ← 텔레그램 알림·명령
 ```
 
 ---
 
-## 14. 다음에 할 일 — 단계별 추천
+## 15. 다음에 할 일 — 단계별 추천
 
 1. **이번 주**: `quote` / `balance` 명령으로 인증 확인.
 2. **다음 주**: `strategy suggest` → `backtest` 로 전략 두세 개 비교.
-3. **그 다음 주**: `paper --dry-run` 으로 하루 종일 굴려보고 로그 읽기.
-4. **그 다음**: 실제 모의 매매 (`paper`, `--dry-run` 제거).
-5. **만족스러우면**: 텔레그램 연결 → 외출 중에도 모니터링.
-6. **수개월 검증 후**: 실거래 전환은 사용자가 직접 결정. (절대 봇이 임의로 바꾸지 않음.)
+3. **그 다음 주**: 둘 중 하나 골라 dry-run 종일 운영:
+   - swing: `paper --profile <yaml> --dry-run` — 본인이 정한 종목으로 며칠
+   - day-trade: `paper-day --top-n 3 --dry-run` — 매일 자동 발굴, 그날 청산
+4. **launchd 자동 운영 등록** — 평일 09:00 자동 시동 (§10).
+5. **그 다음**: dry-run 만족스러우면 `--dry-run` 빼고 실 모의투자 매매.
+6. **만족스러우면**: 텔레그램 연결 → 외출 중에도 모니터링·제어.
+7. **수개월 검증 후**: 실거래 전환은 사용자가 직접 결정. (절대 봇이 임의로 바꾸지 않음.)
 
 ---
 
