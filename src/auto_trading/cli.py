@@ -370,6 +370,11 @@ def paper_day(
         "--discover-delay",
         help="러너 시동 후 발굴까지 대기(초). 09:00 직후 거래량 데이터 안정화 대기용.",
     ),
+    include_etf: bool = typer.Option(
+        False,
+        "--include-etf",
+        help="ETF/ETN/SPAC 도 발굴 대상에 포함. 기본은 제외(일반 주식 day-trade 의도).",
+    ),
 ) -> None:
     """day-trade 모드: 매일 발굴 → 즉시 균등 매수 → 청산 시각에 일괄 매도 → 종료.
 
@@ -411,25 +416,40 @@ def paper_day(
         on_stop=runner.request_stop,
     )
 
+    exclude_etf = not include_etf
     try:
         if handler is None:
-            asyncio.run(_paper_day_main(runner, top_n=top_n, discover_delay=discover_delay_sec))
+            asyncio.run(
+                _paper_day_main(
+                    runner,
+                    top_n=top_n,
+                    discover_delay=discover_delay_sec,
+                    exclude_etf=exclude_etf,
+                )
+            )
         else:
             console.print("[cyan]텔레그램 인커밍 명령 폴링 활성[/cyan]")
             asyncio.run(
                 _paper_day_with_commands(
-                    runner, handler, top_n=top_n, discover_delay=discover_delay_sec
+                    runner,
+                    handler,
+                    top_n=top_n,
+                    discover_delay=discover_delay_sec,
+                    exclude_etf=exclude_etf,
                 )
             )
     except KeyboardInterrupt:
         console.print("[yellow]사용자 중단.[/yellow]")
 
 
-async def _paper_day_main(runner: PaperRunner, *, top_n: int, discover_delay: int) -> None:
+async def _paper_day_main(
+    runner: PaperRunner, *, top_n: int, discover_delay: int, exclude_etf: bool
+) -> None:
     """러너를 백그라운드로 시동 + discover_and_arm 으로 universe 주입."""
     runner_task = asyncio.create_task(runner.run(), name="paper-day-runner")
     discover_task = asyncio.create_task(
-        _delayed_discover(runner, top_n=top_n, delay=discover_delay), name="day-discover"
+        _delayed_discover(runner, top_n=top_n, delay=discover_delay, exclude_etf=exclude_etf),
+        name="day-discover",
     )
     try:
         await runner_task  # 청산 시각 도달 후 자기 종료
@@ -445,12 +465,14 @@ async def _paper_day_with_commands(
     *,
     top_n: int,
     discover_delay: int,
+    exclude_etf: bool,
 ) -> None:
     """텔레그램 명령 동시 폴링 버전."""
     runner_task = asyncio.create_task(runner.run(), name="paper-day-runner")
     cmd_task = asyncio.create_task(handler.run(), name="tg-commands")
     discover_task = asyncio.create_task(
-        _delayed_discover(runner, top_n=top_n, delay=discover_delay), name="day-discover"
+        _delayed_discover(runner, top_n=top_n, delay=discover_delay, exclude_etf=exclude_etf),
+        name="day-discover",
     )
     try:
         done, pending = await asyncio.wait(
@@ -471,7 +493,9 @@ async def _paper_day_with_commands(
         await handler.aclose()
 
 
-async def _delayed_discover(runner: PaperRunner, *, top_n: int, delay: int) -> None:
+async def _delayed_discover(
+    runner: PaperRunner, *, top_n: int, delay: int, exclude_etf: bool = True
+) -> None:
     """러너 시동 후 `delay` 초 대기 → discover_and_arm.
 
     실패해도 러너 자체는 청산 시계로 종료될 수 있게 예외를 swallow + 로그.
@@ -481,7 +505,7 @@ async def _delayed_discover(runner: PaperRunner, *, top_n: int, delay: int) -> N
         await asyncio.sleep(delay)
     try:
         async with KiwoomRestClient() as rest:
-            result = await discover_and_arm(rest, runner, top_n=top_n)
+            result = await discover_and_arm(rest, runner, top_n=top_n, exclude_etf=exclude_etf)
         console.print(f"[cyan]발굴 결과:[/cyan] {result.note_ko}")
         await runner.notifier.notify(
             "daytrade.discovery_done",

@@ -53,16 +53,19 @@ async def discover_and_arm(
     top_n: int = 3,
     strategy_factory: Callable[[str], Strategy] | None = None,
     markets: tuple[Market, ...] = ("KOSPI", "KOSDAQ"),
+    exclude_etf: bool = True,
 ) -> DiscoveryResult:
     """발굴 → 게이트 → set_universe 한 번에. 통과 종목 0건이면 set_universe 호출 X.
 
     무엇/왜:
     - 한 트랜잭션으로 묶어야 부분 실패(예: 게이트 한 시장 fetch 실패) 가 명확히 드러남.
     - strategy_factory 가 None 이면 IntradayMomentum(weight=1/top_n) 균등 분할.
+    - exclude_etf=True (기본) 면 거래량 상위에 끼는 인버스 ETF/ETN/SPAC 제외 — 일반
+      주식 day-trade 의도와 일치. False 면 키움 거래량 순위 그대로.
 
     어떻게 확인: 단위 테스트가 fake top_volume/index_gate 결과로 chosen/blocked 분기 검증.
     """
-    candidates = await top_volume(rest, top_n=top_n, markets=markets)
+    candidates = await top_volume(rest, top_n=top_n, markets=markets, exclude_etf=exclude_etf)
     if not candidates:
         msg = "거래량 상위 후보를 가져오지 못했습니다 — universe 비움."
         log.warning("daytrade.discovery_empty")

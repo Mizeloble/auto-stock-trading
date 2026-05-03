@@ -58,13 +58,18 @@ class IndexGate:
 
 
 def _parse_close(row: dict) -> float | None:
-    """업종 일봉 한 행에서 종가를 꺼낸다. 필드명 후보 순회."""
+    """업종 일봉 한 행에서 종가를 꺼낸다. 필드명 후보 순회.
+
+    probe 2026-05-03 실측: ka20009 의 list `inds_cur_prc_daly_rept` 행 키는
+    `cur_prc_n` (suffix `_n`). 다른 TR 가 share 할 수 있도록 폭넓은 후보 유지.
+    """
     raw = (
-        row.get("cur_prc")
+        row.get("cur_prc_n")  # ka20009 업종 일봉 (probe 2026-05-03 확정)
+        or row.get("cur_prc")
         or row.get("stck_clpr")
         or row.get("close")
         or row.get("clpr")
-        or row.get("inds_prc")  # 업종지수 종가 후보
+        or row.get("inds_prc")
     )
     if raw in (None, ""):
         return None

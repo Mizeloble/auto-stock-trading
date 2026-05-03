@@ -57,6 +57,52 @@ def _normalize_symbol(raw: object) -> str:
     return s.split("_", 1)[0]
 
 
+# day-trade 부적합 종목 휴리스틱 — probe 2026-05-03 결과 KOSPI 거래량 상위가
+# KODEX 인버스 / WTI 원유 ETN / 신한 SPAC 등 파생·특수목적 종목 위주라 일반 주식
+# day-trade 의도와 안 맞음. 이름 기반 보수적 필터.
+_ETF_BRANDS_UPPER = (
+    "KODEX",
+    "TIGER",
+    "KBSTAR",
+    "KINDEX",
+    "SOL",
+    "HANARO",
+    "ARIRANG",
+    "KOSEF",
+    "PLUS",
+    "RISE",
+    "ACE",
+    "WOORI",
+    "TIMEFOLIO",
+    "히어로즈",
+    "마이티",
+)
+# 한국어 키워드 — case-insensitive 비교 위해 .upper() 후 매칭하므로 한글은 그대로 유지.
+_ETF_KEYWORDS = ("ETN", "선물인버스", "선물레버리지", "스팩")
+
+
+def _is_etf_or_etn(name: str) -> bool:
+    """이름 기반 ETF/ETN/SPAC 휴리스틱. 완벽하지 않지만 거래량 상위에 자주 끼는 케이스를 잡는다.
+
+    무엇/왜: probe 실측에서 일반 주식 사이에 인버스 ETF·ETN·SPAC 이 거래량 상위를
+    차지해 day-trade 발굴기가 이런 종목을 매수하게 되는 문제 회피.
+    어떻게 확인: 단위 테스트가 KODEX 인버스 / WTI ETN / 신한제18호스팩 / 삼성전자
+    등 실측 케이스로 분기 검증.
+    """
+    if not name:
+        return False
+    upper = name.upper()
+    # 영문 ETF 브랜드는 단어 시작 매칭(공백 또는 끝), 한글 브랜드는 부분 매칭.
+    for brand in _ETF_BRANDS_UPPER:
+        if brand.isascii():
+            if upper.startswith(brand + " ") or upper == brand:
+                return True
+        elif brand in name:
+            return True
+    # ETN / 선물인버스 / 선물레버리지 / 스팩 키워드는 위치 무관 부분 매칭.
+    return any(kw in upper or kw in name for kw in _ETF_KEYWORDS)
+
+
 def _parse_row(row: dict, market: Market) -> RankedSymbol | None:
     """키움 응답 한 행 → RankedSymbol. 필드명이 문서 버전마다 달라 후보를 순회한다."""
     raw_symbol = _pick(row, "stk_cd", "stkcd", "symbol")
@@ -77,13 +123,10 @@ def _parse_row(row: dict, market: Market) -> RankedSymbol | None:
 async def _fetch_market(
     client: KiwoomRestClient,
     market: Market,
-    *,
-    top_n: int,
 ) -> list[RankedSymbol]:
     """단일 시장(KOSPI 또는 KOSDAQ) 거래량 상위 행을 가져온다.
 
-    `mrkt_tp` 외 파라미터(정렬 기준·관리종목 포함 등)는 키움 문서 기본값에 의존.
-    probe 후 필요한 파라미터를 추가한다.
+    응답 길이는 키움이 정함(보통 100). 잘림(top_n) 과 ETF 필터는 호출자가 처리.
     """
     # ka10030 (당일거래량상위) 필수 파라미터 — probe(2026-05-03) 로 확정.
     # crd_tp / trde_qty_tp / pric_tp / trde_prica_tp / mrkt_open_tp 가 빠지면
@@ -106,8 +149,7 @@ async def _fetch_market(
         item = _parse_row(row, market)
         if item is not None:
             parsed.append(item)
-        if len(parsed) >= top_n:
-            break
+        # ETF 필터는 호출자(top_volume) 단계에서 적용 — 여기서는 매핑만.
     return parsed
 
 
@@ -116,28 +158,43 @@ async def top_volume(
     *,
     top_n: int = 3,
     markets: tuple[Market, ...] = ("KOSPI", "KOSDAQ"),
+    exclude_etf: bool = True,
 ) -> list[RankedSymbol]:
     """KOSPI/KOSDAQ 거래량 상위를 합쳐 거래량 desc 정렬 후 상위 `top_n` 반환.
 
-    각 시장은 `top_n * 2` 만큼 후보를 받아온다 — 두 시장 합쳤을 때 한쪽이 잘려도
-    상위 N 은 채워지도록.
+    `exclude_etf=True` (기본) 면 ETF/ETN/SPAC 류 종목을 사전에 제외 — day-trade 의 일반
+    주식 매매 의도에 맞게. 반대로 인버스 ETF 도 매매 대상으로 두려면 False.
+
+    필터 후 부족할 일은 거의 없음 — 키움이 시장당 100개를 돌려주므로.
     """
-    per_market_pull = max(top_n * 2, top_n)
     merged: list[RankedSymbol] = []
     for market in markets:
         try:
-            rows = await _fetch_market(client, market, top_n=per_market_pull)
+            rows = await _fetch_market(client, market)
         except Exception:
             log.warning("market.rank.fetch_failed", market=market, exc_info=True)
             continue
         merged.extend(rows)
+
+    excluded: list[tuple[str, str]] = []
+    if exclude_etf:
+        kept: list[RankedSymbol] = []
+        for r in merged:
+            if _is_etf_or_etn(r.name):
+                excluded.append((r.symbol, r.name))
+            else:
+                kept.append(r)
+        merged = kept
+
     merged.sort(key=lambda r: r.volume, reverse=True)
     chosen = merged[:top_n]
     log.info(
         "market.rank.top_volume",
         markets=list(markets),
         top_n=top_n,
+        exclude_etf=exclude_etf,
         chosen=[(r.symbol, r.market, r.volume) for r in chosen],
+        excluded_count=len(excluded),
     )
     return chosen
 
