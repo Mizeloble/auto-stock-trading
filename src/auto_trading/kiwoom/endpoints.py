@@ -54,13 +54,20 @@ class TR:
 SECTOR_CODE_KOSPI = "001"  # KOSPI 종합지수
 SECTOR_CODE_KOSDAQ = "101"  # KOSDAQ 종합지수
 
-# 거래량 순위 요청의 시장 구분(`mrkt_tp`) 값.
+# 거래량 순위(ka10030) 요청의 시장 구분(`mrkt_tp`) 값.
 MARKET_TP_ALL = "000"
 MARKET_TP_KOSPI = "001"
 MARKET_TP_KOSDAQ = "101"
 
+# 업종 일봉(ka20009) 요청의 시장 구분(`mrkt_tp`) — 순위 TR 과 코드 체계 다름.
+# probe 2026-05-03 로 ka20009 가 mrkt_tp 필수임이 확인됨.
+INDEX_MRKT_TP_KOSPI = "0"
+INDEX_MRKT_TP_KOSDAQ = "1"
+
 
 __all__ = [
+    "INDEX_MRKT_TP_KOSDAQ",
+    "INDEX_MRKT_TP_KOSPI",
     "MARKET_TP_ALL",
     "MARKET_TP_KOSDAQ",
     "MARKET_TP_KOSPI",

@@ -11,6 +11,8 @@ import structlog
 
 from .._common import extract_rows, to_decimal
 from ..kiwoom.endpoints import (
+    INDEX_MRKT_TP_KOSDAQ,
+    INDEX_MRKT_TP_KOSPI,
     PATH_SECTOR,
     SECTOR_CODE_KOSDAQ,
     SECTOR_CODE_KOSPI,
@@ -25,6 +27,12 @@ Market = Literal["KOSPI", "KOSDAQ"]
 _SECTOR_CODE: dict[Market, str] = {
     "KOSPI": SECTOR_CODE_KOSPI,
     "KOSDAQ": SECTOR_CODE_KOSDAQ,
+}
+
+# ka20009 의 mrkt_tp 코드 — 순위 TR 의 mrkt_tp(001/101) 와 다른 체계.
+_INDEX_MRKT_TP: dict[Market, str] = {
+    "KOSPI": INDEX_MRKT_TP_KOSPI,
+    "KOSDAQ": INDEX_MRKT_TP_KOSDAQ,
 }
 
 # SMA 게이트에 필요한 일봉 수. 20일선 + 여유.
@@ -79,7 +87,12 @@ async def index_gate(
     무엇/왜: day-trade 매수 게이트. 약세장에서 거래량 상위만 보고 매수 들어가면 손실 누적.
     어떻게 확인: 단위 테스트에서 5/20 SMA 계산값 + 데이터 부족 시 False 검증.
     """
+    # ka20009 필수 파라미터 (probe 2026-05-03 확정):
+    # - mrkt_tp: 시장 구분 (0=KOSPI, 1=KOSDAQ) — 누락 시 1511 에러
+    # - inds_cd: 업종 코드 (001=KOSPI 종합, 101=KOSDAQ 종합)
+    # - base_dt: YYYYMMDD
     body = {
+        "mrkt_tp": _INDEX_MRKT_TP[market],
         "inds_cd": _SECTOR_CODE[market],
         "base_dt": (base_dt or date.today()).strftime("%Y%m%d"),
     }

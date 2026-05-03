@@ -44,6 +44,19 @@ def _pick(row: dict, *keys: str) -> object:
     return None
 
 
+def _normalize_symbol(raw: object) -> str:
+    """키움 응답의 종목코드 정규화.
+
+    실제로 본 케이스 (probe 2026-05-03):
+    - `'A005930'` → `'005930'`     · 일부 응답이 'A' prefix 붙임
+    - `'252670_AL'` → `'252670'`   · 통합 거래소(AL) suffix 붙임
+    - `'005930'` → `'005930'`      · 보통 케이스
+    주문 API 는 6자리 숫자 코드만 받기 때문에 발굴기 단에서 정규화한다.
+    """
+    s = str(raw).strip().lstrip("A")
+    return s.split("_", 1)[0]
+
+
 def _parse_row(row: dict, market: Market) -> RankedSymbol | None:
     """키움 응답 한 행 → RankedSymbol. 필드명이 문서 버전마다 달라 후보를 순회한다."""
     raw_symbol = _pick(row, "stk_cd", "stkcd", "symbol")
@@ -53,7 +66,7 @@ def _parse_row(row: dict, market: Market) -> RankedSymbol | None:
     if not raw_symbol or raw_volume is None:
         return None
     return RankedSymbol(
-        symbol=str(raw_symbol).strip().lstrip("A"),  # 키움이 'A005930' 처럼 prefix 붙이기도 함
+        symbol=_normalize_symbol(raw_symbol),
         market=market,
         name=str(raw_name or "").strip(),
         volume=int(to_decimal(raw_volume)),

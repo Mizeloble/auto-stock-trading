@@ -147,6 +147,30 @@ async def test_top_volume_strips_a_prefix_from_symbol(settings: Settings) -> Non
     assert chosen[0].symbol == "005930"
 
 
+async def test_top_volume_strips_underscore_suffix_from_symbol(settings: Settings) -> None:
+    """probe 2026-05-03 회귀 — 통합거래소(AL) 종목은 '252670_AL' 형태로 옴.
+
+    주문 API 는 6자리 숫자만 받기 때문에 발굴기 단에서 _xx 접미사 제거 필수.
+    """
+    rows = [
+        {
+            "stk_cd": "252670_AL",
+            "stk_nm": "KODEX 200선물인버스2X",
+            "trde_qty": "10",
+            "cur_prc": "+169",
+        },
+        {"stk_cd": "114800_AL", "stk_nm": "KODEX 인버스", "trde_qty": "5", "cur_prc": "+1349"},
+    ]
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_RANK).mock(return_value=httpx.Response(200, json=_rank_payload(rows)))
+        async with KiwoomRestClient(settings=settings) as client:
+            chosen = await top_volume(client, top_n=2, markets=("KOSPI",))
+    assert [r.symbol for r in chosen] == ["252670", "114800"]
+    # 가격 부호(`+169`) 는 to_decimal 이 처리.
+    assert chosen[0].price == 169.0
+
+
 async def test_top_volume_sends_all_required_body_fields(settings: Settings) -> None:
     """ka10030 필수 필드 회귀 게이트 — probe 2026-05-03 에서 누락이 1511 에러였음.
 
