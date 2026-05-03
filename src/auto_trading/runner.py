@@ -18,15 +18,15 @@ import asyncio
 import contextlib
 import signal as _signal
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
 import structlog
 
-from ._common import Bar, Side
+from ._common import KST, Bar, Side
 from .account.balance import AccountSnapshot, get_balance
-from .account.orders import Order, place_order
+from .account.orders import Order, OrderType, place_order
 from .config import Settings, get_settings
 from .kiwoom.rest import KiwoomRestClient
 from .kiwoom.ws import KiwoomWebSocket, Subscription
@@ -121,6 +121,11 @@ class PaperRunner:
     max_balance_failures: int = 5
     dry_run: bool = False  # True 면 모의투자 체결도 시뮬레이션(REST 전송 없음)
     notifier: Notifier = field(default_factory=NoopNotifier)
+    # day-trade 모드: KST 청산 시각. None 이면 swing(기존) 동작.
+    # 설정되면 (a) 시작 시 빈 universe 허용 + set_universe() 대기, (b) 백그라운드
+    # 시계 task 가 도달 시 liquidate_all → request_stop 으로 자기 종료.
+    liquidate_at: time | None = None
+    liquidate_grace_sec: int = 30
     _settings: Settings = field(default_factory=get_settings)
     _balance_failures: int = field(default=0, init=False)
     # 텔레그램 인커밍 명령 응답용 인메모리 상태 (runner 가 매 사이클 갱신)
@@ -132,8 +137,19 @@ class PaperRunner:
     _control_state: RunnerControlState = field(default=RunnerControlState.RUNNING, init=False)
     # request_stop 시 ws.messages() 루프에 즉시 신호를 주기 위한 활성 ws 참조.
     _ws: KiwoomWebSocket | None = field(default=None, init=False, repr=False)
+    # day-trade 모드: set_universe() 가 채워질 때까지 run() 가 대기하는 이벤트.
+    _universe_ready: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
+    # 청산 1회 가드 — 장 마감 후 시계가 계속 도달 상태라도 두 번 호출되지 않게.
+    _liquidation_done: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
+        # day-trade 모드(liquidate_at 설정)는 시작 시 universe 미정 허용.
+        # set_universe() 호출 전까지 run() 이 대기.
+        if not self.symbols and not self.strategies:
+            if self.liquidate_at is None:
+                raise ValueError("strategy 또는 strategies 중 하나는 반드시 지정해야 합니다")
+            return  # day-trade 모드 — 검증은 set_universe() 안에서.
+
         # strategies 가 비어있으면 symbols 전부에 공통 strategy 를 복제 없이 공유.
         if not self.strategies:
             if self.strategy is None:
@@ -144,6 +160,7 @@ class PaperRunner:
         missing = [sym for sym in self.symbols if sym not in self.strategies]
         if missing:
             raise ValueError(f"전략이 지정되지 않은 종목: {missing}")
+        self._universe_ready.set()  # 시작 전부터 universe 가 있으면 즉시 ready.
 
     def _install_signal_handlers(self) -> None:
         """SIGTERM/SIGINT 을 graceful stop (`request_stop`) 으로 라우팅.
@@ -171,6 +188,18 @@ class PaperRunner:
 
         self._install_signal_handlers()
         self._started_at = datetime.now()
+
+        # day-trade 모드: orchestrator 가 발굴 후 set_universe() 를 부를 때까지 대기.
+        # 그동안 STOPPING 진입(텔레그램 /stop, SIGTERM)은 즉시 빠져나가야 함.
+        if not self._universe_ready.is_set():
+            log.info("runner.awaiting_universe", liquidate_at=str(self.liquidate_at))
+            done = await self._wait_universe_or_stop()
+            if not done:
+                # universe 가 채워지기 전에 외부 stop. notifier 만 깔끔히 정리하고 종료.
+                await self.notifier.notify("runner.stopped", reason="stopped_before_universe")
+                await self.notifier.aclose()
+                return
+
         strat_names = sorted({type(s).__name__ for s in self.strategies.values()})
         await self.notifier.notify(
             "runner.started",
@@ -180,6 +209,7 @@ class PaperRunner:
         )
 
         stop_reason = "정상 종료"
+        liquidation_task: asyncio.Task[None] | None = None
         try:
             async with KiwoomRestClient(settings=self._settings) as rest:
                 ws = KiwoomWebSocket(
@@ -196,6 +226,11 @@ class PaperRunner:
 
                 for strat in set(self.strategies.values()):
                     strat.reset()
+
+                # day-trade 모드면 청산 시계 task 백그라운드로. tick 이 안 와도 청산이 도는 게 핵심.
+                if self.liquidate_at is not None:
+                    liquidation_task = asyncio.create_task(self._liquidation_loop(rest))
+
                 try:
                     async for tick in ticks(ws):
                         # 외부 /stop 으로 STOPPING 진입 시 다음 tick 경계에서 graceful break.
@@ -222,6 +257,10 @@ class PaperRunner:
             stop_reason = f"{type(exc).__name__}: {exc}"
             raise
         finally:
+            if liquidation_task is not None:
+                liquidation_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await liquidation_task
             await self.notifier.notify("runner.stopped", reason=stop_reason)
             await self.notifier.aclose()
 
@@ -410,9 +449,154 @@ class PaperRunner:
         - 그래서 ws.signal_stop() 을 같이 호출 — ws.messages() 의 1초 폴링
           루프가 다음 사이클에서 _stop 을 보고 즉시 종료 → ticks() 종료 →
           main loop 의 `async for` 정상 break → finally → notifier "runner.stopped".
+        - day-trade 모드에서 universe 대기 중에도 호출 가능 — _universe_ready
+          를 set 해서 _wait_universe_or_stop() 이 깨어나 종료 분기를 타도록.
         """
         self._control_state = RunnerControlState.STOPPING
         log.info("runner.control_state_changed", state="stopping")
         ws = self._ws
         if ws is not None:
             ws.signal_stop()
+        # day-trade: universe 대기 중일 수 있으니 같이 깨움.
+        self._universe_ready.set()
+
+    # ---- day-trade 모드 (21단계 Phase B) -----------------------------------
+
+    def set_universe(
+        self,
+        symbols: list[str],
+        strategies: dict[str, Strategy],
+    ) -> None:
+        """orchestrator 가 발굴 결과를 주입할 때 호출.
+
+        무엇/왜:
+        - day-trade 모드는 시작 시점에 매수 대상이 미정 — 09:00:30 발굴 후 주입.
+        - 호출되면 run() 내부의 `_wait_universe_or_stop()` 가 깨어나 ws.start 진행.
+        - 시작 후(ws 활성) 변경은 PR-B 범위 밖 — 시작 전 1회만 허용.
+        """
+        if self._ws is not None:
+            raise RuntimeError("set_universe() 는 run() 진입 전, ws.start() 이전에만 호출하세요.")
+        if not symbols:
+            raise ValueError("symbols 가 비어있습니다")
+        missing = [s for s in symbols if s not in strategies]
+        if missing:
+            raise ValueError(f"전략이 지정되지 않은 종목: {missing}")
+        self.symbols = list(symbols)
+        self.strategies = dict(strategies)
+        self._universe_ready.set()
+        log.info(
+            "runner.universe_set",
+            symbols=list(self.symbols),
+            strategies={s: type(self.strategies[s]).__name__ for s in self.symbols},
+        )
+
+    async def _wait_universe_or_stop(self) -> bool:
+        """universe 가 채워지거나 stop 요청이 오기까지 대기.
+
+        반환 True = universe 채워져 정상 진행, False = stop 으로 종료해야 함.
+        """
+        await self._universe_ready.wait()
+        return self._control_state is not RunnerControlState.STOPPING and bool(self.symbols)
+
+    async def liquidate_all(
+        self,
+        rest: KiwoomRestClient,
+        account: AccountState,
+        *,
+        reason: str,
+    ) -> None:
+        """보유 모든 종목을 시장가 SELL 송신. dry_run 이면 시뮬 로그만.
+
+        한 종목 실패는 다른 종목으로 진행. 호출 후 _liquidation_done 마킹 — 두 번 호출 X.
+        """
+        if self._liquidation_done:
+            log.info("runner.liquidate_skipped", reason="already_done")
+            return
+        positions = {sym: qty for sym, qty in account.positions.items() if qty > 0}
+        if not positions:
+            log.info("runner.liquidate_noop", reason="no_positions")
+            self._liquidation_done = True
+            return
+
+        log.info(
+            "runner.liquidate_start",
+            reason=reason,
+            symbols=list(positions),
+            dry_run=self.dry_run,
+        )
+        for symbol, qty in positions.items():
+            order = Order(
+                symbol=symbol,
+                side=Side.SELL,
+                quantity=qty,
+                order_type=OrderType.MARKET,
+            )
+            if self.dry_run:
+                log.info(
+                    "runner.liquidate_simulated",
+                    symbol=symbol,
+                    side="sell",
+                    qty=qty,
+                    reason=reason,
+                )
+                # 시뮬에서도 로컬 포지션 즉시 0 으로 — 다음 청산 호출이 idempotent.
+                account.positions[symbol] = 0
+                continue
+            try:
+                result = await place_order(rest, order)
+                log.info(
+                    "runner.liquidate_accepted",
+                    order_no=result.order_no,
+                    symbol=symbol,
+                    qty=qty,
+                )
+                account.positions[symbol] = 0
+            except Exception as exc:
+                log.error(
+                    "runner.liquidate_failed",
+                    symbol=symbol,
+                    qty=qty,
+                    error=str(exc),
+                    exc_info=exc,
+                )
+                await self.notifier.notify(
+                    "runner.liquidate_failed",
+                    symbol=symbol,
+                    qty=qty,
+                    error=str(exc),
+                )
+
+        self._liquidation_done = True
+        await self.notifier.notify(
+            "runner.liquidate_done",
+            reason=reason,
+            count=len(positions),
+            dry_run=self.dry_run,
+        )
+
+    async def _liquidation_loop(self, rest: KiwoomRestClient) -> None:
+        """KST 시계 폴링 → liquidate_at 도달 시 청산 + request_stop. 1초 간격.
+
+        run() 의 메인 tick 루프와 별도 task — 장 마감 후 시세가 끊겨도 청산이 도는 게 핵심.
+        4/30 launchd 사례에서 시세 끊김으로 7시간 hang 한 버그를 답습하지 않으려면 시계 task 분리 필수.
+        """
+        if self.liquidate_at is None:
+            return
+        while True:
+            if self._control_state is RunnerControlState.STOPPING:
+                return
+            now_t = datetime.now(KST).time()
+            if now_t >= self.liquidate_at and not self._liquidation_done:
+                account = self._account
+                if account is None:
+                    log.warning("runner.liquidate_skipped", reason="no_account_snapshot")
+                else:
+                    try:
+                        await self.liquidate_all(rest, account, reason="liquidate_at_reached")
+                    except Exception as exc:
+                        log.error("runner.liquidate_loop_error", error=str(exc), exc_info=exc)
+                # 체결 확인용 grace — 너무 짧으면 미체결, 너무 길면 다음날까지 lingering.
+                await asyncio.sleep(self.liquidate_grace_sec)
+                self.request_stop()
+                return
+            await asyncio.sleep(1)
