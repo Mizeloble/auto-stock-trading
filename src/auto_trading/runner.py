@@ -418,6 +418,10 @@ class PaperRunner:
             recent_signals=dict(self._recent_signals),
             balance_failures=self._balance_failures,
             control_state=self._control_state.value,
+            runner_mode="day-trade" if self.liquidate_at is not None else "swing",
+            liquidate_at_label=(
+                self.liquidate_at.strftime("%H:%M") if self.liquidate_at is not None else ""
+            ),
         )
 
     # ---- 텔레그램 v3 외부 제어 (모두 동기. async loop 가 폴링) -------------

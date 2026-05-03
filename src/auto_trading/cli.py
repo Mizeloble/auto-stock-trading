@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 
 import structlog
@@ -20,9 +20,11 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from ._common import KST
 from .account.balance import get_balance
 from .backtest.engine import Backtester, save_result
 from .config import get_settings
+from .daytrade.orchestrator import discover_and_arm
 from .kiwoom.rest import KiwoomRestClient
 from .market.chart import bars_to_dataframe, get_daily_bars
 from .market.quote import get_quote
@@ -337,6 +339,161 @@ async def _paper_with_commands(runner: PaperRunner, handler: TelegramCommandHand
             t.result()
     finally:
         await handler.aclose()
+
+
+def _parse_hhmm_kst(label: str) -> time:
+    """'15:15' 같은 문자열을 KST time 으로. 잘못된 형식이면 BadParameter."""
+    try:
+        h, m = label.split(":")
+        return time(int(h), int(m), tzinfo=KST)
+    except (ValueError, AttributeError) as exc:
+        raise typer.BadParameter(
+            f"--liquidate 는 'HH:MM' (예: 15:15) 형식이어야 합니다: {label!r}"
+        ) from exc
+
+
+@app.command("paper-day")
+def paper_day(
+    top_n: int = typer.Option(3, "--top-n", help="거래량 상위 후보 종목 수"),
+    liquidate: str = typer.Option(
+        "15:15", "--liquidate", help="청산 시각 (KST, HH:MM). 정규장 마감 15:30 이전 권장."
+    ),
+    minutes: int = typer.Option(1, "--minutes", help="집계 봉 길이(분)"),
+    allow_real: bool = typer.Option(False, "--allow-real", help="실거래에서도 돌릴지 (위험)"),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--no-dry-run",
+        help="기본 True. 실주문 전환은 며칠 dry-run 검증 후에만.",
+    ),
+    discover_delay_sec: int = typer.Option(
+        30,
+        "--discover-delay",
+        help="러너 시동 후 발굴까지 대기(초). 09:00 직후 거래량 데이터 안정화 대기용.",
+    ),
+) -> None:
+    """day-trade 모드: 매일 발굴 → 즉시 균등 매수 → 청산 시각에 일괄 매도 → 종료.
+
+    무엇/왜:
+    - 21단계. 종목을 미리 정해 들고 가는 swing 모드(`paper`) 와 분리.
+    - 발굴: KOSPI+KOSDAQ 거래량 상위 N (market.rank.top_volume).
+    - 게이트: 종목 소속 시장 5/20일선 위면 매수 OK (market.index.index_gate).
+    - 매수: IntradayMomentum 이 첫 봉에 weight=1/N 시그널 1회. 리스크 매니저가
+      종목당 20% / 합계 80% 캡 자동 적용.
+    - 청산: 러너의 _liquidation_loop 가 KST 시계 폴링 → 도달 시 보유 전부 시장가
+      SELL → request_stop. 시세 끊겨도 자기 종료(4/30 7시간 hang 회귀 방지).
+
+    어떻게 확인:
+    - mock 환경에서 `uv run auto-trade paper-day --dry-run` → 로그에
+      `daytrade.universe_chosen` → `runner.order_simulated` → 청산 시각에
+      `runner.liquidate_simulated` → `runner.stopped` 순서로 찍히면 성공.
+    """
+    settings = get_settings()
+    color = "green" if settings.is_mock else "red"
+    console.print(f"[dim]키움 모드:[/dim] [{color}]{settings.kiwoom_mode.value}[/{color}]")
+
+    liquidate_at = _parse_hhmm_kst(liquidate)
+    runner = PaperRunner(
+        liquidate_at=liquidate_at,
+        bar_minutes=minutes,
+        allow_real=allow_real,
+        dry_run=dry_run,
+        notifier=build_notifier(),
+    )
+    console.print(
+        f"[cyan]day-trade 모드[/cyan] · 청산 {liquidate}"
+        f" · top_n={top_n} · {'dry-run' if dry_run else '실주문'}"
+    )
+
+    handler = build_command_handler(
+        runner.state_snapshot,
+        on_pause=runner.pause,
+        on_resume=runner.resume,
+        on_stop=runner.request_stop,
+    )
+
+    try:
+        if handler is None:
+            asyncio.run(_paper_day_main(runner, top_n=top_n, discover_delay=discover_delay_sec))
+        else:
+            console.print("[cyan]텔레그램 인커밍 명령 폴링 활성[/cyan]")
+            asyncio.run(
+                _paper_day_with_commands(
+                    runner, handler, top_n=top_n, discover_delay=discover_delay_sec
+                )
+            )
+    except KeyboardInterrupt:
+        console.print("[yellow]사용자 중단.[/yellow]")
+
+
+async def _paper_day_main(runner: PaperRunner, *, top_n: int, discover_delay: int) -> None:
+    """러너를 백그라운드로 시동 + discover_and_arm 으로 universe 주입."""
+    runner_task = asyncio.create_task(runner.run(), name="paper-day-runner")
+    discover_task = asyncio.create_task(
+        _delayed_discover(runner, top_n=top_n, delay=discover_delay), name="day-discover"
+    )
+    try:
+        await runner_task  # 청산 시각 도달 후 자기 종료
+    finally:
+        discover_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await discover_task
+
+
+async def _paper_day_with_commands(
+    runner: PaperRunner,
+    handler: TelegramCommandHandler,
+    *,
+    top_n: int,
+    discover_delay: int,
+) -> None:
+    """텔레그램 명령 동시 폴링 버전."""
+    runner_task = asyncio.create_task(runner.run(), name="paper-day-runner")
+    cmd_task = asyncio.create_task(handler.run(), name="tg-commands")
+    discover_task = asyncio.create_task(
+        _delayed_discover(runner, top_n=top_n, delay=discover_delay), name="day-discover"
+    )
+    try:
+        done, pending = await asyncio.wait(
+            {runner_task, cmd_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+        for t in pending:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await t
+        for t in done:
+            t.result()
+    finally:
+        discover_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await discover_task
+        await handler.aclose()
+
+
+async def _delayed_discover(runner: PaperRunner, *, top_n: int, delay: int) -> None:
+    """러너 시동 후 `delay` 초 대기 → discover_and_arm.
+
+    실패해도 러너 자체는 청산 시계로 종료될 수 있게 예외를 swallow + 로그.
+    """
+    log = structlog.get_logger("daytrade.cli")
+    if delay > 0:
+        await asyncio.sleep(delay)
+    try:
+        async with KiwoomRestClient() as rest:
+            result = await discover_and_arm(rest, runner, top_n=top_n)
+        console.print(f"[cyan]발굴 결과:[/cyan] {result.note_ko}")
+        await runner.notifier.notify(
+            "daytrade.discovery_done",
+            chosen=[c.symbol for c in result.chosen],
+            blocked=result.blocked,
+            note=result.note_ko,
+        )
+    except Exception as exc:
+        log.error("daytrade.discover_failed", error=str(exc), exc_info=exc)
+        # 발굴 실패면 universe 가 채워지지 않음 — 러너의 universe_wait 가 청산 시각까지
+        # 대기하다가 _liquidation_loop 가 graceful stop 시킨다 (보유 0 이라 noop).
+        runner.request_stop()
 
 
 def _build_anthropic_client() -> object:
