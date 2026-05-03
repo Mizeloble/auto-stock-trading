@@ -513,10 +513,16 @@ async def _delayed_discover(
             blocked=result.blocked,
             note=result.note_ko,
         )
+        # universe 0 건이면 set_universe() 호출되지 않아 _universe_ready 도 안 set 된다.
+        # 청산 시계 task 는 ws.start 이후에 시작되므로 universe 대기 중엔 안 돔 →
+        # 러너가 무한 hang. 발굴 실패와 동일하게 명시적으로 stop 트리거.
+        # (5/3 21:42 dry-run 에서 게이트 차단으로 chosen=[] → 6시간 hang 실증.)
+        if not result.chosen:
+            log.info("daytrade.no_candidates_stopping")
+            runner.request_stop()
     except Exception as exc:
         log.error("daytrade.discover_failed", error=str(exc), exc_info=exc)
-        # 발굴 실패면 universe 가 채워지지 않음 — 러너의 universe_wait 가 청산 시각까지
-        # 대기하다가 _liquidation_loop 가 graceful stop 시킨다 (보유 0 이라 noop).
+        # 발굴 실패 — universe 안 채워지므로 명시적 stop 으로 hang 회피.
         runner.request_stop()
 
 
