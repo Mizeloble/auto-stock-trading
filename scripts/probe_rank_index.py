@@ -1,8 +1,8 @@
 """거래량 순위 + 업종 일봉 응답 dict 실측 캡처 (1회용 진단 스크립트).
 
 목적:
-1. `TR.RANK_VOLUME` (`ka10030` 후보) 가 KOSPI/KOSDAQ 별로 어떤 키로 응답하는지 확인.
-2. `TR.SECTOR_INDEX_DAILY` (`ka20006` 후보) 가 KOSPI/KOSDAQ 종합지수 일봉을 돌려주는지 확인.
+1. `TR.RANK_VOLUME` (`ka10030`) 가 KOSPI/KOSDAQ 별로 어떤 키로 응답하는지 확인.
+2. `TR.SECTOR_INDEX_DAILY` (`ka20009`) 가 KOSPI/KOSDAQ 종합지수 일봉을 돌려주는지 확인.
 
 응답 키가 다르면 `endpoints.py` / `market/rank.py` / `market/index.py` 의 필드명 후보 체인을
 실측에 맞춰 보정한다.
@@ -17,6 +17,7 @@ KIWOOM_MODE=mock 에서만 동작 (실거래 모드에서 진단 호출 차단).
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 from typing import Any
 
@@ -82,18 +83,27 @@ async def main() -> None:
     if not settings.is_mock:
         raise SystemExit("ABORT: KIWOOM_MODE=mock 이 아닙니다. 실거래 모드에서 진단 스크립트 금지.")
 
+    # ka10030 (당일거래량상위) 필수 파라미터 — 2026-05-03 1차 probe 에서 crd_tp 누락이
+    # 1511 에러로 surface. market/rank.py 가 보내는 본문과 동일하게.
+    rank_body_template = {
+        "sort_tp": "1",
+        "mang_stk_incls": "0",
+        "crd_tp": "0",
+        "trde_qty_tp": "0",
+        "pric_tp": "0",
+        "trde_prica_tp": "0",
+        "mrkt_open_tp": "0",
+        "stex_tp": "3",
+    }
+    today_yyyymmdd = datetime.date.today().strftime("%Y%m%d")
+
     async with KiwoomRestClient() as client:
         # 1) 거래량 상위 KOSPI
         rank_kospi = await _post_raw(
             client,
             TR.RANK_VOLUME,
             PATH_RANK,
-            {
-                "mrkt_tp": MARKET_TP_KOSPI,
-                "sort_tp": "1",
-                "mang_stk_incls": "0",
-                "stex_tp": "3",
-            },
+            {**rank_body_template, "mrkt_tp": MARKET_TP_KOSPI},
         )
         _dump("RANK_VOLUME · KOSPI", rank_kospi)
 
@@ -102,30 +112,26 @@ async def main() -> None:
             client,
             TR.RANK_VOLUME,
             PATH_RANK,
-            {
-                "mrkt_tp": MARKET_TP_KOSDAQ,
-                "sort_tp": "1",
-                "mang_stk_incls": "0",
-                "stex_tp": "3",
-            },
+            {**rank_body_template, "mrkt_tp": MARKET_TP_KOSDAQ},
         )
         _dump("RANK_VOLUME · KOSDAQ", rank_kosdaq)
 
-        # 3) KOSPI 종합지수 일봉
+        # 3) KOSPI 종합지수 일봉 (ka20009 — 2026-05-03 ka20006 가 URI 미지원이라 교체)
         idx_kospi = await _post_raw(
             client,
             TR.SECTOR_INDEX_DAILY,
             PATH_SECTOR,
-            {"inds_cd": SECTOR_CODE_KOSPI},
+            {"inds_cd": SECTOR_CODE_KOSPI, "base_dt": today_yyyymmdd},
         )
         _dump("SECTOR_INDEX_DAILY · KOSPI 001", idx_kospi)
 
-        # 4) KOSDAQ 종합지수 일봉
+        # 4) KOSDAQ 종합지수 일봉. 1차 probe 에서 분당 호출 제한(429) 걸림 — 2초 대기.
+        await asyncio.sleep(2)
         idx_kosdaq = await _post_raw(
             client,
             TR.SECTOR_INDEX_DAILY,
             PATH_SECTOR,
-            {"inds_cd": SECTOR_CODE_KOSDAQ},
+            {"inds_cd": SECTOR_CODE_KOSDAQ, "base_dt": today_yyyymmdd},
         )
         _dump("SECTOR_INDEX_DAILY · KOSDAQ 101", idx_kosdaq)
 

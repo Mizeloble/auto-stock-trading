@@ -145,3 +145,40 @@ async def test_top_volume_strips_a_prefix_from_symbol(settings: Settings) -> Non
         async with KiwoomRestClient(settings=settings) as client:
             chosen = await top_volume(client, top_n=1, markets=("KOSPI",))
     assert chosen[0].symbol == "005930"
+
+
+async def test_top_volume_sends_all_required_body_fields(settings: Settings) -> None:
+    """ka10030 필수 필드 회귀 게이트 — probe 2026-05-03 에서 누락이 1511 에러였음.
+
+    crd_tp / trde_qty_tp / pric_tp / trde_prica_tp / mrkt_open_tp 가 빠지면
+    키움이 즉시 거절. 이 필드 중 하나라도 사라지면 이 테스트가 실패해야 함.
+    """
+    captured: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json=_rank_payload([]))
+
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_RANK).mock(side_effect=_handler)
+        async with KiwoomRestClient(settings=settings) as client:
+            await top_volume(client, top_n=1, markets=("KOSPI",))
+
+    assert captured, "POST 가 한 번도 안 갔음"
+    body = captured[0]
+    required = {
+        "mrkt_tp",
+        "sort_tp",
+        "mang_stk_incls",
+        "crd_tp",
+        "trde_qty_tp",
+        "pric_tp",
+        "trde_prica_tp",
+        "mrkt_open_tp",
+        "stex_tp",
+    }
+    missing = required - set(body)
+    assert not missing, f"필수 필드 누락: {missing} (probe 2026-05-03 에러 회귀)"

@@ -18,8 +18,8 @@ PATH_MARKET = "/api/dostk/mrkcond"  # 시세 (호가창 등)
 PATH_CHART = "/api/dostk/chart"  # 차트 (일/분봉)
 PATH_ACCOUNT = "/api/dostk/acnt"  # 계좌 (예수금/잔고)
 PATH_ORDER = "/api/dostk/ordr"  # 주문 (매수/매도/정정/취소)
-PATH_RANK = "/api/dostk/rkinfo"  # 순위정보 (거래량 상위 등). probe 후 확정.
-PATH_SECTOR = "/api/dostk/sect"  # 업종/지수 (KOSPI 종합·KOSDAQ 종합 일봉). probe 후 확정.
+PATH_RANK = "/api/dostk/rkinfo"  # 순위정보 (거래량 상위 등). probe 2026-05-03 확정.
+PATH_SECTOR = "/api/dostk/sect"  # 업종/지수. probe 2026-05-03 — ka20009 가 이 path 응답.
 
 
 # --- TR ID (api-id 헤더로 전송) ---
@@ -44,9 +44,10 @@ class TR:
     ORDER_MODIFY = "kt10002"  # 주식 정정주문
     ORDER_CANCEL = "kt10003"  # 주식 취소주문
 
-    # 순위 / 지수 (day-trade 발굴·게이트용 — probe 로 확정 필요)
-    RANK_VOLUME = "ka10030"  # 당일 거래량 상위 요청
-    SECTOR_INDEX_DAILY = "ka20006"  # 업종 일봉 (KOSPI 종합 001 / KOSDAQ 종합 101)
+    # 순위 / 지수 (day-trade 발굴·게이트용 — probe 2026-05-03 확정)
+    RANK_VOLUME = "ka10030"  # 당일 거래량 상위 (필수: crd_tp 등 — market/rank.py 참고)
+    # ka20006 은 "업종현재가" 라 일봉 미지원 — ka20009 "업종일봉조회" 가 정답.
+    SECTOR_INDEX_DAILY = "ka20009"  # 업종 일봉 (KOSPI 종합 001 / KOSDAQ 종합 101)
 
 
 # 업종(지수) 코드 — 키움 시장 코드 관습. probe 로 확인 후 필요시 보정.
