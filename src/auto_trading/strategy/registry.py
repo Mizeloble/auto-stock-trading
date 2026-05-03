@@ -44,4 +44,4 @@ def available() -> list[str]:
 def load_builtin_strategies() -> None:
     """내장 전략 모듈을 import 해 레지스트리에 등록."""
     # 지연 import 로 순환 import 방지
-    from . import rsi_reversion, sma_crossover  # noqa: F401
+    from . import intraday, rsi_reversion, sma_crossover  # noqa: F401
