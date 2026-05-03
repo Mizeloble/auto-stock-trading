@@ -23,6 +23,8 @@ from typing import Any
 
 from auto_trading.config import get_settings
 from auto_trading.kiwoom.endpoints import (
+    INDEX_MRKT_TP_KOSDAQ,
+    INDEX_MRKT_TP_KOSPI,
     MARKET_TP_KOSDAQ,
     MARKET_TP_KOSPI,
     PATH_RANK,
@@ -32,6 +34,9 @@ from auto_trading.kiwoom.endpoints import (
     TR,
 )
 from auto_trading.kiwoom.rest import KiwoomRestClient
+
+# 키움 모의 분당 호출 제한 회피 — 모든 요청 사이에 둠.
+SLEEP_BETWEEN_CALLS_SEC = 2.0
 
 
 def _redact(d: dict[str, Any]) -> dict[str, Any]:
@@ -107,7 +112,8 @@ async def main() -> None:
         )
         _dump("RANK_VOLUME · KOSPI", rank_kospi)
 
-        # 2) 거래량 상위 KOSDAQ
+        # 2) 거래량 상위 KOSDAQ — 분당 호출 제한 회피.
+        await asyncio.sleep(SLEEP_BETWEEN_CALLS_SEC)
         rank_kosdaq = await _post_raw(
             client,
             TR.RANK_VOLUME,
@@ -116,22 +122,31 @@ async def main() -> None:
         )
         _dump("RANK_VOLUME · KOSDAQ", rank_kosdaq)
 
-        # 3) KOSPI 종합지수 일봉 (ka20009 — 2026-05-03 ka20006 가 URI 미지원이라 교체)
+        # 3) KOSPI 종합지수 일봉 (ka20009 + mrkt_tp/inds_cd/base_dt 모두 필수).
+        await asyncio.sleep(SLEEP_BETWEEN_CALLS_SEC)
         idx_kospi = await _post_raw(
             client,
             TR.SECTOR_INDEX_DAILY,
             PATH_SECTOR,
-            {"inds_cd": SECTOR_CODE_KOSPI, "base_dt": today_yyyymmdd},
+            {
+                "mrkt_tp": INDEX_MRKT_TP_KOSPI,
+                "inds_cd": SECTOR_CODE_KOSPI,
+                "base_dt": today_yyyymmdd,
+            },
         )
         _dump("SECTOR_INDEX_DAILY · KOSPI 001", idx_kospi)
 
-        # 4) KOSDAQ 종합지수 일봉. 1차 probe 에서 분당 호출 제한(429) 걸림 — 2초 대기.
-        await asyncio.sleep(2)
+        # 4) KOSDAQ 종합지수 일봉.
+        await asyncio.sleep(SLEEP_BETWEEN_CALLS_SEC)
         idx_kosdaq = await _post_raw(
             client,
             TR.SECTOR_INDEX_DAILY,
             PATH_SECTOR,
-            {"inds_cd": SECTOR_CODE_KOSDAQ, "base_dt": today_yyyymmdd},
+            {
+                "mrkt_tp": INDEX_MRKT_TP_KOSDAQ,
+                "inds_cd": SECTOR_CODE_KOSDAQ,
+                "base_dt": today_yyyymmdd,
+            },
         )
         _dump("SECTOR_INDEX_DAILY · KOSDAQ 101", idx_kosdaq)
 
