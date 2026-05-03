@@ -72,11 +72,19 @@ async def _fetch_market(
     `mrkt_tp` 외 파라미터(정렬 기준·관리종목 포함 등)는 키움 문서 기본값에 의존.
     probe 후 필요한 파라미터를 추가한다.
     """
+    # ka10030 (당일거래량상위) 필수 파라미터 — probe(2026-05-03) 로 확정.
+    # crd_tp / trde_qty_tp / pric_tp / trde_prica_tp / mrkt_open_tp 가 빠지면
+    # "1511: 필수 입력 값에 값이 존재하지 않습니다" 로 거절. 모두 "전체"(0/000) 기본.
     body = {
         "mrkt_tp": _MRKT_TP[market],
-        "sort_tp": "1",  # 거래량 기준 (probe 로 확정)
+        "sort_tp": "1",  # 1=거래량, 2=거래대금
         "mang_stk_incls": "0",  # 관리종목 제외
-        "stex_tp": "3",  # 통합 (KRX+NXT)
+        "crd_tp": "0",  # 신용 구분: 0=전체
+        "trde_qty_tp": "0",  # 거래량 구분: 0=전체
+        "pric_tp": "0",  # 가격 구분: 0=전체
+        "trde_prica_tp": "0",  # 거래대금 구분: 0=전체
+        "mrkt_open_tp": "0",  # 장운영 구분: 0=전체
+        "stex_tp": "3",  # 거래소: 1=KRX 2=NXT 3=통합
     }
     page = await client.request(TR.RANK_VOLUME, PATH_RANK, body)
     rows = extract_rows(page)
