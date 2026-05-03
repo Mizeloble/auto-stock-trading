@@ -155,6 +155,39 @@ async def test_index_gate_sends_required_mrkt_tp(settings: Settings) -> None:
     assert "base_dt" in posted[0]
 
 
+async def test_index_gate_parses_cur_prc_n_from_ka20009_response(settings: Settings) -> None:
+    """probe 2026-05-03 회귀 — ka20009 의 list `inds_cur_prc_daly_rept` 행 키는
+    `cur_prc_n`(_n suffix). _parse_close 후보 체인에서 빠지면 게이트가 데이터 부족으로
+    무조건 False — 모든 종목 매수 차단됨.
+    """
+    # 실측 응답을 단순화: cur_prc_n 만 있는 행 20건, 단조 증가(마지막이 가장 큼).
+    rows = [
+        {
+            "dt_n": f"2026{4:02d}{i + 1:02d}",
+            "cur_prc_n": f"{1000.0 + (SMA_LONG - i) * 10:.2f}",  # 최신=마지막=1200
+        }
+        for i in range(SMA_LONG)
+    ]
+    payload = {
+        "return_code": 0,
+        "return_msg": "정상",
+        "cur_prc": "+6598.87",  # top-level 필드(현재가) — list 가 아니라 무시되어야
+        "inds_cur_prc_daly_rept": rows,
+    }
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_SECTOR).mock(return_value=httpx.Response(200, json=payload))
+        async with KiwoomRestClient(settings=settings) as client:
+            gate = await index_gate(client, "KOSPI")
+
+    # cur_prc_n 매핑이 작동하면 last 종가가 list 첫 행 값(1200) 이어야.
+    assert gate.last == 1200.0, (
+        f"cur_prc_n 매핑 실패 — last={gate.last} (top-level cur_prc 잡았거나 0). "
+        "_parse_close 의 후보 체인에서 cur_prc_n 가 빠진 게 원인일 수 있음."
+    )
+    assert gate.bars == SMA_LONG
+
+
 async def test_index_gate_api_failure_is_conservative_false(settings: Settings) -> None:
     """KiwoomError raise 되어도 게이트는 False 로 떨어져 매수 차단."""
     async with respx.mock(base_url=settings.rest_base_url) as mock:

@@ -148,27 +148,97 @@ async def test_top_volume_strips_a_prefix_from_symbol(settings: Settings) -> Non
 
 
 async def test_top_volume_strips_underscore_suffix_from_symbol(settings: Settings) -> None:
-    """probe 2026-05-03 회귀 — 통합거래소(AL) 종목은 '252670_AL' 형태로 옴.
+    """probe 2026-05-03 회귀 — 통합거래소(AL) 종목은 '006340_AL' 형태로 옴.
 
     주문 API 는 6자리 숫자만 받기 때문에 발굴기 단에서 _xx 접미사 제거 필수.
+    이 테스트는 suffix 정규화 검증 목적 — ETF 필터와 독립이라 exclude_etf=False.
     """
     rows = [
+        {"stk_cd": "006340_AL", "stk_nm": "대원전선", "trde_qty": "10", "cur_prc": "+15050"},
+        {"stk_cd": "046890_AL", "stk_nm": "서울반도체", "trde_qty": "5", "cur_prc": "+16590"},
+    ]
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_RANK).mock(return_value=httpx.Response(200, json=_rank_payload(rows)))
+        async with KiwoomRestClient(settings=settings) as client:
+            chosen = await top_volume(client, top_n=2, markets=("KOSPI",), exclude_etf=False)
+    assert [r.symbol for r in chosen] == ["006340", "046890"]
+    # 가격 부호(`+15050`) 는 to_decimal 이 처리.
+    assert chosen[0].price == 15050.0
+
+
+async def test_top_volume_excludes_etf_etn_spac_by_default(settings: Settings) -> None:
+    """probe 2026-05-03 회귀 — KOSPI 거래량 1~5위가 인버스 ETF/ETN/SPAC 일색.
+    기본 exclude_etf=True 면 day-trade 의도에 맞게 제외, top_n 은 일반 주식으로 채움.
+    """
+    rows = [
+        # 거래량 desc — 처음 4개는 ETF/ETN/SPAC, 마지막 2개만 일반 주식.
         {
             "stk_cd": "252670_AL",
             "stk_nm": "KODEX 200선물인버스2X",
-            "trde_qty": "10",
-            "cur_prc": "+169",
+            "trde_qty": "100",
+            "cur_prc": "169",
         },
-        {"stk_cd": "114800_AL", "stk_nm": "KODEX 인버스", "trde_qty": "5", "cur_prc": "+1349"},
+        {"stk_cd": "114800_AL", "stk_nm": "KODEX 인버스", "trde_qty": "90", "cur_prc": "1349"},
+        {
+            "stk_cd": "530036_AL",
+            "stk_nm": "삼성 인버스 2X WTI원유 선물 ETN",
+            "trde_qty": "80",
+            "cur_prc": "18",
+        },
+        {"stk_cd": "0129K0_AL", "stk_nm": "신한제18호스팩", "trde_qty": "70", "cur_prc": "2355"},
+        {"stk_cd": "006340_AL", "stk_nm": "대원전선", "trde_qty": "60", "cur_prc": "15050"},
+        {"stk_cd": "046890_AL", "stk_nm": "서울반도체", "trde_qty": "50", "cur_prc": "16590"},
     ]
     async with respx.mock(base_url=settings.rest_base_url) as mock:
         mock.post(PATH_TOKEN).mock(return_value=_token_resp())
         mock.post(PATH_RANK).mock(return_value=httpx.Response(200, json=_rank_payload(rows)))
         async with KiwoomRestClient(settings=settings) as client:
             chosen = await top_volume(client, top_n=2, markets=("KOSPI",))
-    assert [r.symbol for r in chosen] == ["252670", "114800"]
-    # 가격 부호(`+169`) 는 to_decimal 이 처리.
-    assert chosen[0].price == 169.0
+
+    # ETF/ETN/SPAC 4건 제외 → 일반 주식 2건만 남음.
+    assert [r.symbol for r in chosen] == ["006340", "046890"]
+    assert all("KODEX" not in r.name for r in chosen)
+    assert all("ETN" not in r.name for r in chosen)
+    assert all("스팩" not in r.name for r in chosen)
+
+
+async def test_top_volume_include_etf_keeps_them(settings: Settings) -> None:
+    """exclude_etf=False 면 ETF 도 포함 — 거래량 순서 그대로."""
+    rows = [
+        {"stk_cd": "252670_AL", "stk_nm": "KODEX 인버스", "trde_qty": "100", "cur_prc": "169"},
+        {"stk_cd": "006340_AL", "stk_nm": "대원전선", "trde_qty": "50", "cur_prc": "15050"},
+    ]
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_RANK).mock(return_value=httpx.Response(200, json=_rank_payload(rows)))
+        async with KiwoomRestClient(settings=settings) as client:
+            chosen = await top_volume(client, top_n=2, markets=("KOSPI",), exclude_etf=False)
+    assert [r.symbol for r in chosen] == ["252670", "006340"]
+
+
+def test_is_etf_or_etn_classifier_unit_cases() -> None:
+    """probe 2026-05-03 실측 케이스 + 일반 주식 — 휴리스틱 분기 검증."""
+    from auto_trading.market.rank import _is_etf_or_etn
+
+    # ETF / ETN / SPAC — 제외돼야
+    assert _is_etf_or_etn("KODEX 200선물인버스2X")
+    assert _is_etf_or_etn("KODEX 인버스")
+    assert _is_etf_or_etn("KODEX WTI원유선물인버스(H)")
+    assert _is_etf_or_etn("TIGER 200")
+    assert _is_etf_or_etn("KBSTAR 우량업종")
+    assert _is_etf_or_etn("삼성 인버스 2X WTI원유 선물 ETN")
+    assert _is_etf_or_etn("신한제18호스팩")
+
+    # 일반 주식 — 통과돼야
+    assert not _is_etf_or_etn("삼성전자")
+    assert not _is_etf_or_etn("SK하이닉스")
+    assert not _is_etf_or_etn("대원전선")
+    assert not _is_etf_or_etn("서울반도체")
+    assert not _is_etf_or_etn("KBI메탈")  # KB 로 시작하지만 KBSTAR 와 다름
+    assert not _is_etf_or_etn("해성옵틱스")
+    assert not _is_etf_or_etn("오가닉티코스메틱")
+    assert not _is_etf_or_etn("")
 
 
 async def test_top_volume_sends_all_required_body_fields(settings: Settings) -> None:
