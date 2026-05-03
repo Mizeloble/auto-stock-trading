@@ -70,3 +70,70 @@ async def test_token_is_never_exposed_in_repr(notifier: TelegramNotifier) -> Non
     assert "SECRETTOKEN" not in r
     assert "1234" in r  # 앞 4자만 노출
     assert "…" in r
+
+
+async def test_daytrade_discovery_done_is_korean_not_raw_kwargs(
+    notifier: TelegramNotifier,
+) -> None:
+    """5/3 회귀 — day-trade 발굴 알림이 raw `chosen=[] blocked=[...]` 형태로 가던 문제."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "daytrade.discovery_done",
+            chosen=["005930", "247540"],
+            blocked=[("006340", "KOSPI_below_sma")],
+            note="매수 후보 2/3",
+        )
+
+    body = json.loads(route.calls[0].request.read())
+    text = body["text"]
+    # 한국어 친절 포맷
+    assert "발굴 완료" in text
+    assert "005930" in text
+    assert "247540" in text
+    # raw 형식이 노출되면 안 됨
+    assert "chosen=" not in text
+    assert "blocked=[" not in text
+
+
+async def test_daytrade_discovery_done_no_chosen_still_readable(
+    notifier: TelegramNotifier,
+) -> None:
+    """게이트 차단으로 chosen=[] 인 케이스도 사람이 읽을 수 있게."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "daytrade.discovery_done",
+            chosen=[],
+            blocked=[
+                ("006340", "KOSPI_below_sma"),
+                ("900300", "KOSDAQ_below_sma"),
+                ("025860", "KOSPI_below_sma"),
+            ],
+            note="후보 3건 모두 지수 게이트 차단 — 매수 없이 청산 시각까지 대기.",
+        )
+
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "발굴 완료" in text
+    assert "0건" in text
+    assert "차단" in text
+    assert "006340" in text  # 차단 종목도 보임
+    assert "chosen=" not in text
+
+
+async def test_runner_liquidate_done_korean_format(notifier: TelegramNotifier) -> None:
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.liquidate_done", reason="liquidate_at_reached", count=2, dry_run=True
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "청산 완료" in text
+    assert "2종목" in text
+    assert "dry-run" in text

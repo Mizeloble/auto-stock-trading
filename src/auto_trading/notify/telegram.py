@@ -46,6 +46,36 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
     if event == "runner.balance_failed_fatal":
         return f"🛑 잔고 조회 {fields.get('consecutive', '?')}회 연속 실패 — 러너 중단"
 
+    # ---- 21단계 day-trade 이벤트 ----------------------------------------
+
+    if event == "daytrade.discovery_done":
+        chosen = fields.get("chosen") or []
+        blocked = fields.get("blocked") or []
+        note = fields.get("note") or ""
+        chosen_str = ", ".join(str(s) for s in chosen) if chosen else "없음"
+        head = f"🔎 발굴 완료 · 매수 후보 {len(chosen)}건"
+        body = f"\n선정: {chosen_str}"
+        if blocked:
+            blocked_summary = ", ".join(f"{sym}({reason})" for sym, reason in blocked[:5])
+            if len(blocked) > 5:
+                blocked_summary += f" 외 {len(blocked) - 5}"
+            body += f"\n차단: {blocked_summary}"
+        if note:
+            body += f"\n메모: {note}"
+        return head + body
+
+    if event == "runner.liquidate_done":
+        count = fields.get("count", 0)
+        reason = fields.get("reason", "?")
+        dry = " (dry-run)" if fields.get("dry_run") else ""
+        return f"🧹 청산 완료{dry} · {count}종목 ({reason})"
+
+    if event == "runner.liquidate_failed":
+        return (
+            f"❌ 청산 실패 {fields.get('symbol', '?')} {fields.get('qty', '?')}주: "
+            f"{fields.get('error', 'unknown')}"
+        )
+
     # 미정의 이벤트는 그대로 한 줄로
     parts = [f"{k}={v}" for k, v in fields.items()]
     return f"[{event}] " + " ".join(parts)

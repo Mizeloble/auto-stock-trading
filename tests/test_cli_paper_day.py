@@ -11,16 +11,26 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from datetime import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import structlog
 from typer.testing import CliRunner
 
 from auto_trading import cli as cli_module
 from auto_trading._common import KST
 from auto_trading.daytrade.orchestrator import DiscoveryResult
 from auto_trading.runner import PaperRunner
+
+
+@pytest.fixture(autouse=True)
+def _restore_structlog_config() -> Iterator[None]:
+    """CliRunner.invoke 가 cli._root 콜백에서 _setup_logging() 호출 → structlog 전역
+    재구성. test_notify_telegram 등 다른 테스트로 누수 방지."""
+    yield
+    structlog.reset_defaults()
 
 
 def test_parse_hhmm_kst_valid() -> None:
@@ -150,6 +160,72 @@ async def test_delayed_discover_failure_requests_stop() -> None:
     # request_stop 호출 → STOPPING 진입 + universe_ready 도 set
     assert runner._control_state.value == "stopping"
     assert runner._universe_ready.is_set()
+
+
+async def test_delayed_discover_empty_chosen_requests_stop() -> None:
+    """5/3 21:42 회귀 — 게이트 차단으로 chosen=[] 일 때도 hang 방지 위해 request_stop.
+
+    무엇/왜:
+    - discover_and_arm 가 chosen=[] 면 set_universe() 호출 안 함 → _universe_ready
+      안 set → run() 의 universe 대기에서 무한 hang.
+    - 청산 시계 task 는 ws.start 이후에 시작되므로 universe 대기 중엔 안 돔 →
+      청산 시각 지나도 자기 종료 X.
+    - 발굴 실패와 동일하게 명시적 stop 트리거 필요.
+    """
+    fake_notifier = AsyncMock()
+    runner = PaperRunner(liquidate_at=time(15, 15, tzinfo=KST), notifier=fake_notifier)
+    empty_result = DiscoveryResult(
+        chosen=[],
+        blocked=[("006340", "KOSPI_below_sma")],
+        gates={},
+        note_ko="후보 1건 모두 지수 게이트 차단",
+    )
+    with (
+        patch.object(cli_module, "discover_and_arm", AsyncMock(return_value=empty_result)),
+        patch.object(cli_module, "KiwoomRestClient") as mock_rest_cls,
+    ):
+        mock_rest_cls.return_value.__aenter__ = AsyncMock(return_value=object())
+        mock_rest_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await cli_module._delayed_discover(runner, top_n=3, delay=0)
+
+    assert runner._control_state.value == "stopping", (
+        "chosen=[] 시 STOPPING 진입 누락 (5/3 hang 회귀)"
+    )
+    assert runner._universe_ready.is_set()
+    # discovery_done 알림은 stop 전에 푸시돼야 (사용자가 결과 알 수 있게)
+    events = [c.args[0] for c in fake_notifier.notify.call_args_list]
+    assert "daytrade.discovery_done" in events
+
+
+async def test_delayed_discover_chosen_keeps_runner_alive() -> None:
+    """chosen 이 있으면 set_universe 가 호출되고 stop 트리거 X — 정상 매수 흐름."""
+    from auto_trading.market.rank import RankedSymbol
+
+    runner = PaperRunner(liquidate_at=time(15, 15, tzinfo=KST), notifier=AsyncMock())
+    chosen = [
+        RankedSymbol(symbol="005930", market="KOSPI", name="삼성전자", volume=100, price=70000)
+    ]
+    result = DiscoveryResult(chosen=chosen, blocked=[], gates={}, note_ko="ok")
+
+    async def _fake_discover(_rest, runner_arg, **_kw):  # type: ignore[no-untyped-def]
+        # 실 orchestrator 처럼 set_universe 호출 (실측 동작 시뮬)
+        from auto_trading.strategy.intraday import IntradayMomentum
+
+        runner_arg.set_universe(["005930"], {"005930": IntradayMomentum()})
+        return result
+
+    with (
+        patch.object(cli_module, "discover_and_arm", _fake_discover),
+        patch.object(cli_module, "KiwoomRestClient") as mock_rest_cls,
+    ):
+        mock_rest_cls.return_value.__aenter__ = AsyncMock(return_value=object())
+        mock_rest_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await cli_module._delayed_discover(runner, top_n=3, delay=0)
+
+    assert runner._control_state.value == "running", "chosen 있는데 STOPPING 진입 — 회귀"
+    assert runner.symbols == ["005930"]
 
 
 async def test_delayed_discover_respects_delay() -> None:
