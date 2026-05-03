@@ -267,6 +267,15 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ---
 
+## 📘 19.5단계 · 초보자용 매뉴얼 — **✅ 완료** (2026-05-03)
+
+단계라기보단 부수 작업이지만 두 번에 걸쳐 머지된 매뉴얼 흔적을 한눈에 보이게 묶음.
+
+- [x] **PR #20 · `manual.md` 신설** · 한국어 초보자 가이드. 0단계 사전 준비부터 운영·트러블슈팅까지 한 파일.
+- [x] **PR #28 · §11 day-trade 모드 섹션** · 21단계 paper-day 사용법·로그·텔레그램·트러블슈팅까지 추가 (21단계 마무리 시점에 갱신).
+
+---
+
 ## 🧹 20단계 · 코드 리팩토링 (구조만, 동작 보존) — **✅ 완료** (2026-05-02)
 
 19단계까지 누적된 기능들로 두 큰 파일이 비대해져 가독성이 떨어졌다. 동작·테스트·로그 키 모두 보존한 채 책임만 쪼갬.
@@ -302,9 +311,24 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 - [x] **`scripts/paper-day-mode.sh`** + **`launchd/com.mizeloble.auto-trade.paper-day.plist`** · 평일 08:55 시동, 별도 stop plist 불필요(러너 자체 청산 후 종료). 기존 swing plist 와 동시 활성 X — `launchd/README.md` 에 전환 절차 안내.
 - [x] **`notify/state.py`** · `RunnerStateSnapshot.runner_mode` (`swing`/`day-trade`) + `liquidate_at_label` 필드. `format_status` 가 day-trade 모드면 "▶ 운영중 · day-trade (청산 15:15)" 처럼 표시.
 
+### 사이드 픽스 — probe 실측으로 endpoints/필터 3차 보정 (2026-05-03)
+
+PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의서버에 돌리며 발견한 거절을 3차에 걸쳐 잡음. main 회귀 게이트로 단위 테스트 7건 추가.
+
+- [x] **PR #24 · probe 1차** — `ka10030` 필수 필드 9개 (`crd_tp` / `trde_qty_tp` / `pric_tp` / `trde_prica_tp` / `mrkt_open_tp` 추가). `TR.SECTOR_INDEX_DAILY` `ka20006`(현재가) → **`ka20009`(업종일봉)** 교체. 단위 196 → 197.
+- [x] **PR #25 · probe 2차** — 통합거래소 종목 코드 `_AL`/`_NX` suffix 처리 (`lstrip("A") → split("_")[0]`). `ka20009` 의 `mrkt_tp` 필수 (KOSPI=`"0"` / KOSDAQ=`"1"`, 순위 TR 의 `MARKET_TP_*` 와 분리). 단위 197 → 199.
+- [x] **PR #26 · probe 3차** — `ka20009` 응답 행 키가 `cur_prc_n` (suffix `_n`) — `_parse_close` 후보 체인에 추가하지 않으면 모든 일봉 None → 게이트 무조건 False 라는 silent failure 였음. + KOSPI 거래량 1~5위가 KODEX 인버스/레버리지·KOSDAQ 1위가 SPAC 인 실측 결과로 **`exclude_etf=True` 기본** + `--include-etf` 플래그. 단위 199 → 203.
+
+### 사이드 픽스 — 사용자 dry-run 검증으로 발견된 hang/UX 보정 (2026-05-03)
+
+5/3 21:42 사용자 dry-run 실측에서 발견한 두 결함 + 후속 사용자 피드백 1건. 단위 210건까지.
+
+- [x] **PR #27 · universe 0건 hang fix + 텔레그램 한국어 포맷** — 게이트 차단으로 `chosen=[]` 가 나오면 `set_universe()` 호출 안 함 → `_universe_ready` 안 set → `run()` 이 universe 대기에서 무한 hang(청산 시계 task 는 `ws.start` 이후라 안 도착). `_delayed_discover` 끝에 `if not result.chosen: runner.request_stop()` 추가. 동시에 `daytrade.discovery_done`/`runner.liquidate_done`/`runner.liquidate_failed` 3종 한국어 템플릿 추가(기존엔 raw kwargs 로 노출됐음). 회귀 게이트 5건. 단위 203 → 208.
+- [x] **PR #29 · stopped 후 텔레그램 명령 비활성 안내** — PR #27 의 자기 종료 흐름이 의도된 동작이지만 사용자가 `/status` 보내고 무응답에 헷갈림. `runner.stopped` 메시지의 reason 이 `stopped_before_universe` / `no_candidates_stopping` 일 때 한 줄 안내 추가. 일반 stop(SIGTERM·`/stop`) 은 안내 X. 단위 208 → 210.
+
 ### 품질 게이트
 
-단위 196건(이전 155 + 21단계 신규 41) PASS, 통합 4건 그대로, ruff·format·mypy 클린.
+단위 210건(이전 155 + 21단계 신규 55) PASS, 통합 4건 그대로, ruff·format·mypy 클린.
 
 ### 체험 확인 (코드 수준)
 
@@ -314,8 +338,8 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ### 체험 확인 (사용자가 직접 — 머지 후)
 
-- [ ] **probe 실측**: `uv run python scripts/probe_rank_index.py` → 모의 서버 응답 dict 한국어 출력 + 거래량 상위 10개 표시. probe 결과로 `endpoints.py` 의 `RANK_VOLUME`/`SECTOR_INDEX_DAILY` TR 코드·필드명 보정 (현재 합리적 기본값 + 후보 키 체인).
-- [ ] **dry-run 종일**: 평일 장중에 `uv run auto-trade paper-day --top-n 3 --dry-run` → 로그에 `daytrade.universe_chosen` → `runner.order_simulated` × 3 → 15:15 `runner.liquidate_simulated` → `runner.stopped` 순서.
+- [x] **probe 실측** · 5/3 3차에 걸쳐 진행 → PR #24/#25/#26 으로 endpoints·필드·ETF 필터 모두 보정. 4건 호출 모두 `return_code=0` + 응답 본체 매핑까지 확정.
+- [~] **dry-run 종일** · 5/3 21:42 1차 검증 → 약세장 `chosen=[]` 흐름(자기 종료 + 텔레그램 한국어 안내)까지 검증됨. **남은 검증**: 매수가 들어가는 날의 발굴→매수→15:15 일괄 청산 풀 사이클 (강세 종목 노출되는 평일에).
 - [ ] **launchd 전환**: `./scripts/launchd-uninstall.sh` (swing 제거) → `launchctl bootstrap gui/$UID scripts/launchd/com.mizeloble.auto-trade.paper-day.plist` (day-trade 등록) → `launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.paper-day` 로 즉시 시동 검증.
 - [ ] **실주문 전환**: 며칠 dry-run 검증 후 사용자 명시 승인이 있을 때만 `paper-day-mode.sh` 의 `--dry-run` 을 `--no-dry-run` 으로.
 
@@ -323,6 +347,4 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ## 🚀 남은 과제 (선택)
 
-- **인디케이터 캐시** · `data/cache/<symbol>_daily.parquet` 으로 차트 API 호출 절약.
-- **클라우드 이전** · 며칠 launchd 운영 후 가치 확인되면 Oracle 무료 티어/Hetzner 로 systemd 이전. `--dry-run` 그대로 검증 후 떼면 실거래 후보.
-- **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후).
+- **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후). 사전 검토: 집 맥북 launchd 의존이 실거래 신뢰성에 충분한지 — 부족하다고 판단되면 그 시점에 systemd(Oracle 무료/한국 리전) 이전을 같이 진행.
