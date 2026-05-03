@@ -18,6 +18,8 @@ PATH_MARKET = "/api/dostk/mrkcond"  # 시세 (호가창 등)
 PATH_CHART = "/api/dostk/chart"  # 차트 (일/분봉)
 PATH_ACCOUNT = "/api/dostk/acnt"  # 계좌 (예수금/잔고)
 PATH_ORDER = "/api/dostk/ordr"  # 주문 (매수/매도/정정/취소)
+PATH_RANK = "/api/dostk/rkinfo"  # 순위정보 (거래량 상위 등). probe 후 확정.
+PATH_SECTOR = "/api/dostk/sect"  # 업종/지수 (KOSPI 종합·KOSDAQ 종합 일봉). probe 후 확정.
 
 
 # --- TR ID (api-id 헤더로 전송) ---
@@ -42,14 +44,35 @@ class TR:
     ORDER_MODIFY = "kt10002"  # 주식 정정주문
     ORDER_CANCEL = "kt10003"  # 주식 취소주문
 
+    # 순위 / 지수 (day-trade 발굴·게이트용 — probe 로 확정 필요)
+    RANK_VOLUME = "ka10030"  # 당일 거래량 상위 요청
+    SECTOR_INDEX_DAILY = "ka20006"  # 업종 일봉 (KOSPI 종합 001 / KOSDAQ 종합 101)
+
+
+# 업종(지수) 코드 — 키움 시장 코드 관습. probe 로 확인 후 필요시 보정.
+SECTOR_CODE_KOSPI = "001"  # KOSPI 종합지수
+SECTOR_CODE_KOSDAQ = "101"  # KOSDAQ 종합지수
+
+# 거래량 순위 요청의 시장 구분(`mrkt_tp`) 값.
+MARKET_TP_ALL = "000"
+MARKET_TP_KOSPI = "001"
+MARKET_TP_KOSDAQ = "101"
+
 
 __all__ = [
+    "MARKET_TP_ALL",
+    "MARKET_TP_KOSDAQ",
+    "MARKET_TP_KOSPI",
     "PATH_ACCOUNT",
     "PATH_CHART",
     "PATH_MARKET",
     "PATH_ORDER",
+    "PATH_RANK",
+    "PATH_SECTOR",
     "PATH_STKINFO",
     "PATH_TOKEN",
     "PATH_TOKEN_REVOKE",
+    "SECTOR_CODE_KOSDAQ",
+    "SECTOR_CODE_KOSPI",
     "TR",
 ]

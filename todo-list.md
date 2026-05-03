@@ -277,6 +277,40 @@ uv run pytest -m integration   # 통합 4건 (모의투자 키 있을 때만)
 
 ---
 
+## 📈 21단계 · Day-Trading 모드 전환 — **🚧 진행중**
+
+기존 swing 방식(`--symbols` 로 종목 고정)에서 → **매일 아침 거래량 상위 종목을 골라 그날 안에 청산**하는 day-trade 방식으로 확장. 사용자 결정: KOSPI+KOSDAQ 통합 거래량 상위 3종목, 시장 5/20일선 게이트, 발굴 직후 즉시 균등 매수, 15:15 KST 일괄 시장가 청산. 기존 `paper --symbols / --profile` 은 보존하고 신규 `paper-day` 명령으로 분기. 3개 PR 로 쪼개서 진행.
+
+### Phase A · 키움 어댑터 (거래량 순위 + 시장 지수)
+
+- [ ] **`endpoints.py`** · `TR.RANK_VOLUME` (거래량 상위, 후보 `ka10030`) / `TR.SECTOR_INDEX_DAILY` (업종 지수 일봉, 후보 `ka20006`) + `PATH_RANK` / `PATH_SECTOR` 추가. 정확한 코드는 probe 로 확정.
+- [ ] **`market/rank.py`** · `top_volume(client, top_n=3, markets=("KOSPI","KOSDAQ"))` → `list[RankedSymbol{symbol, market, name, volume, price}]`. KOSPI/KOSDAQ 각각 호출 → 거래량 desc 정렬 → top_n.
+- [ ] **`market/index.py`** · `index_gate(client, market)` → `IndexGate{market, last, sma5, sma20, above_5_and_20}`. 일봉 30봉 → 5/20 SMA. 데이터 부족 시 보수적으로 `above=False`.
+- [ ] **`scripts/probe_rank_index.py`** · `probe_orders.py` 패턴. 모의 서버 응답 dict 캡처 → endpoints.py 확정.
+- [ ] **테스트 단위** — `test_market_rank.py` (정렬·top_n·시장 합성) + `test_market_index.py` (SMA 계산·데이터 부족 보수).
+
+### Phase B · 청산 스케줄러 + 동적 종목 슬롯
+
+- [ ] **`runner.py`** · `liquidate_at: time | None`, `liquidate_grace_sec` 필드 추가. `set_universe(symbols, strategies)` 동적 주입. `liquidate_all(rest, account, reason)` 보유 전부 시장가 SELL. 백그라운드 task 가 KST 시계 폴링 → 청산 → `request_stop()`. `liquidate_at=None` 이면 기존 swing 동작 100% 유지.
+- [ ] **`strategy/intraday.py`** · `IntradayMomentum` — 첫 봉에 BUY `weight=1/N` 한 번만 발사 후 NONE.
+- [ ] **테스트** — `test_runner_liquidate.py` (시각 도달 → 매도 → STOPPING) + `test_runner_dynamic_universe.py` (빈 시작 → set_universe → ws 재구독).
+
+### Phase C · `paper-day` CLI + launchd 통합
+
+- [ ] **`cli.py paper_day(top_n, liquidate, dry_run, allow_real, minutes)`** · 빈 universe + `liquidate_at=15:15` 로 러너 생성 → 백그라운드 시동 → 09:00:30 대기 → `discover_and_arm()` → 청산까지 await.
+- [ ] **`daytrade/orchestrator.py`** · `discover_and_arm(rest, runner, top_n, strategy_factory)` → 발굴+게이트+set_universe 트랜잭션. `DiscoveryResult{chosen, blocked, note_ko}`.
+- [ ] **`scripts/paper-day-mode.sh`** + **`launchd/com.mizeloble.auto-trade.paper-day.plist`** · 평일 08:55 시동, 별도 stop plist 불필요(러너 자체 종료). 기존 swing plist 와 동시 활성 X — manual.md 안내.
+- [ ] **`notify/state.py`** · `RunnerStateSnapshot.mode` 필드 추가 (swing/day-trade).
+
+### 체험 확인
+
+- [ ] **PR-A**: `uv run python scripts/probe_rank_index.py` → 모의 서버 응답 dict 한국어 출력 + 거래량 상위 10개 표시.
+- [ ] **PR-B**: `uv run pytest tests/test_runner_liquidate.py tests/test_runner_dynamic_universe.py -v` → 전건 PASS.
+- [ ] **PR-C (dry-run)**: `uv run auto-trade paper-day --top-n 3 --dry-run` → 로그에 `daytrade.universe_chosen` → `runner.order_simulated` × 3 → 15:15 `runner.liquidate_simulated` → `runner.stopped` 순서로 찍히면 성공.
+- [ ] **PR-C (며칠 dry-run 후 실주문)**: 사용자 명시 승인 후에만 `--no-dry-run` 전환.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
 - **인디케이터 캐시** · `data/cache/<symbol>_daily.parquet` 으로 차트 API 호출 절약.
