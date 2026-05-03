@@ -125,6 +125,37 @@ async def test_daytrade_discovery_done_no_chosen_still_readable(
     assert "chosen=" not in text
 
 
+async def test_runner_stopped_day_trade_self_termination_includes_hint(
+    notifier: TelegramNotifier,
+) -> None:
+    """5/3 사용자 피드백 회귀 — day-trade 자기 종료 후 /status 무응답으로 헷갈리던 케이스.
+    stopped_before_universe / no_candidates_stopping 류 reason 일 때 다음 시동 안내 한 줄.
+    """
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify("runner.stopped", reason="stopped_before_universe")
+
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "paper 정지" in text
+    assert "다음 시동" in text
+    assert "09:00" in text
+
+
+async def test_runner_stopped_normal_reason_no_hint(notifier: TelegramNotifier) -> None:
+    """일반 stop (외부 SIGTERM, 사용자 /stop) 은 안내 없이 깔끔하게."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify("runner.stopped", reason="정상 종료")
+
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "paper 정지" in text
+    assert "다음 시동" not in text  # 안내 없음 — 사용자가 직접 끈 거니 헷갈림 X
+
+
 async def test_runner_liquidate_done_korean_format(notifier: TelegramNotifier) -> None:
     async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
         route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(

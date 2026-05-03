@@ -31,7 +31,13 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         return f"▶️ paper 시작{dry}\n전략: {strategy}\n종목: {symbols}"
     if event == "runner.stopped":
         reason = fields.get("reason", "정상")
-        return f"⏹ paper 정지 ({reason})"
+        msg = f"⏹ paper 정지 ({reason})"
+        # day-trade 모드의 자기 종료(universe 비어있음 / 발굴 실패) 면 사용자가 그 후
+        # /status 같은 명령을 보내도 듣는 프로세스 없음 — 무응답으로 끝나 헷갈림.
+        # 한 줄 안내 추가 (5/3 사용자 피드백).
+        if "before_universe" in str(reason) or "no_candidates" in str(reason):
+            msg += "\n💡 다음 시동(평일 09:00)까지 텔레그램 명령 비활성"
+        return msg
     if event == "runner.order_accepted":
         return (
             f"✅ 체결 접수 {fields.get('symbol', '?')} {str(fields.get('side', '?')).upper()}"
