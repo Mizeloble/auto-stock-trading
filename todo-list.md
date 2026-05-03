@@ -347,6 +347,5 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 
 ## 🚀 남은 과제 (선택)
 
-- **인디케이터 캐시** · `data/cache/<symbol>_daily.parquet` 으로 차트 API 호출 절약.
 - **클라우드 이전** · 며칠 launchd 운영 후 가치 확인되면 Oracle 무료 티어/Hetzner 로 systemd 이전. `--dry-run` 그대로 검증 후 떼면 실거래 후보.
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후).
