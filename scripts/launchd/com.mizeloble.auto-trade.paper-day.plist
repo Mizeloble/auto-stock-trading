@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mizeloble.auto-trade.paper-day</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jjmize/Project/auto-stock-trading/scripts/paper-day-mode.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jjmize/Project/auto-stock-trading</string>
+
+    <!-- 평일(월~금) 08:55 KST 트리거. 토(7)/일(1) 제외.
+         day-trade 모드는 15:15 청산 후 러너가 자기 종료 — 별도 stop plist 불필요. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+    </array>
+
+    <!-- 등록(load) 직후 자동 실행 X — 장중에 등록해도 즉시 안 켜지게. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- 죽으면 다시 살리지 않음. 청산 후 정상 종료를 비정상으로 오인하면 곤란. -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- 표준 출력/에러는 paper-day-mode.sh 안에서 logs/paper-day-YYYY-MM-DD.log 로 리다이렉트. -->
+    <key>StandardOutPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper-day.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper-day.err.log</string>
+
+    <!-- macOS sandbox 방지: 일반 사용자 GUI 세션에서 실행 (LaunchAgent 기본 동작) -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

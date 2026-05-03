@@ -33,6 +33,10 @@ class RunnerStateSnapshot:
     # 텔레그램 v3 — "running" / "paused" / "stopping" 중 하나.
     # 기본값 "running" 으로 v2 까지의 RunnerStateSnapshot 사용처(테스트 등) 와 호환.
     control_state: str = "running"
+    # 21단계 day-trade — "swing" / "day-trade" 중 하나. /status 표시용.
+    runner_mode: str = "swing"
+    # day-trade 모드일 때만 의미 — "HH:MM" KST. swing 은 빈 문자열.
+    liquidate_at_label: str = ""
 
 
 # ---- 포맷터 ----------------------------------------------------------------
@@ -94,10 +98,17 @@ def format_status(state: RunnerStateSnapshot, *, now: datetime | None = None) ->
         ", ".join(f"{s}={state.strategies[s]}" for s in state.symbols) if state.strategies else "-"
     )
     control_label = CONTROL_LABEL_KO.get(state.control_state, state.control_state)
+    mode_extra = ""
+    if state.runner_mode == "day-trade":
+        mode_extra = (
+            f" · day-trade (청산 {state.liquidate_at_label})"
+            if state.liquidate_at_label
+            else " · day-trade"
+        )
     lines = [
         f"📊 러너 상태{dry}",
         f"제어: {control_label}",
-        f"모드: {state.mode}",
+        f"모드: {state.mode}{mode_extra}",
         f"가동: {_uptime(state.started_at, now)}",
         f"종목: {', '.join(state.symbols) if state.symbols else '-'}",
         f"전략: {strat_str}",
