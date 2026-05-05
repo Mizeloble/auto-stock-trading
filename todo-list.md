@@ -345,6 +345,36 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 
 ---
 
+## 📊 22단계 · 일일 리포트 + 주간 인사이트 — **계획**
+
+매일 장 끝나고 그날 결과 자동 푸시(템플릿) + 주 1회 누적 패턴 LLM 분석. 사용자 합의 (2026-05-05): 매일 LLM 호출은 비용·메모리 규칙 둘 다 비효율 → 자동은 템플릿, LLM 은 명시 트리거 또는 주 1회 저빈도 cron.
+
+### Phase A · 자동 일일 리포트 (템플릿, LLM 무관)
+
+- [ ] **`reports/daily.py`** · `RunnerStateSnapshot` + 그날 로그(`logs/paper-day-YYYY-MM-DD.log`) 파싱 → `DailyReport` dataclass (발굴 종목·매수 시뮬·청산 결과·종목별 손익·시장 게이트·에러 카운트).
+- [ ] **포맷터** · 한국어 텔레그램 메시지 (이모지 + 표 형태). 17단계 `notify/state.py` 패턴 재활용.
+- [ ] **러너 hook** · `runner.liquidate_done` 직후 `_send_daily_report()` 호출 → notifier 푸시. 실패 swallow.
+- [ ] **CLI** · `auto-trade report --date YYYY-MM-DD` (과거 일자 재생성용). 인터랙티브 디버깅 + Phase B 입력 데이터 보존.
+- [ ] **데이터 영속화** · `data/reports/daily-YYYY-MM-DD.json` 으로 저장 — Phase B 가 직전 N일치 읽어서 LLM 입력으로 사용.
+- [ ] **테스트** · 포맷터 + 로그 파서 + hook 발사 단위.
+
+### Phase B · 주간 인사이트 (LLM, on-demand + 토요일 1회)
+
+- [ ] **`notify/insight.py`** · 17단계 `strategy/llm_advisor.py` 구조 재활용. system 프롬프트 캐싱 + tool_use 강제 + 직전 5일 `data/reports/daily-*.json` 요약 입력.
+- [ ] **CLI** · `auto-trade insight --since 7d [--dry-run]` — 사람 명시 호출용.
+- [ ] **텔레그램 `/insight` 명령** · `TelegramCommandHandler` 에 dispatch 1줄 추가. 인커밍 명령으로 즉석 호출.
+- [ ] **launchd weekly job** · `com.mizeloble.auto-trade.insight-weekly.plist` — 매주 토 09:00 KST. `scripts/insight-weekly.sh` 가 `auto-trade insight --since 7d` 호출 → 텔레그램 푸시.
+- [ ] **메모리 규칙 갱신** · `feedback_llm_cost.md` 에 "주 1회 이하 저빈도 cron 허용" 명시 (2026-05-05 갱신 완료).
+- [ ] **비용 가드** · 입력 토큰 추정 로그 + Opus/Sonnet 모델 선택 안내.
+
+### 체험 확인
+
+- [ ] **Phase A**: 다음 평일 매수 들어가는 날 청산 직후 텔레그램에 "📊 일일 리포트" 도착. 종목별 손익 % + 시장 게이트 + 에러 카운트 정확.
+- [ ] **Phase B 수동**: `/insight` 보내면 직전 5일 누적 패턴 분석 + 권고사항 도착.
+- [ ] **Phase B 자동**: 토요일 09:00 자동 푸시 도착. 호출당 비용 $0.05~0.10 범위 확인.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후). 사전 검토: 집 맥북 launchd 의존이 실거래 신뢰성에 충분한지 — 부족하다고 판단되면 그 시점에 systemd(Oracle 무료/한국 리전) 이전을 같이 진행.

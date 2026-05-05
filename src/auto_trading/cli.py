@@ -5,6 +5,8 @@
 - `balance`         — 계좌 잔고
 - `backtest`        — 과거 데이터 시뮬레이션
 - `paper`           — 모의투자 실시간 매매 루프
+- `paper-day`       — day-trade 모드 (발굴→매수→15:15 청산)
+- `report`          — 그날의 paper-day 로그를 일일 리포트 JSON 으로 집계 (수동)
 """
 
 from __future__ import annotations
@@ -29,7 +31,11 @@ from .kiwoom.rest import KiwoomRestClient
 from .market.chart import bars_to_dataframe, get_daily_bars
 from .market.quote import get_quote
 from .notify.factory import build_command_handler, build_notifier
+from .notify.reporting import ReportingNotifier
+from .notify.state import format_daily_report
 from .notify.telegram_commands import TelegramCommandHandler
+from .reports.daily import build_daily_report, save_daily_report
+from .reports.log_parser import parse_log
 from .runner import PaperRunner
 from .strategy import registry, scanner, suggest
 from .strategy.profile import StrategyProfile
@@ -397,12 +403,22 @@ def paper_day(
     console.print(f"[dim]키움 모드:[/dim] [{color}]{settings.kiwoom_mode.value}[/{color}]")
 
     liquidate_at = _parse_hhmm_kst(liquidate)
+    inner_notifier = build_notifier()
     runner = PaperRunner(
         liquidate_at=liquidate_at,
         bar_minutes=minutes,
         allow_real=allow_real,
         dry_run=dry_run,
-        notifier=build_notifier(),
+        notifier=inner_notifier,
+    )
+    # 22단계 Phase A — 청산·종료 후 자동 일일 리포트 푸시 + JSON 저장.
+    today_kst = datetime.now(KST).date()
+    runner.notifier = ReportingNotifier(
+        inner_notifier,
+        state_provider=runner.state_snapshot,
+        log_path=Path(f"logs/paper-day-{today_kst.isoformat()}.log"),
+        report_root=Path("data/reports"),
+        report_date=today_kst,
     )
     console.print(
         f"[cyan]day-trade 모드[/cyan] · 청산 {liquidate}"
@@ -648,6 +664,79 @@ def strategy_suggest(
     console.print(
         f"[dim]다음 단계:[/dim] uv run auto-trade backtest --profile {out_path} --from 2025-01-01"
     )
+
+
+@app.command()
+def report(
+    target_date: str = typer.Option(
+        "",
+        "--date",
+        help="ISO YYYY-MM-DD. 미지정 시 오늘(KST). paper-day 가 청산 직후 자동 푸시한 같은 형식의 리포트를 수동 재생성.",
+    ),
+    log_path: Path = typer.Option(
+        None,
+        "--log",
+        help="로그 파일 경로. 미지정 시 logs/paper-day-<date>.log 자동 사용.",
+    ),
+    out: Path = typer.Option(
+        Path("data/reports"),
+        "--out",
+        help="리포트 JSON 저장 폴더. 자동 생성.",
+    ),
+    push: bool = typer.Option(
+        False,
+        "--push/--no-push",
+        help="True 면 텔레그램에 푸시. 기본은 콘솔만.",
+    ),
+) -> None:
+    """22단계 Phase A — 그날의 paper-day 로그를 파싱해 일일 리포트 생성·저장.
+
+    무엇/왜:
+    - 운영 중 자동 푸시(러너 종료 시) 가 실패했거나 과거 일자를 다시 보고 싶을 때.
+    - 결정론적 — 같은 로그면 같은 출력. LLM 호출 없음.
+
+    어떻게 확인: 콘솔에 한국어 요약 출력 + `data/reports/daily-YYYY-MM-DD.json` 파일 생성.
+    """
+    iso = target_date or datetime.now(KST).date().isoformat()
+    log_file = log_path or Path(f"logs/paper-day-{iso}.log")
+    if not log_file.exists():
+        console.print(f"[red]로그 파일 없음:[/red] {log_file}")
+        raise typer.Exit(code=1)
+
+    events = parse_log(log_file)
+    daily = build_daily_report(date=iso, events=events, snapshot=None)
+    save_path = save_daily_report(daily, root=out)
+    console.print(f"[green]리포트 저장:[/green] {save_path}")
+
+    payload = {
+        "date": daily.date,
+        "mode": daily.mode,
+        "dry_run": daily.dry_run,
+        "discovery_chosen": daily.discovery_chosen,
+        "discovery_blocked": [list(t) for t in daily.discovery_blocked],
+        "market_gates": [g.__dict__ for g in daily.market_gates],
+        "buys": [t.__dict__ for t in daily.buys],
+        "liquidations": [li.__dict__ for li in daily.liquidations],
+        "error_count": daily.error_count,
+        "note_ko": daily.note_ko,
+        "realized_pnl": daily.realized_pnl,
+        "realized_pnl_pct": daily.realized_pnl_pct,
+        "excluded_etf_count": daily.excluded_etf_count,
+        "rank_candidates": daily.rank_candidates,
+    }
+    console.print(format_daily_report(payload))
+
+    if push:
+        notifier = build_notifier()
+
+        async def _push() -> None:
+            try:
+                await notifier.notify("runner.daily_report", **payload)
+            finally:
+                await notifier.aclose()
+
+        asyncio.run(_push())
+        console.print("[green]텔레그램 푸시 완료[/green]")
 
 
 if __name__ == "__main__":

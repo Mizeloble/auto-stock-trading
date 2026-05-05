@@ -82,6 +82,13 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
             f"{fields.get('error', 'unknown')}"
         )
 
+    # ---- 22단계 일일 리포트 ---------------------------------------------
+
+    if event == "runner.daily_report":
+        from .state import format_daily_report
+
+        return format_daily_report(dict(fields))
+
     # 미정의 이벤트는 그대로 한 줄로
     parts = [f"{k}={v}" for k, v in fields.items()]
     return f"[{event}] " + " ".join(parts)
