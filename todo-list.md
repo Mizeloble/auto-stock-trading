@@ -340,7 +340,7 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 
 - [x] **probe 실측** · 5/3 3차에 걸쳐 진행 → PR #24/#25/#26 으로 endpoints·필드·ETF 필터 모두 보정. 4건 호출 모두 `return_code=0` + 응답 본체 매핑까지 확정.
 - [~] **dry-run 종일** · 5/3 21:42 1차 검증 → 약세장 `chosen=[]` 흐름(자기 종료 + 텔레그램 한국어 안내)까지 검증됨. **남은 검증**: 매수가 들어가는 날의 발굴→매수→15:15 일괄 청산 풀 사이클 (강세 종목 노출되는 평일에).
-- [ ] **launchd 전환**: `./scripts/launchd-uninstall.sh` (swing 제거) → `launchctl bootstrap gui/$UID scripts/launchd/com.mizeloble.auto-trade.paper-day.plist` (day-trade 등록) → `launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.paper-day` 로 즉시 시동 검증.
+- [x] **launchd 전환** · day-trade plist 등록 + `kickstart -k` 즉시 시동 검증 (2026-05-05 21:53 KST). 발굴(018880·010170·001510, ETF 53건 제외) → 시장 게이트 통과 → `ws.subscribe`/`ws.connected` → 청산시각 경과로 graceful stop 까지 풀 흐름. 텔레그램 3종 푸시(🔍 발굴 완료 / ▶️ paper 시작 / ⏹ paper 정지) 도착 확인.
 - [ ] **실주문 전환**: 며칠 dry-run 검증 후 사용자 명시 승인이 있을 때만 `paper-day-mode.sh` 의 `--dry-run` 을 `--no-dry-run` 으로.
 
 ---
