@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
@@ -38,6 +38,8 @@ log = structlog.get_logger(__name__)
 
 StateProvider = Callable[[], RunnerStateSnapshot]
 ControlAction = Callable[[], None]
+# /insight 명령은 LLM 호출 → 응답 문자열 반환. 시간이 걸려 async 만 의미 있음.
+InsightAction = Callable[[], "Awaitable[str]"]
 
 
 def _describe_exc(exc: BaseException) -> str:
@@ -63,6 +65,8 @@ class TelegramCommandHandler:
         on_pause: ControlAction | None = None,
         on_resume: ControlAction | None = None,
         on_stop: ControlAction | None = None,
+        on_insight: InsightAction | None = None,
+        insight_cooldown_sec: int = 300,
     ) -> None:
         if not token:
             raise ValueError("TelegramCommandHandler 는 token 이 필요")
@@ -80,6 +84,10 @@ class TelegramCommandHandler:
         self._on_pause = on_pause
         self._on_resume = on_resume
         self._on_stop = on_stop
+        # /insight: LLM 호출 → 비용·rate-limit 가드용 cooldown.
+        self._on_insight = on_insight
+        self._insight_cooldown_sec = insight_cooldown_sec
+        self._insight_last_at: datetime | None = None
 
     def __repr__(self) -> str:
         return f"TelegramCommandHandler(token={_mask(self._token)!r}, allowed={len(self._allowed)})"
@@ -170,7 +178,10 @@ class TelegramCommandHandler:
         cmd = cmd_token.split("@", 1)[0].lower()
 
         try:
-            reply = self._handle_command(cmd)
+            if cmd == "/insight":
+                reply = await self._handle_insight()
+            else:
+                reply = self._handle_command(cmd)
         except Exception as exc:
             log.warning(
                 "notify.cmd_dispatch_failed",
@@ -181,6 +192,27 @@ class TelegramCommandHandler:
             reply = "처리 중 오류가 발생했습니다."
 
         await self._send(chat_id_str, reply)
+
+    async def _handle_insight(self) -> str:
+        if self._on_insight is None:
+            return "이 봇 인스턴스에선 /insight 가 비활성입니다."
+        # cooldown — 사용자가 빠르게 두 번 누르면 두 번째는 안내 메시지로.
+        now = datetime.now()
+        if self._insight_last_at is not None:
+            elapsed = (now - self._insight_last_at).total_seconds()
+            if elapsed < self._insight_cooldown_sec:
+                remaining = int(self._insight_cooldown_sec - elapsed)
+                return f"⏳ /insight 쿨다운 — {remaining}초 후 다시 시도하세요."
+        self._insight_last_at = now
+        try:
+            return await self._on_insight()
+        except Exception as exc:
+            log.warning(
+                "notify.insight_failed",
+                error_type=type(exc).__name__,
+                error=_describe_exc(exc),
+            )
+            return "🧭 인사이트 생성 실패 — 로그를 확인하세요."
 
     def _handle_command(self, cmd: str) -> str:
         if cmd in ("/start", "/help"):

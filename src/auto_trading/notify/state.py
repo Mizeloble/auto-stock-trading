@@ -48,6 +48,7 @@ HELP_TEXT = (
     "/positions — 보유 종목 요약\n"
     "/pnl — 당일 손익 + 누적 평가손익\n"
     "/last_signal — 종목별 최근 시그널\n"
+    "/insight — 직전 7일치 일일 리포트 LLM 분석 (호출당 약 $0.05~0.10, 5분 쿨다운)\n"
     "/pause — 주문 송신만 일시 보류 (시그널은 계속 기록)\n"
     "/resume — /pause 해제, 정상 매매 복귀\n"
     "/stop — 다음 봉에서 graceful 종료 (되돌릴 수 없음)\n"
@@ -177,4 +178,99 @@ def format_last_signal(state: RunnerStateSnapshot) -> str:
         hint = f" @ {_won(sig.price_hint)}" if sig.price_hint is not None else ""
         reason = f" — {sig.reason}" if sig.reason else ""
         lines.append(f"• {sym} {sig.side.value.upper()} (w={sig.weight:.2f}){hint}{reason} [{ts}]")
+    return "\n".join(lines)
+
+
+def format_daily_report(payload: dict) -> str:
+    """22단계 Phase A — 일일 리포트 텔레그램 메시지.
+
+    payload 는 `reports.daily.DailyReport` 의 asdict 결과(+tuple→list 변환).
+    """
+    date = str(payload.get("date") or "?")
+    mode = str(payload.get("mode") or "?")
+    dry = " · dry-run" if payload.get("dry_run") else ""
+    lines = [f"📊 일일 리포트 ({date})", f"모드: {mode}{dry}"]
+
+    chosen = payload.get("discovery_chosen") or []
+    blocked = payload.get("discovery_blocked") or []
+    if chosen or blocked:
+        lines.append("")
+        head = f"🔎 발굴: 채택 {len(chosen)}건"
+        if blocked:
+            head += f" · 차단 {len(blocked)}건"
+        excluded_etf = int(payload.get("excluded_etf_count") or 0)
+        if excluded_etf:
+            head += f" (ETF {excluded_etf}건 제외)"
+        lines.append(head)
+        if chosen:
+            lines.append(f"선정: {', '.join(chosen)}")
+        if blocked:
+            shown = ", ".join(f"{s}({r})" for s, r in blocked[:5])
+            tail = f" 외 {len(blocked) - 5}" if len(blocked) > 5 else ""
+            lines.append(f"차단: {shown}{tail}")
+
+    gates = payload.get("market_gates") or []
+    if gates:
+        lines.append("")
+        lines.append("📈 시장 게이트")
+        for g in gates:
+            mark = "✅" if g.get("above") else "❌"
+            last = g.get("last")
+            sma5 = g.get("sma5")
+            sma20 = g.get("sma20")
+            metric = ""
+            if last is not None and sma5 is not None and sma20 is not None:
+                metric = f" (last {float(last):.2f} / 5 {float(sma5):.2f} / 20 {float(sma20):.2f})"
+            lines.append(f"- {g.get('market', '?')} {mark}{metric}")
+
+    buys = payload.get("buys") or []
+    if buys:
+        lines.append("")
+        lines.append(f"💰 매수: {len(buys)}건")
+        for t in buys[:6]:
+            sim = " (시뮬)" if t.get("simulated") else ""
+            qty = int(t.get("quantity") or 0)
+            price = t.get("price")
+            price_part = f" @ {_won(price)}" if price is not None else ""
+            lines.append(f"- {t.get('symbol', '?')} BUY {qty}주{price_part}{sim}")
+        if len(buys) > 6:
+            lines.append(f"  외 {len(buys) - 6}건")
+
+    liqs = payload.get("liquidations") or []
+    if liqs:
+        lines.append("")
+        lines.append(f"🧹 청산: {len(liqs)}건")
+        for li in liqs[:6]:
+            sim = " (시뮬)" if li.get("simulated") else ""
+            qty = int(li.get("quantity") or 0)
+            sell = li.get("sell_price")
+            buy = li.get("buy_price")
+            price_part = f" @ {_won(sell)}" if sell is not None else ""
+            pnl_part = ""
+            if sell is not None and buy is not None and float(buy) > 0:
+                delta = (float(sell) - float(buy)) * qty
+                pct = (float(sell) / float(buy) - 1.0) * 100.0
+                pnl_part = f" ({_signed_won(delta)}/{_signed_pct(pct)})"
+            lines.append(f"- {li.get('symbol', '?')} SELL {qty}주{price_part}{pnl_part}{sim}")
+        if len(liqs) > 6:
+            lines.append(f"  외 {len(liqs) - 6}건")
+
+    realized = payload.get("realized_pnl")
+    realized_pct = payload.get("realized_pnl_pct")
+    err = int(payload.get("error_count") or 0)
+    summary_parts: list[str] = []
+    if realized is not None:
+        pct_part = f"/{_signed_pct(realized_pct)}" if realized_pct is not None else ""
+        summary_parts.append(f"실현 {_signed_won(realized)}{pct_part}")
+    summary_parts.append(f"매매 {len(buys) + len(liqs)}건")
+    if err:
+        summary_parts.append(f"에러 {err}건")
+    if summary_parts:
+        lines.append("")
+        lines.append("📋 " + " · ".join(summary_parts))
+
+    note = str(payload.get("note_ko") or "")
+    if note:
+        lines.append(f"메모: {note}")
+
     return "\n".join(lines)

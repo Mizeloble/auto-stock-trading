@@ -118,3 +118,40 @@ launchctl bootout gui/$UID/com.mizeloble.auto-trade.paper-day
 
 `scripts/paper-day-mode.sh` 의 `--top-n` / `--liquidate` 인자 한 줄만 수정. plist 재등록 X.
 실주문 전환은 며칠 dry-run 검증 후 사용자 명시 승인이 있을 때만 `--no-dry-run` 으로.
+
+---
+
+## 22단계 · 주간 인사이트 (`insight-weekly` plist) — LLM 누적 분석
+
+매주 토 09:00 KST 자동 실행. 직전 7일치 일일 리포트(`data/reports/daily-*.json`) 를
+Claude API 로 누적 분석 → 텔레그램에 한국어 인사이트 푸시. 호출당 약 $0.05~0.10.
+
+### 사전 준비
+
+- `.env` 에 `ANTHROPIC_API_KEY` 채움 (없으면 CLI 가 Exit(1)).
+- paper-day 가 며칠 운영돼 `data/reports/` 에 `daily-YYYY-MM-DD.json` 이 쌓여있어야 의미 있음.
+
+### 등록·해제
+
+```bash
+# 등록
+launchctl bootstrap gui/$UID scripts/launchd/com.mizeloble.auto-trade.insight-weekly.plist
+
+# 확인
+launchctl list | grep mizeloble.auto-trade.insight-weekly
+
+# 강제 즉시 시동 (검증용)
+launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.insight-weekly
+
+# 해제
+launchctl bootout gui/$UID/com.mizeloble.auto-trade.insight-weekly
+```
+
+### 운영 사양 변경
+
+`scripts/insight-weekly.sh` 의 `--days` 인자 한 줄만 수정.
+
+### 수동 호출 (cron 외)
+
+- CLI: `uv run auto-trade insight --days 7` (콘솔만), `--push` 추가 시 텔레그램.
+- 텔레그램: 봇에 `/insight` 보내기 (5분 쿨다운). paper-day 운영 중일 때만 활성.

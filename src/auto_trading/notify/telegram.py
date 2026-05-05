@@ -82,6 +82,37 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
             f"{fields.get('error', 'unknown')}"
         )
 
+    # ---- 22단계 일일 리포트 ---------------------------------------------
+
+    if event == "runner.daily_report":
+        from .state import format_daily_report
+
+        return format_daily_report(dict(fields))
+
+    # ---- 22단계 주간 인사이트 (LLM) -------------------------------------
+
+    if event == "runner.weekly_insight":
+        from .insight import InsightResponse, format_insight_message
+
+        try:
+            findings_raw = fields.get("key_findings") or []
+            recs_raw = fields.get("recommendations") or []
+            response = InsightResponse(
+                summary_ko=str(fields.get("summary_ko") or ""),
+                key_findings=[str(x) for x in findings_raw]
+                if isinstance(findings_raw, list)
+                else [],
+                recommendations=[str(x) for x in recs_raw] if isinstance(recs_raw, list) else [],
+                confidence=float(fields.get("confidence") or 0.0),
+            )
+        except Exception:
+            return f"🧭 주간 인사이트 (포맷 오류): {fields}"
+        date_from = str(fields.get("date_from") or "")
+        date_to = str(fields.get("date_to") or "")
+        days = int(fields.get("days") or 0)
+        date_range = (date_from, date_to) if date_from and date_to else None
+        return format_insight_message(response, days=days, date_range=date_range)
+
     # 미정의 이벤트는 그대로 한 줄로
     parts = [f"{k}={v}" for k, v in fields.items()]
     return f"[{event}] " + " ".join(parts)
