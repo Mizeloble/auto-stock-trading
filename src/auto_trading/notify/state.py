@@ -48,6 +48,7 @@ HELP_TEXT = (
     "/positions — 보유 종목 요약\n"
     "/pnl — 당일 손익 + 누적 평가손익\n"
     "/last_signal — 종목별 최근 시그널\n"
+    "/insight — 직전 7일치 일일 리포트 LLM 분석 (호출당 약 $0.05~0.10, 5분 쿨다운)\n"
     "/pause — 주문 송신만 일시 보류 (시그널은 계속 기록)\n"
     "/resume — /pause 해제, 정상 매매 복귀\n"
     "/stop — 다음 봉에서 graceful 종료 (되돌릴 수 없음)\n"

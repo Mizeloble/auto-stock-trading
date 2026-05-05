@@ -1,0 +1,265 @@
+"""주간 인사이트 — 직전 N일치 일일 리포트를 LLM 으로 누적 분석.
+
+22단계 Phase B. 호출 빈도는 두 가지만 허용 (메모리 `feedback_llm_cost.md`):
+1. 사람이 명시 트리거 — `auto-trade insight` CLI 또는 텔레그램 `/insight` 명령
+2. 사전 합의된 저빈도 cron — 매주 토 09:00 launchd
+
+설계:
+- Phase A 의 `data/reports/daily-*.json` 을 입력 데이터셋으로 사용. LLM 에 풀 JSON 대신
+  요약 dict 만 보내 토큰 절약.
+- 응답은 pydantic `InsightResponse` 로 검증 — `tool_use` 강제로 자유 텍스트 응답 차단.
+- system 프롬프트에 `cache_control: ephemeral` — 동일 day 에 두 번 호출 시 캐시 히트.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any, Protocol
+
+from pydantic import BaseModel, Field
+
+from ..reports.daily import DailyReport, load_daily_report
+
+
+class InsightResponse(BaseModel):
+    """LLM 응답 검증 모델 — `tool_use` input dict 가 이 구조를 충족해야 함."""
+
+    summary_ko: str = Field(min_length=1, max_length=500)
+    key_findings: list[str] = Field(default_factory=list, max_length=8)
+    recommendations: list[str] = Field(default_factory=list, max_length=6)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class _AnthropicLike(Protocol):
+    """anthropic.Anthropic 의 messages.create 호출만 사용 — DI 로 stub 가능."""
+
+    @property
+    def messages(self) -> Any: ...
+
+
+SYSTEM_PROMPT_KO = """\
+당신은 한국 주식 day-trade 자동매매 봇의 운영 분석가입니다.
+직전 N일치 일일 리포트를 받아 누적 패턴·이상치·전략 조정 권고를 propose_insight 도구로 제안하세요.
+
+규칙:
+- summary_ko: 한국어 2~4문장. 그 주의 핵심 흐름(매매 빈도·승률·시장 게이트 통과 비율 등) 요약.
+- key_findings: 한국어 짧은 문장 3~6개. 데이터 기반의 패턴/이상치만(예: "5일 중 3일 게이트 차단", "특정 종목이 N회 연속 발굴", "에러 카운트 급증").
+- recommendations: 한국어 짧은 문장 1~4개. 구체적인 운영 변경 제안(예: "top_n 을 3 → 2 로 낮춰 매수 가중 키우기", "게이트 SMA 20 → 15 단축 검토"). 없으면 빈 리스트.
+- confidence: 0.0~1.0, 데이터 충분도·일관성에 따른 본인 확신도.
+- 추가 텍스트 응답 없이 propose_insight 도구 호출 결과만 내세요.
+"""
+
+PROPOSE_INSIGHT_TOOL = {
+    "name": "propose_insight",
+    "description": "주간 누적 분석 결과를 한 번만 제안한다.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "summary_ko": {"type": "string", "minLength": 1, "maxLength": 500},
+            "key_findings": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 8,
+            },
+            "recommendations": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 6,
+            },
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        },
+        "required": ["summary_ko", "key_findings", "recommendations", "confidence"],
+    },
+}
+
+
+# ---- 데이터 수집 ---------------------------------------------------------
+
+
+def collect_recent_reports(
+    *,
+    root: Path | str = "data/reports",
+    days: int = 7,
+) -> list[DailyReport]:
+    """`<root>/daily-*.json` 중 최신 N개를 날짜 오름차순으로 반환.
+
+    파일이 적으면 가용한 만큼만 — 빈 리스트면 호출자가 "데이터 부족" 처리.
+    """
+    base = Path(root)
+    if not base.exists():
+        return []
+    files = sorted(base.glob("daily-*.json"))
+    if not files:
+        return []
+    selected = files[-days:] if days > 0 else files
+    out: list[DailyReport] = []
+    for path in selected:
+        try:
+            out.append(load_daily_report(path))
+        except OSError, ValueError:
+            continue
+    return out
+
+
+def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
+    """LLM 입력용 요약 dict — 풀 JSON 대신 핵심 지표만."""
+    items = list(reports)
+    days = len(items)
+    if days == 0:
+        return {"days": 0}
+
+    chosen_freq: dict[str, int] = {}
+    blocked_count = 0
+    buys_total = 0
+    liqs_total = 0
+    err_total = 0
+    realized_pnls: list[float] = []
+    gate_pass: dict[str, int] = {}
+    gate_total: dict[str, int] = {}
+    dry_run_days = 0
+
+    for r in items:
+        for sym in r.discovery_chosen:
+            chosen_freq[sym] = chosen_freq.get(sym, 0) + 1
+        blocked_count += len(r.discovery_blocked)
+        buys_total += len(r.buys)
+        liqs_total += len(r.liquidations)
+        err_total += r.error_count
+        if r.realized_pnl is not None:
+            realized_pnls.append(r.realized_pnl)
+        if r.dry_run:
+            dry_run_days += 1
+        for g in r.market_gates:
+            gate_total[g.market] = gate_total.get(g.market, 0) + 1
+            if g.above:
+                gate_pass[g.market] = gate_pass.get(g.market, 0) + 1
+
+    return {
+        "days": days,
+        "date_range": [items[0].date, items[-1].date],
+        "modes": list({r.mode for r in items}),
+        "dry_run_days": dry_run_days,
+        "buys_total": buys_total,
+        "liquidations_total": liqs_total,
+        "error_total": err_total,
+        "blocked_total": blocked_count,
+        "chosen_freq_top": sorted(chosen_freq.items(), key=lambda kv: -kv[1])[:8],
+        "gate_pass_rate": {m: round(gate_pass.get(m, 0) / gate_total[m], 3) for m in gate_total},
+        "realized_pnl": {
+            "samples": len(realized_pnls),
+            "sum": sum(realized_pnls) if realized_pnls else None,
+            "avg": (sum(realized_pnls) / len(realized_pnls)) if realized_pnls else None,
+            "min": min(realized_pnls) if realized_pnls else None,
+            "max": max(realized_pnls) if realized_pnls else None,
+        },
+        "daily_notes": [{"date": r.date, "note": r.note_ko} for r in items],
+    }
+
+
+# ---- 호출 ----------------------------------------------------------------
+
+
+def insight(
+    reports: list[DailyReport],
+    *,
+    client: _AnthropicLike,
+    model: str = "claude-opus-4-7",
+    max_tokens: int = 1024,
+) -> InsightResponse:
+    """LLM 호출 → InsightResponse. 검증 실패 시 ValidationError raise.
+
+    빈 reports 리스트는 호출자가 미리 거르는 게 표준 — 토큰 낭비 방지. 본 함수는
+    빈 입력도 안전 처리하지만 LLM 응답이 의미 있을 가능성은 낮다.
+    """
+    payload = _summarize_reports(reports)
+    response = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=[
+            {
+                "type": "text",
+                "text": SYSTEM_PROMPT_KO,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        tools=[PROPOSE_INSIGHT_TOOL],
+        tool_choice={"type": "tool", "name": "propose_insight"},
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"다음 누적 데이터를 보고 propose_insight 도구를 호출해 주세요:\n{payload}"
+                        ),
+                    }
+                ],
+            }
+        ],
+    )
+    tool_input = _extract_tool_input(response)
+    return InsightResponse.model_validate(tool_input)
+
+
+def _extract_tool_input(response: Any) -> dict[str, Any]:
+    blocks = getattr(response, "content", None) or []
+    for block in blocks:
+        block_type = getattr(block, "type", None) or (
+            block.get("type") if isinstance(block, dict) else None
+        )
+        if block_type != "tool_use":
+            continue
+        name = getattr(block, "name", None) or (
+            block.get("name") if isinstance(block, dict) else None
+        )
+        if name != "propose_insight":
+            continue
+        tool_input = getattr(block, "input", None) or (
+            block.get("input") if isinstance(block, dict) else None
+        )
+        if not isinstance(tool_input, dict):
+            raise ValueError("propose_insight tool_use 의 input 이 dict 가 아닙니다")
+        return tool_input
+    raise ValueError("응답에 propose_insight tool_use 블록이 없습니다")
+
+
+# ---- 포맷터 -------------------------------------------------------------
+
+
+def format_insight_message(
+    response: InsightResponse,
+    *,
+    days: int,
+    date_range: tuple[str, str] | None,
+) -> str:
+    """텔레그램 / CLI 출력용 한국어 메시지.
+
+    `report` 명령의 일일 리포트와 시각적으로 구분되도록 다른 이모지·헤더 사용.
+    """
+    range_label = f"{date_range[0]}~{date_range[1]}" if date_range else "데이터 부족"
+    lines = [f"🧭 주간 인사이트 ({days}일 · {range_label})", "", response.summary_ko]
+    if response.key_findings:
+        lines.append("")
+        lines.append("🔑 패턴")
+        for f in response.key_findings:
+            lines.append(f"• {f}")
+    if response.recommendations:
+        lines.append("")
+        lines.append("🛠 권고")
+        for r in response.recommendations:
+            lines.append(f"• {r}")
+    lines.append("")
+    lines.append(f"신뢰도: {response.confidence:.2f}")
+    return "\n".join(lines)
+
+
+__all__ = [
+    "PROPOSE_INSIGHT_TOOL",
+    "SYSTEM_PROMPT_KO",
+    "InsightResponse",
+    "collect_recent_reports",
+    "format_insight_message",
+    "insight",
+]

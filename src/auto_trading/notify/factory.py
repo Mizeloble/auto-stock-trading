@@ -5,7 +5,12 @@ from __future__ import annotations
 from ..config import Settings, get_settings
 from .base import NoopNotifier, Notifier
 from .telegram import TelegramNotifier
-from .telegram_commands import ControlAction, StateProvider, TelegramCommandHandler
+from .telegram_commands import (
+    ControlAction,
+    InsightAction,
+    StateProvider,
+    TelegramCommandHandler,
+)
 
 
 def build_notifier(settings: Settings | None = None) -> Notifier:
@@ -25,12 +30,15 @@ def build_command_handler(
     on_pause: ControlAction | None = None,
     on_resume: ControlAction | None = None,
     on_stop: ControlAction | None = None,
+    on_insight: InsightAction | None = None,
 ) -> TelegramCommandHandler | None:
     """텔레그램 인커밍 명령 핸들러. 화이트리스트 미설정이면 None 리턴.
 
     on_pause/on_resume/on_stop 을 안 넘기면 텔레그램 v3 명령은 "비활성" 응답 — 기존 v2
     호환성 유지. CLI 에서는 runner.pause / runner.resume / runner.request_stop 을 그대로
     바인딩해 넘긴다.
+
+    on_insight 는 22단계 Phase B — Anthropic 키 + 일일 리포트 데이터가 있을 때만 주입.
     """
     s = settings or get_settings()
     if not s.has_telegram_commands:
@@ -42,4 +50,5 @@ def build_command_handler(
         on_pause=on_pause,
         on_resume=on_resume,
         on_stop=on_stop,
+        on_insight=on_insight,
     )

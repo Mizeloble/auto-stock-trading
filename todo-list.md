@@ -345,33 +345,39 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 
 ---
 
-## 📊 22단계 · 일일 리포트 + 주간 인사이트 — **계획**
+## 📊 22단계 · 일일 리포트 + 주간 인사이트 — **✅ 구현 완료** (2026-05-05)
 
-매일 장 끝나고 그날 결과 자동 푸시(템플릿) + 주 1회 누적 패턴 LLM 분석. 사용자 합의 (2026-05-05): 매일 LLM 호출은 비용·메모리 규칙 둘 다 비효율 → 자동은 템플릿, LLM 은 명시 트리거 또는 주 1회 저빈도 cron.
+매일 장 끝나고 그날 결과 자동 푸시(템플릿) + 주 1회 누적 패턴 LLM 분석. 사용자 합의: 매일 LLM 호출은 비용·메모리 규칙 둘 다 비효율 → 자동은 템플릿, LLM 은 명시 트리거 또는 주 1회 저빈도 cron.
 
-### Phase A · 자동 일일 리포트 (템플릿, LLM 무관)
+### Phase A · 자동 일일 리포트 (템플릿, LLM 무관) — 완료
 
-- [ ] **`reports/daily.py`** · `RunnerStateSnapshot` + 그날 로그(`logs/paper-day-YYYY-MM-DD.log`) 파싱 → `DailyReport` dataclass (발굴 종목·매수 시뮬·청산 결과·종목별 손익·시장 게이트·에러 카운트).
-- [ ] **포맷터** · 한국어 텔레그램 메시지 (이모지 + 표 형태). 17단계 `notify/state.py` 패턴 재활용.
-- [ ] **러너 hook** · `runner.liquidate_done` 직후 `_send_daily_report()` 호출 → notifier 푸시. 실패 swallow.
-- [ ] **CLI** · `auto-trade report --date YYYY-MM-DD` (과거 일자 재생성용). 인터랙티브 디버깅 + Phase B 입력 데이터 보존.
-- [ ] **데이터 영속화** · `data/reports/daily-YYYY-MM-DD.json` 으로 저장 — Phase B 가 직전 N일치 읽어서 LLM 입력으로 사용.
-- [ ] **테스트** · 포맷터 + 로그 파서 + hook 발사 단위.
+- [x] **`reports/log_parser.py` + `reports/daily.py`** · structlog JSON 라인 → `LogEvents` → `DailyReport` (발굴 종목·매수 시뮬·청산·시장 게이트·에러 카운트). 결정론적·외부 호출 X.
+- [x] **포맷터** · `notify/state.format_daily_report` — 한국어 이모지 메시지. `runner.daily_report` 이벤트 키.
+- [x] **러너 hook** · `notify/reporting.ReportingNotifier` wrapper — `runner.stopped` 인터셉트해 daily_report 1회 발사. 트레이딩 핫패스 영향 X, 실패 swallow.
+- [x] **CLI** · `auto-trade report --date YYYY-MM-DD [--push]` 수동 재생성. paper-day 가 자동으로 ReportingNotifier 로 wrapping.
+- [x] **데이터 영속화** · `data/reports/daily-YYYY-MM-DD.json` 라운드트립 + Phase B 입력으로 그대로 사용.
+- [x] **테스트 29건 신규** — log_parser(5) + daily(8) + reporting(6) + state daily_report(5) + cli report(5).
 
-### Phase B · 주간 인사이트 (LLM, on-demand + 토요일 1회)
+### Phase B · 주간 인사이트 (LLM, on-demand + 토요일 1회) — 완료
 
-- [ ] **`notify/insight.py`** · 17단계 `strategy/llm_advisor.py` 구조 재활용. system 프롬프트 캐싱 + tool_use 강제 + 직전 5일 `data/reports/daily-*.json` 요약 입력.
-- [ ] **CLI** · `auto-trade insight --since 7d [--dry-run]` — 사람 명시 호출용.
-- [ ] **텔레그램 `/insight` 명령** · `TelegramCommandHandler` 에 dispatch 1줄 추가. 인커밍 명령으로 즉석 호출.
-- [ ] **launchd weekly job** · `com.mizeloble.auto-trade.insight-weekly.plist` — 매주 토 09:00 KST. `scripts/insight-weekly.sh` 가 `auto-trade insight --since 7d` 호출 → 텔레그램 푸시.
-- [ ] **메모리 규칙 갱신** · `feedback_llm_cost.md` 에 "주 1회 이하 저빈도 cron 허용" 명시 (2026-05-05 갱신 완료).
-- [ ] **비용 가드** · 입력 토큰 추정 로그 + Opus/Sonnet 모델 선택 안내.
+- [x] **`notify/insight.py`** · `strategy/llm_advisor.py` 구조 재활용. system 프롬프트 `cache_control: ephemeral` + `propose_insight` tool_use 강제. 풀 JSON 대신 요약 dict (chosen_freq / pnl 통계 / 게이트 통과율) 만 LLM 에 전달.
+- [x] **CLI** · `auto-trade insight --days 7 [--dry-run] [--push]` — `--dry-run` 은 키 없이 입력 요약만 출력.
+- [x] **텔레그램 `/insight` 명령** · `TelegramCommandHandler` 에 `on_insight` 콜백 + 5분 쿨다운 + 비활성 안내. `paper-day` 가 ANTHROPIC_API_KEY 있을 때만 콜백 주입.
+- [x] **launchd weekly job** · `scripts/launchd/com.mizeloble.auto-trade.insight-weekly.plist` (매주 토 09:00 KST) + `scripts/insight-weekly.sh`. README 에 등록·해제·수동 호출 안내.
+- [x] **메모리 규칙 갱신** · `feedback_llm_cost.md` 에 "주 1회 이하 저빈도 cron 허용" 명시 + MEMORY.md 인덱스 동기화.
+- [x] **비용 가드** · 호출당 약 $0.05~0.10 추정. `--dry-run` 으로 키 없이 입력 검증, system 프롬프트 캐싱으로 토큰 절약, `Settings.anthropic_model` 로 Sonnet/Haiku 다운그레이드 가능.
+- [x] **테스트 26건 신규** — insight(12: collect/summarize/insight tool_use/format) + telegram /insight(8) + cli insight(6).
 
-### 체험 확인
+### 품질 게이트
+
+단위 239 → **265건** (+26 Phase B + 29 Phase A 합치면 +55). ruff/format/mypy(src) 클린.
+
+### 체험 확인 (사용자가 — 다음 운영 사이클에서)
 
 - [ ] **Phase A**: 다음 평일 매수 들어가는 날 청산 직후 텔레그램에 "📊 일일 리포트" 도착. 종목별 손익 % + 시장 게이트 + 에러 카운트 정확.
-- [ ] **Phase B 수동**: `/insight` 보내면 직전 5일 누적 패턴 분석 + 권고사항 도착.
-- [ ] **Phase B 자동**: 토요일 09:00 자동 푸시 도착. 호출당 비용 $0.05~0.10 범위 확인.
+- [ ] **Phase B 수동**: `.env` 에 `ANTHROPIC_API_KEY` 채운 뒤 `uv run auto-trade insight --days 1 --dry-run` → 입력 요약 출력. 며칠 운영 후 `--no-dry-run` 으로 LLM 호출 검증.
+- [ ] **Phase B 텔레그램 `/insight`**: paper-day 운영 중 폰에서 `/insight` → "🧭 주간 인사이트" 도착 (1회) + 즉시 재호출 시 "쿨다운" 안내.
+- [ ] **Phase B 자동**: `launchctl bootstrap gui/$UID scripts/launchd/com.mizeloble.auto-trade.insight-weekly.plist` 등록 후 첫 토 09:00 자동 푸시 도착.
 
 ---
 

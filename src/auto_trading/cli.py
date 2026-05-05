@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime, time
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from .daytrade.orchestrator import discover_and_arm
 from .kiwoom.rest import KiwoomRestClient
 from .market.chart import bars_to_dataframe, get_daily_bars
 from .market.quote import get_quote
+from .notify import insight as insight_mod
 from .notify.factory import build_command_handler, build_notifier
 from .notify.reporting import ReportingNotifier
 from .notify.state import format_daily_report
@@ -425,11 +427,13 @@ def paper_day(
         f" · top_n={top_n} · {'dry-run' if dry_run else '실주문'}"
     )
 
+    on_insight = _build_insight_callback() if get_settings().has_anthropic else None
     handler = build_command_handler(
         runner.state_snapshot,
         on_pause=runner.pause,
         on_resume=runner.resume,
         on_stop=runner.request_stop,
+        on_insight=on_insight,
     )
 
     exclude_etf = not include_etf
@@ -540,6 +544,43 @@ async def _delayed_discover(
         log.error("daytrade.discover_failed", error=str(exc), exc_info=exc)
         # 발굴 실패 — universe 안 채워지므로 명시적 stop 으로 hang 회피.
         runner.request_stop()
+
+
+def _build_insight_callback(
+    *, days: int = 7, reports_root: Path = Path("data/reports")
+) -> Callable[[], Awaitable[str]]:
+    """텔레그램 `/insight` 가 호출하면 직전 N일 리포트로 LLM 인사이트 생성.
+
+    무엇/왜:
+    - paper-day 러너 안에서 호출됨 — hot path 가 아니지만 LLM 콜은 동기 SDK.
+      `asyncio.to_thread` 로 별도 스레드에서 돌려 이벤트 루프 안 막음.
+    - Anthropic 키 없으면 호출자 (paper-day CLI) 가 None 으로 주입 — 본 함수가 직접
+      Exit(1) 하면 러너 시동 자체가 막힌다. 키 검사는 paper-day 가 책임.
+    """
+    from anthropic import Anthropic
+
+    s = get_settings()
+    client = Anthropic(api_key=s.anthropic_api_key.get_secret_value())
+
+    async def _runner() -> str:
+        reports = insight_mod.collect_recent_reports(root=reports_root, days=days)
+        if not reports:
+            return (
+                "🧭 인사이트 생성 불가 — 직전 일일 리포트 데이터가 없습니다.\n"
+                "(paper-day 가 며칠 운영된 후 다시 시도하세요.)"
+            )
+        date_range = (reports[0].date, reports[-1].date)
+        response = await asyncio.to_thread(
+            insight_mod.insight,
+            reports,
+            client=client,
+            model=s.anthropic_model,
+        )
+        return insight_mod.format_insight_message(
+            response, days=len(reports), date_range=date_range
+        )
+
+    return _runner
 
 
 def _build_anthropic_client() -> object:
@@ -732,6 +773,89 @@ def report(
         async def _push() -> None:
             try:
                 await notifier.notify("runner.daily_report", **payload)
+            finally:
+                await notifier.aclose()
+
+        asyncio.run(_push())
+        console.print("[green]텔레그램 푸시 완료[/green]")
+
+
+@app.command()
+def insight(
+    days: int = typer.Option(
+        7,
+        "--days",
+        help="직전 N일치 일일 리포트(JSON) 를 LLM 입력으로 사용. 기본 7.",
+    ),
+    reports_root: Path = typer.Option(
+        Path("data/reports"),
+        "--reports-root",
+        help="`daily-*.json` 이 쌓인 폴더.",
+    ),
+    push: bool = typer.Option(
+        False,
+        "--push/--no-push",
+        help="True 면 텔레그램에 푸시. 기본은 콘솔만.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="LLM 호출 없이 입력 요약만 출력 (테스트·디버그용).",
+    ),
+) -> None:
+    """22단계 Phase B — 직전 N일치 일일 리포트를 LLM 으로 누적 분석.
+
+    무엇/왜:
+    - 단일 일자 정보는 `auto-trade report` 가 다룸. 여러 날 쌓인 패턴·이상치는
+      LLM 만이 잘 보는 영역.
+    - LLM 비용 통제: 사람 명시 트리거(또는 사전 합의된 토 cron) 만 허용.
+      매일·매시간 자동 호출 X (메모리 `feedback_llm_cost.md`).
+    - 입력 토큰 절약: 풀 JSON 대신 요약 dict + system 프롬프트 캐싱.
+
+    어떻게 확인:
+    - `--dry-run` 으로 입력 요약 확인 → 본 실행에서 한국어 인사이트 출력 + 옵션 텔레그램.
+    """
+    reports = insight_mod.collect_recent_reports(root=reports_root, days=days)
+    if not reports:
+        console.print(
+            f"[red]리포트 데이터 부족:[/red] {reports_root}/daily-*.json 을 찾지 못했습니다. "
+            "먼저 `auto-trade report --date YYYY-MM-DD` 로 일일 리포트를 생성하세요."
+        )
+        raise typer.Exit(code=1)
+
+    date_range = (reports[0].date, reports[-1].date)
+    console.print(f"[cyan]입력:[/cyan] {len(reports)}일 ({date_range[0]}~{date_range[1]})")
+
+    if dry_run:
+        from .notify.insight import _summarize_reports
+
+        console.print(_summarize_reports(reports))
+        return
+
+    client = _build_anthropic_client()
+    response = insight_mod.insight(
+        reports,
+        client=client,  # type: ignore[arg-type]
+        model=get_settings().anthropic_model,
+    )
+    msg = insight_mod.format_insight_message(response, days=len(reports), date_range=date_range)
+    console.print(msg)
+
+    if push:
+        notifier = build_notifier()
+
+        async def _push() -> None:
+            try:
+                await notifier.notify(
+                    "runner.weekly_insight",
+                    summary_ko=response.summary_ko,
+                    key_findings=list(response.key_findings),
+                    recommendations=list(response.recommendations),
+                    confidence=response.confidence,
+                    days=len(reports),
+                    date_from=date_range[0],
+                    date_to=date_range[1],
+                )
             finally:
                 await notifier.aclose()
 

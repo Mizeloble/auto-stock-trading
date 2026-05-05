@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mizeloble.auto-trade.insight-weekly</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jjmize/Project/auto-stock-trading/scripts/insight-weekly.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jjmize/Project/auto-stock-trading</string>
+
+    <!-- 매주 토요일(Weekday 7) 09:00 KST. 직전 평일 5일치 일일 리포트 누적 후 분석.
+         메모리 `feedback_llm_cost.md`: 사람 명시 트리거 또는 사전 합의된 주 1회 이하 cron 만 허용. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>7</integer>
+        <key>Hour</key><integer>9</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-insight-weekly.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-insight-weekly.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
