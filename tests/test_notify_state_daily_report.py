@@ -84,6 +84,31 @@ def test_format_handles_many_buys_with_truncation() -> None:
     assert "외 2건" in msg
 
 
+def test_format_includes_cost_adjusted_pnl_when_present() -> None:
+    """23단계 Phase A — realized_pnl_after_cost 가 있고 realized_pnl 과 다르면 별도 라인."""
+    msg = format_daily_report(
+        _payload(
+            realized_pnl=10000.0,
+            realized_pnl_pct=10.0,
+            realized_pnl_after_cost=9650.0,
+        )
+    )
+    assert "💸 비용 차감 PnL" in msg
+    assert "+9,650원" in msg
+
+
+def test_format_omits_cost_line_when_equal_to_realized() -> None:
+    """비용 차감치가 realized 와 같으면 노이즈라 라인 생략."""
+    msg = format_daily_report(
+        _payload(
+            realized_pnl=10000.0,
+            realized_pnl_pct=10.0,
+            realized_pnl_after_cost=10000.0,
+        )
+    )
+    assert "💸" not in msg
+
+
 def test_format_skips_pnl_when_prices_missing() -> None:
     """sell_price 없는 시뮬 청산은 손익 라벨 없이 표기."""
     msg = format_daily_report(

@@ -17,6 +17,13 @@ from typing import Any
 from ..notify.state import RunnerStateSnapshot
 from .log_parser import LogEvents
 
+# 비용 추정 상수 — backtest/broker.py 의 기본값과 일치시킨다 (단일 진실 출처).
+# 두 모듈을 import 로 묶지 않는 이유: reports/ 는 외부 호출 금지(CLAUDE.md), 의존 최소화.
+# broker.py 가 변경되면 여기 값도 같이 갱신할 것.
+COST_COMMISSION_RATE = 0.00015  # 0.015% 매수+매도
+COST_TAX_RATE_SELL = 0.0020  # 0.20% 매도 시 (2026 인상)
+COST_SLIPPAGE_BPS = 5.0  # 0.05% 매수+매도
+
 
 @dataclass(frozen=True)
 class TradeRecord:
@@ -106,6 +113,12 @@ class DailyReport:
     closing_equity: int | None = None
     closing_total_pnl: int | None = None
     closing_holdings: list[ClosingHolding] = field(default_factory=list)
+    # 23단계 Phase A · 비용 추정 — mock/시뮬은 키움이 비용 0 으로 응답하므로 daily.py 에서 계산해 주입.
+    # 실거래는 키움 응답에 비용이 들어있지만, 일관성·교차 검증 차원에서 동일 추정도 함께 저장.
+    total_fees: float | None = None  # 매수+매도 수수료 합 (COST_COMMISSION_RATE * 2)
+    total_taxes: float | None = None  # 매도 거래세 합 (COST_TAX_RATE_SELL)
+    total_slippage: float | None = None  # 매수+매도 슬리피지 합 (COST_SLIPPAGE_BPS * 2)
+    realized_pnl_after_cost: float | None = None  # realized_pnl - (fees + taxes + slippage)
 
 
 # ---- 빌더 ---------------------------------------------------------------
@@ -151,12 +164,22 @@ def build_daily_report(
             if h.name and h.symbol not in names:
                 names[h.symbol] = h.name
     chosen_names = {sym: names[sym] for sym in discovery_chosen if sym in names}
+    total_fees, total_taxes, total_slippage = _estimate_costs(buys, liquidations)
+    realized_pnl_after_cost = (
+        realized_pnl - (total_fees + total_taxes + total_slippage)
+        if realized_pnl is not None
+        and total_fees is not None
+        and total_taxes is not None
+        and total_slippage is not None
+        else None
+    )
 
     note_ko = _summary_ko(
         chosen=discovery_chosen,
         blocked=discovery_blocked,
         liquidations=liquidations,
         realized_pnl=realized_pnl,
+        realized_pnl_after_cost=realized_pnl_after_cost,
         error_count=error_count,
     )
 
@@ -194,6 +217,10 @@ def build_daily_report(
         closing_equity=closing_equity,
         closing_total_pnl=closing_total_pnl,
         closing_holdings=closing_holdings,
+        total_fees=total_fees,
+        total_taxes=total_taxes,
+        total_slippage=total_slippage,
+        realized_pnl_after_cost=realized_pnl_after_cost,
     )
 
 
@@ -342,6 +369,47 @@ def _extract_closing(
     return cash, equity, total_pnl, holdings
 
 
+def _estimate_costs(
+    buys: list[TradeRecord],
+    liqs: list[LiquidationRecord],
+) -> tuple[float | None, float | None, float | None]:
+    """매수·청산 가격이 모두 있을 때 수수료·거래세·슬리피지 추정치를 합산.
+
+    무엇/왜:
+    - mock 모드는 키움 시뮬이 비용 0 으로 응답하므로, 사용자에게 "실거래라면 이만큼 빠진다"
+      를 보여주기 위해 추정. 실거래에서도 교차 검증 차원에서 같은 추정치를 함께 저장.
+    - 가격이 하나라도 빠진 거래가 있으면 None 셋을 반환 — 일부만 추정한 값은 오히려 오해.
+
+    어떻게 확인: tests/test_reports_daily.py 의 비용 차감 PnL 케이스에서 정확한 값 검증.
+    """
+    if not buys and not liqs:
+        return None, None, None
+
+    fees = 0.0
+    taxes = 0.0
+    slippage = 0.0
+
+    for trade in buys:
+        if trade.price is None:
+            return None, None, None
+        notional = trade.price * trade.quantity
+        fees += notional * COST_COMMISSION_RATE
+        slippage += notional * (COST_SLIPPAGE_BPS / 10_000.0)
+
+    for li in liqs:
+        # 청산 가격은 없을 수 있으나(시장가) 매수가는 있어야 추정 가능.
+        # 추정 단가는 sell_price 우선, 없으면 buy_price 사용 (~ 동일 종목 일중 변동 무시 근사).
+        unit = li.sell_price if li.sell_price is not None else li.buy_price
+        if unit is None:
+            return None, None, None
+        notional = unit * li.quantity
+        fees += notional * COST_COMMISSION_RATE
+        taxes += notional * COST_TAX_RATE_SELL
+        slippage += notional * (COST_SLIPPAGE_BPS / 10_000.0)
+
+    return fees, taxes, slippage
+
+
 def _aggregate_pnl(liqs: list[LiquidationRecord]) -> tuple[float | None, float | None]:
     """가격 정보가 있는 청산만 집계. 하나라도 가격 없으면 None."""
     if not liqs:
@@ -364,6 +432,7 @@ def _summary_ko(
     blocked: list[tuple[str, str]],
     liquidations: list[LiquidationRecord],
     realized_pnl: float | None,
+    realized_pnl_after_cost: float | None,
     error_count: int,
 ) -> str:
     if not chosen and not liquidations:
@@ -379,7 +448,12 @@ def _summary_ko(
         parts.append(f"청산 {len(liquidations)}건")
     if realized_pnl is not None:
         sign = "+" if realized_pnl >= 0 else ""
-        parts.append(f"실현 {sign}{int(realized_pnl):,}원")
+        pnl_part = f"실현 {sign}{int(realized_pnl):,}원"
+        # 비용 차감치도 같이 보여줌 — 실거래 수익 가시화.
+        if realized_pnl_after_cost is not None and realized_pnl_after_cost != realized_pnl:
+            sign_c = "+" if realized_pnl_after_cost >= 0 else ""
+            pnl_part += f" (비용 차감 {sign_c}{int(realized_pnl_after_cost):,}원)"
+        parts.append(pnl_part)
     if error_count > 0:
         parts.append(f"에러 {error_count}건")
     return " · ".join(parts)
@@ -459,6 +533,10 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
         closing_equity=payload.get("closing_equity"),
         closing_total_pnl=payload.get("closing_total_pnl"),
         closing_holdings=closing_holdings,
+        total_fees=payload.get("total_fees"),
+        total_taxes=payload.get("total_taxes"),
+        total_slippage=payload.get("total_slippage"),
+        realized_pnl_after_cost=payload.get("realized_pnl_after_cost"),
     )
 
 

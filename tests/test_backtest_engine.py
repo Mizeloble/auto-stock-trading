@@ -51,7 +51,8 @@ def _df(prices: list[float]) -> pd.DataFrame:
 def test_trade_executes_on_next_bar_open() -> None:
     df = _df([100, 110, 120, 130, 140, 150])
     strat = AlwaysBuyOnceThenSell(total_bars=len(df))
-    bt = Backtester(strategy=strat, initial_cash=100_000.0)
+    # 슬리피지 0 명시 주입 — "다음 봉 시가 체결" 의도만 검증.
+    bt = Backtester(strategy=strat, initial_cash=100_000.0, slippage_bps=0.0)
     result = bt.run("TEST", df)
 
     # 매수 1건, 매도 1건
