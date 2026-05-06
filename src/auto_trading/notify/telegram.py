@@ -52,6 +52,12 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
     if event == "runner.balance_failed_fatal":
         return f"🛑 잔고 조회 {fields.get('consecutive', '?')}회 연속 실패 — 러너 중단"
 
+    if event == "runner.kill_switch_triggered":
+        # 23단계 Phase B — 일일 손실 한도 도달 시 강제 청산 + 정지 직전 푸시.
+        limit = fields.get("daily_loss_limit")
+        limit_part = f" (-{float(limit) * 100:.1f}%)" if limit is not None else ""
+        return f"🛑 일일 손실 한도 도달{limit_part} — 강제 청산 후 정지"
+
     # ---- 21단계 day-trade 이벤트 ----------------------------------------
 
     if event == "daytrade.discovery_done":

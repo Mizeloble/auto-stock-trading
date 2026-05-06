@@ -394,13 +394,15 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **테스트** · `tests/test_reports_daily.py` 비용 4건 추가 (정상 추정·완전 라운드트립·매매0/가격None 시 None) + `tests/test_notify_state_daily_report.py` 비용 라인 표시·생략 2건 추가 + `tests/test_backtest_engine.py` 슬리피지 0 명시 주입 회귀 1건 갱신. 271/271 PASS, ruff/mypy 클린.
 - [ ] **검증** (사용자): `uv run auto-trade report --date <오늘> --push` 또는 다음 paper-day 자동 푸시에서 "💸 비용 차감 PnL" 라인 도착 확인.
 
-### Phase B · 1회/일일 절대금액 한도 + kill switch
+### Phase B · 1회/일일 절대금액 한도 + kill switch — **✅ 완료** (2026-05-06)
 
-- [ ] **`risk/manager.py`** · `RiskLimits` 에 `max_order_value` (1회 주문 원화 절대 한도, 0=무제한), `daily_notional_limit` (일일 총 매수대금, 0=무제한), `daily_loss_kill` (True 면 강제 청산) 추가. 기본값 모두 보수 측 비활성.
-- [ ] **`AccountState`** · `today_notional_used: float` 필드. 러너가 매수 체결 후 갱신.
-- [ ] **`should_force_liquidate(account) -> bool`** · 새 메서드. 러너 사이클 끝에 호출 → True 면 `liquidate_all` + `request_stop`.
-- [ ] **테스트** · `tests/test_risk_manager.py` 4건 — 1회 초과 거절, 일일 노셔널 초과 거절, kill switch 트리거, 기본값 0 무제한 정상.
-- [ ] **검증**: `--max-order-value 100000 --daily-notional 500000` mock dry-run 에서 한도 도달 시 `risk.reject` 로그.
+- [x] **`risk/manager.py RiskLimits`** · `max_order_value` (1회 주문 원화 절대 한도, 0=무제한), `daily_notional_limit` (일일 총 매수대금, 0=무제한), `daily_loss_kill` (True 면 강제 청산) 3개 추가. 기본값 모두 보수 측 비활성.
+- [x] **`AccountState.today_notional_used`** · 러너가 dry-run 시뮬·실거래 BUY 체결 후 누적. 잔고 갱신 시 carry-over (자정 리셋 = 러너 재시작).
+- [x] **`evaluate()` BUY 분기** · 비중·노출·예수금 기반 사이징 결과를 max_order_value 로 capping → daily_notional_limit 도달 여부 / 남은 한도로 추가 capping.
+- [x] **`should_force_liquidate(account) -> bool`** · 새 메서드. `daily_loss_kill=True` + 손실 한도 도달 시 True. `runner.run()` 의 잔고 갱신 직후 체크해 True 면 `liquidate_all + request_stop` + `runner.kill_switch_triggered` 텔레그램 푸시.
+- [x] **`notify/telegram.py`** · `runner.kill_switch_triggered` 한국어 포맷 ("🛑 일일 손실 한도 도달 (-3.0%) — 강제 청산 후 정지").
+- [x] **테스트** · `tests/test_risk_manager.py` 7건 (capping·rejection·kill switch on/off/threshold) + `tests/test_notify_telegram.py` 1건. 293/293 PASS, ruff/mypy 클린.
+- [ ] **검증** (사용자): YAML 프로파일 또는 CLI 에서 한도 활성 후 mock dry-run 에서 `risk.reject` / `runner.kill_switch_triggered` 로그·푸시 확인 (Phase G 의 --profile 도입 후 본격 검증).
 
 ### Phase C · 종목별 stop-loss + 트레일링 + 부분 익절 (PositionGuard)
 

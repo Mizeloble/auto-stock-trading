@@ -90,3 +90,101 @@ def test_sizing_uses_decimal_at_rounding_boundary() -> None:
     # 10_000_000 * 0.14 = 1_400_000 정확 → 14주
     assert d.decision is Decision.APPROVE
     assert d.order is not None and d.order.quantity == 14
+
+
+# ---- 23단계 Phase B · 1회/일일 절대금액 한도 + kill switch -------------------
+
+
+def test_max_order_value_caps_buy_budget() -> None:
+    """max_order_value=500,000 이면 비중 한도 2,000,000 보다 작아 capping."""
+    rm = RiskManager(
+        limits=RiskLimits(
+            max_position_weight=0.2,
+            max_portfolio_exposure=1.0,
+            max_order_value=500_000,
+        )
+    )
+    acct = AccountState(deposit=10_000_000, total_equity=10_000_000, day_start_equity=10_000_000)
+    d = rm.evaluate(_buy(), price=70_000, account=acct)
+    assert d.decision is Decision.APPROVE
+    assert d.order is not None
+    # 500,000 // 70,000 = 7주 (28주 → 7주로 capping)
+    assert d.order.quantity == 7
+
+
+def test_max_order_value_zero_means_unlimited() -> None:
+    """기본값 0 은 비활성 — 비중 한도가 그대로 적용."""
+    rm = RiskManager(limits=RiskLimits(max_position_weight=0.2, max_portfolio_exposure=1.0))
+    acct = AccountState(deposit=10_000_000, total_equity=10_000_000, day_start_equity=10_000_000)
+    d = rm.evaluate(_buy(), price=70_000, account=acct)
+    assert d.decision is Decision.APPROVE
+    assert d.order is not None and d.order.quantity == 28
+
+
+def test_daily_notional_limit_caps_remaining_budget() -> None:
+    """일일 한도 1,500,000 + 이미 1,000,000 사용 → 남은 500,000 까지만."""
+    rm = RiskManager(
+        limits=RiskLimits(
+            max_position_weight=0.2,
+            max_portfolio_exposure=1.0,
+            daily_notional_limit=1_500_000,
+        )
+    )
+    acct = AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        day_start_equity=10_000_000,
+        today_notional_used=1_000_000,
+    )
+    d = rm.evaluate(_buy(), price=70_000, account=acct)
+    assert d.decision is Decision.APPROVE
+    assert d.order is not None
+    # 남은 500,000 // 70,000 = 7주 (전체 한도 28주 → 7주)
+    assert d.order.quantity == 7
+
+
+def test_daily_notional_limit_rejects_when_exhausted() -> None:
+    """일일 한도 도달이면 BUY 거절."""
+    rm = RiskManager(limits=RiskLimits(daily_notional_limit=1_000_000))
+    acct = AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        day_start_equity=10_000_000,
+        today_notional_used=1_000_000,
+    )
+    d = rm.evaluate(_buy(), price=70_000, account=acct)
+    assert d.decision is Decision.REJECT
+    assert "daily notional" in d.reason
+
+
+def test_should_force_liquidate_active_when_kill_switch_on_and_loss_hit() -> None:
+    """daily_loss_kill=True + 손실 한도 도달 → True."""
+    rm = RiskManager(limits=RiskLimits(daily_loss_limit=0.03, daily_loss_kill=True))
+    acct = AccountState(
+        deposit=9_500_000,
+        total_equity=9_500_000,  # -5% 손실
+        day_start_equity=10_000_000,
+    )
+    assert rm.should_force_liquidate(acct) is True
+
+
+def test_should_force_liquidate_inactive_when_kill_switch_off() -> None:
+    """daily_loss_kill=False (기본) — 손실 한도 도달해도 False."""
+    rm = RiskManager(limits=RiskLimits(daily_loss_limit=0.03, daily_loss_kill=False))
+    acct = AccountState(
+        deposit=9_500_000,
+        total_equity=9_500_000,
+        day_start_equity=10_000_000,
+    )
+    assert rm.should_force_liquidate(acct) is False
+
+
+def test_should_force_liquidate_false_within_threshold() -> None:
+    """kill switch 활성이라도 손실이 한도 안이면 False."""
+    rm = RiskManager(limits=RiskLimits(daily_loss_limit=0.03, daily_loss_kill=True))
+    acct = AccountState(
+        deposit=9_800_000,
+        total_equity=9_800_000,  # -2% (한도 -3% 안)
+        day_start_equity=10_000_000,
+    )
+    assert rm.should_force_liquidate(acct) is False
