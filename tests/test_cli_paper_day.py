@@ -3,8 +3,8 @@
 검증:
 - typer CliRunner 로 호출 시 PaperRunner 가 day-trade 모드(liquidate_at) 로 생성되는지
 - --liquidate 잘못된 형식 → BadParameter
-- _delayed_discover 가 정상적으로 discover_and_arm 호출 + 결과 반영
-- _delayed_discover 가 발굴 실패 시 runner.request_stop 호출 (러너 hang 방지)
+- delayed_discover 가 정상적으로 discover_and_arm 호출 + 결과 반영
+- delayed_discover 가 발굴 실패 시 runner.request_stop 호출 (러너 hang 방지)
 - swing 모드 `paper` 명령은 기존 동작 그대로 (회귀)
 """
 
@@ -21,6 +21,7 @@ from typer.testing import CliRunner
 
 from auto_trading import cli as cli_module
 from auto_trading._common import KST
+from auto_trading.daytrade import cli_helpers
 from auto_trading.daytrade.orchestrator import DiscoveryResult
 from auto_trading.runner import PaperRunner
 
@@ -63,7 +64,7 @@ def test_paper_day_constructs_runner_in_day_trade_mode() -> None:
     runner = CliRunner()
     with (
         patch.object(PaperRunner, "__init__", _capture_init),
-        patch.object(cli_module, "_paper_day_main", AsyncMock(side_effect=_no_op)),
+        patch.object(cli_module, "paper_day_main", AsyncMock(side_effect=_no_op)),
         patch.object(cli_module, "build_command_handler", return_value=None),
     ):
         result = runner.invoke(
@@ -118,7 +119,7 @@ def test_paper_command_swing_mode_unchanged() -> None:
 
 
 async def test_delayed_discover_calls_orchestrator_and_pushes_notify() -> None:
-    """_delayed_discover 가 discover_and_arm 결과를 notifier 로 푸시."""
+    """delayed_discover 가 discover_and_arm 결과를 notifier 로 푸시."""
     fake_notifier = AsyncMock()
     runner = PaperRunner(liquidate_at=time(15, 15, tzinfo=KST), notifier=fake_notifier)
 
@@ -129,14 +130,14 @@ async def test_delayed_discover_calls_orchestrator_and_pushes_notify() -> None:
         note_ko="테스트 결과",
     )
     with (
-        patch.object(cli_module, "discover_and_arm", AsyncMock(return_value=fake_result)),
-        patch.object(cli_module, "KiwoomRestClient") as mock_rest_cls,
+        patch.object(cli_helpers, "discover_and_arm", AsyncMock(return_value=fake_result)),
+        patch.object(cli_helpers, "KiwoomRestClient") as mock_rest_cls,
     ):
         # async context manager mock
         mock_rest_cls.return_value.__aenter__ = AsyncMock(return_value=object())
         mock_rest_cls.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        await cli_module._delayed_discover(runner, top_n=3, delay=0)
+        await cli_helpers.delayed_discover(runner, top_n=3, delay=0)
 
     events = [c.args[0] for c in fake_notifier.notify.call_args_list]
     assert "daytrade.discovery_done" in events
@@ -148,14 +149,14 @@ async def test_delayed_discover_failure_requests_stop() -> None:
 
     with (
         patch.object(
-            cli_module, "discover_and_arm", AsyncMock(side_effect=RuntimeError("api down"))
+            cli_helpers, "discover_and_arm", AsyncMock(side_effect=RuntimeError("api down"))
         ),
-        patch.object(cli_module, "KiwoomRestClient") as mock_rest_cls,
+        patch.object(cli_helpers, "KiwoomRestClient") as mock_rest_cls,
     ):
         mock_rest_cls.return_value.__aenter__ = AsyncMock(return_value=object())
         mock_rest_cls.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        await cli_module._delayed_discover(runner, top_n=3, delay=0)
+        await cli_helpers.delayed_discover(runner, top_n=3, delay=0)
 
     # request_stop 호출 → STOPPING 진입 + universe_ready 도 set
     assert runner._control_state.value == "stopping"
@@ -181,13 +182,13 @@ async def test_delayed_discover_empty_chosen_requests_stop() -> None:
         note_ko="후보 1건 모두 지수 게이트 차단",
     )
     with (
-        patch.object(cli_module, "discover_and_arm", AsyncMock(return_value=empty_result)),
-        patch.object(cli_module, "KiwoomRestClient") as mock_rest_cls,
+        patch.object(cli_helpers, "discover_and_arm", AsyncMock(return_value=empty_result)),
+        patch.object(cli_helpers, "KiwoomRestClient") as mock_rest_cls,
     ):
         mock_rest_cls.return_value.__aenter__ = AsyncMock(return_value=object())
         mock_rest_cls.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        await cli_module._delayed_discover(runner, top_n=3, delay=0)
+        await cli_helpers.delayed_discover(runner, top_n=3, delay=0)
 
     assert runner._control_state.value == "stopping", (
         "chosen=[] 시 STOPPING 진입 누락 (5/3 hang 회귀)"
@@ -216,13 +217,13 @@ async def test_delayed_discover_chosen_keeps_runner_alive() -> None:
         return result
 
     with (
-        patch.object(cli_module, "discover_and_arm", _fake_discover),
-        patch.object(cli_module, "KiwoomRestClient") as mock_rest_cls,
+        patch.object(cli_helpers, "discover_and_arm", _fake_discover),
+        patch.object(cli_helpers, "KiwoomRestClient") as mock_rest_cls,
     ):
         mock_rest_cls.return_value.__aenter__ = AsyncMock(return_value=object())
         mock_rest_cls.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        await cli_module._delayed_discover(runner, top_n=3, delay=0)
+        await cli_helpers.delayed_discover(runner, top_n=3, delay=0)
 
     assert runner._control_state.value == "running", "chosen 있는데 STOPPING 진입 — 회귀"
     assert runner.symbols == ["005930"]
@@ -240,12 +241,12 @@ async def test_delayed_discover_respects_delay() -> None:
 
     with (
         patch.object(asyncio, "sleep", _track_sleep),
-        patch.object(cli_module, "discover_and_arm", AsyncMock(return_value=fake_result)),
-        patch.object(cli_module, "KiwoomRestClient") as mock_rest_cls,
+        patch.object(cli_helpers, "discover_and_arm", AsyncMock(return_value=fake_result)),
+        patch.object(cli_helpers, "KiwoomRestClient") as mock_rest_cls,
     ):
         mock_rest_cls.return_value.__aenter__ = AsyncMock(return_value=object())
         mock_rest_cls.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        await cli_module._delayed_discover(runner, top_n=3, delay=10)
+        await cli_helpers.delayed_discover(runner, top_n=3, delay=10)
 
     assert 10 in sleep_calls
