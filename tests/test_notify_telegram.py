@@ -181,3 +181,45 @@ async def test_runner_kill_switch_korean_format(notifier: TelegramNotifier) -> N
     assert "일일 손실 한도 도달" in text
     assert "-3.0%" in text
     assert "강제 청산" in text
+
+
+async def test_position_guard_fired_korean_format(notifier: TelegramNotifier) -> None:
+    """23단계 Phase C — guard 발화 시 stop/trailing/partial 한국어 매핑."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "position_guard.fired",
+            symbol="018880",
+            reason="stop_loss",
+            qty=10,
+            price=4950.0,
+            dry_run=True,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "🛟 손절" in text
+    assert "018880" in text
+    assert "10주" in text
+    assert "4,950원" in text
+    assert "(시뮬)" in text
+
+
+async def test_position_guard_partial_take_korean_format(notifier: TelegramNotifier) -> None:
+    """부분 익절 발화는 별도 이모지 + 라벨."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "position_guard.fired",
+            symbol="010170",
+            reason="partial_take",
+            qty=5,
+            price=10200.0,
+            dry_run=False,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "💵 부분 익절" in text
+    assert "010170" in text
+    assert "(시뮬)" not in text

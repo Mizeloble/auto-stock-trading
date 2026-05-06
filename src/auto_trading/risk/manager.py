@@ -62,6 +62,11 @@ class RiskLimits:
     max_order_value: float = 0.0  # 1회 주문 절대 한도(원). 0 이면 무제한
     daily_notional_limit: float = 0.0  # 일일 총 매수대금 한도(원). 0 이면 무제한
     daily_loss_kill: bool = False  # True 면 daily_loss 도달 시 보유 강제 청산 + 정지
+    # 23단계 Phase C — PositionGuard 파라미터. 모두 0 이면 비활성.
+    stop_loss_pct: float = 0.0  # 매수가 대비 -X% 도달 시 전량 청산. 예: 0.01 = -1%
+    trailing_stop_pct: float = 0.0  # 고점 대비 -X% 도달 시 잔량 청산. 예: 0.005 = -0.5%
+    partial_take_pct: float = 0.0  # 매수가 대비 +X% 도달 시 부분 익절. 예: 0.015 = +1.5%
+    partial_take_qty_ratio: float = 0.5  # 부분 익절 비율 — 0.5 면 절반만 매도
 
 
 @dataclass
@@ -143,7 +148,9 @@ class RiskManager:
             used = Decimal(str(account.today_notional_used))
             remaining = max(Decimal(0), daily_cap - used)
             if remaining <= 0:
-                reason = f"daily notional limit reached ({float(used):,.0f}/{float(daily_cap):,.0f})"
+                reason = (
+                    f"daily notional limit reached ({float(used):,.0f}/{float(daily_cap):,.0f})"
+                )
                 log.info("risk.reject", reason=reason, symbol=signal.symbol)
                 return RiskDecision(Decision.REJECT, reason=reason)
             if budget > remaining:
