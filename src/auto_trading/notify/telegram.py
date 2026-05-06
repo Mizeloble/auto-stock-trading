@@ -58,6 +58,21 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         limit_part = f" (-{float(limit) * 100:.1f}%)" if limit is not None else ""
         return f"🛑 일일 손실 한도 도달{limit_part} — 강제 청산 후 정지"
 
+    if event == "position_guard.fired":
+        # 23단계 Phase C — PositionGuard SELL 발화. stop/trailing/partial 한국어.
+        symbol = fields.get("symbol", "?")
+        reason = str(fields.get("reason", ""))
+        qty = fields.get("qty", "?")
+        price = fields.get("price")
+        dry = " (시뮬)" if fields.get("dry_run") else ""
+        reason_ko = {
+            "stop_loss": "🛟 손절",
+            "trailing": "📉 트레일링",
+            "partial_take": "💵 부분 익절",
+        }.get(reason, "🛟 가드")
+        price_part = f" @ {int(float(price)):,}원" if price is not None else ""
+        return f"{reason_ko} {symbol} {qty}주{price_part}{dry}"
+
     # ---- 21단계 day-trade 이벤트 ----------------------------------------
 
     if event == "daytrade.discovery_done":

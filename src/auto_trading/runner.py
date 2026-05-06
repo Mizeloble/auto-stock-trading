@@ -34,6 +34,7 @@ from .market.feed import Tick, ticks
 from .notify.base import NoopNotifier, Notifier
 from .notify.state import RunnerStateSnapshot
 from .risk.manager import AccountState, Decision, RiskManager
+from .risk.position_guard import GuardAction, PositionGuard
 from .strategy.base import Signal, Strategy
 
 log = structlog.get_logger(__name__)
@@ -115,6 +116,8 @@ class PaperRunner:
     symbols: list[str] = field(default_factory=list)
     strategies: dict[str, Strategy] = field(default_factory=dict)
     risk: RiskManager = field(default_factory=RiskManager)
+    # 23단계 Phase C — 종목별 stop/trailing/partial. 기본 비활성(모두 0). risk.limits 참조.
+    position_guard: PositionGuard | None = None
     bar_minutes: int = 1
     balance_refresh_sec: int = 60
     allow_real: bool = False
@@ -143,6 +146,10 @@ class PaperRunner:
     _liquidation_done: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
+        # 23단계 Phase C — 명시 주입 안 했으면 risk.limits 를 그대로 따르는 PositionGuard 자동 생성.
+        if self.position_guard is None:
+            self.position_guard = PositionGuard(limits=self.risk.limits)
+
         # day-trade 모드(liquidate_at 설정)는 시작 시 universe 미정 허용.
         # set_universe() 호출 전까지 run() 이 대기.
         if not self.symbols and not self.strategies:
@@ -341,6 +348,83 @@ class PaperRunner:
             if order is None:
                 continue
             await self._place_and_track(rest, order, bar, account)
+
+        # 23단계 Phase C — 매 봉 끝에 PositionGuard 체크. 보유 0 이면 자동 no-op.
+        await self._run_position_guard(rest, bar, account)
+
+    async def _run_position_guard(
+        self, rest: KiwoomRestClient, bar: Bar, account: AccountState
+    ) -> None:
+        """guard 활성 + 해당 종목 보유 시 stop/trailing/partial 결정 → 즉시 SELL 송신."""
+        guard = self.position_guard
+        if guard is None or not guard.is_active:
+            return
+        qty = account.positions.get(bar.symbol, 0)
+        if qty <= 0:
+            return
+        avg = account.avg_prices.get(bar.symbol, 0.0)
+        if avg <= 0:
+            return
+        action = guard.check(symbol=bar.symbol, price=bar.close, quantity=qty, avg_price=avg)
+        if action is None:
+            return
+        await self._place_guard_action(rest, action, bar, account)
+
+    async def _place_guard_action(
+        self,
+        rest: KiwoomRestClient,
+        action: GuardAction,
+        bar: Bar,
+        account: AccountState,
+    ) -> None:
+        """guard 발화 → SELL 주문(시장가). dry-run·PAUSED 도 동일 분기."""
+        order = Order(
+            symbol=action.symbol,
+            side=Side.SELL,
+            quantity=action.quantity,
+            order_type=OrderType.MARKET,
+            price=None,
+        )
+        if self._control_state is RunnerControlState.PAUSED:
+            log.info(
+                "position_guard.skipped_paused",
+                symbol=action.symbol,
+                reason=action.reason.value,
+                qty=action.quantity,
+            )
+            return
+        if self.dry_run:
+            log.info(
+                "runner.order_simulated",
+                symbol=action.symbol,
+                side="sell",
+                qty=action.quantity,
+                price=action.price,
+                guard_reason=action.reason.value,
+            )
+            # dry-run 도 로컬 포지션은 즉시 차감 — 다음 guard.check 가 잔량을 정확히 읽도록.
+            account.positions[action.symbol] = max(
+                0, account.positions.get(action.symbol, 0) - action.quantity
+            )
+            await self.notifier.notify(
+                "position_guard.fired",
+                symbol=action.symbol,
+                reason=action.reason.value,
+                qty=action.quantity,
+                price=action.price,
+                dry_run=True,
+            )
+            return
+        # 실거래 송신 — _place_and_track 재사용. 성공 시 로컬 포지션 차감 + 알림은 그쪽이 처리.
+        await self._place_and_track(rest, order, bar, account)
+        await self.notifier.notify(
+            "position_guard.fired",
+            symbol=action.symbol,
+            reason=action.reason.value,
+            qty=action.quantity,
+            price=action.price,
+            dry_run=False,
+        )
 
     async def _evaluate_signal(
         self, signal: Signal, bar: Bar, account: AccountState

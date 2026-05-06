@@ -404,13 +404,14 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **테스트** · `tests/test_risk_manager.py` 7건 (capping·rejection·kill switch on/off/threshold) + `tests/test_notify_telegram.py` 1건. 293/293 PASS, ruff/mypy 클린.
 - [ ] **검증** (사용자): YAML 프로파일 또는 CLI 에서 한도 활성 후 mock dry-run 에서 `risk.reject` / `runner.kill_switch_triggered` 로그·푸시 확인 (Phase G 의 --profile 도입 후 본격 검증).
 
-### Phase C · 종목별 stop-loss + 트레일링 + 부분 익절 (PositionGuard)
+### Phase C · 종목별 stop-loss + 트레일링 + 부분 익절 (PositionGuard) — **✅ 완료** (2026-05-06)
 
-- [ ] **`risk/position_guard.py`** · 신규 모듈. 종목별 상태(`avg_price`, `highest_seen`, `partial_taken`) 추적. `check(symbol, price, position) -> SellSignal | None`.
-- [ ] **`RiskLimits`** · `stop_loss_pct`, `trailing_stop_pct`, `partial_take_pct`, `partial_take_qty_ratio` 추가 (기본 0=비활성).
-- [ ] **러너 통합** · 매 봉 끝에 `position_guard.check` → 강제 SELL 시그널 직통 → Order. 전략 `on_bar` 와 별개 채널, 구조화 로그 `position_guard.{stop_loss|trailing|partial_take}`.
-- [ ] **테스트** · `tests/test_position_guard.py` — stop 발동, 트레일 발동, 부분 익절 후 트레일, 모두 비활성 무동작.
-- [ ] **검증**: 가짜 가격 시나리오 mock dry-run 에서 stop/trail/partial 로그 시퀀스 확인.
+- [x] **`risk/position_guard.py`** · 신규 모듈. `PositionGuard` 가 종목별 `_Tracking(avg_price, highest_seen, partial_taken)` 추적. 우선순위: stop_loss → trailing → partial_take. `is_active` 로 모두 0 인 비활성 상태 빠른 단락. `reset(symbol)` 로 다회 진입 사이의 상태 초기화.
+- [x] **`RiskLimits`** · `stop_loss_pct`/`trailing_stop_pct`/`partial_take_pct`/`partial_take_qty_ratio` 4개 필드 추가, 기본 0(비활성)·0.5(절반).
+- [x] **러너 통합** · `_on_bar` 끝에 `_run_position_guard` → 발화 시 `_place_guard_action` 으로 즉시 SELL 송신. 전략 시그널 채널과 별개. dry-run·PAUSED·실거래 분기 모두 처리. 구조화 로그 `position_guard.{stop_loss|trailing|partial_take|fired|skipped_paused}`.
+- [x] **텔레그램 알림** · `position_guard.fired` 이벤트 한국어 포맷 (🛟 손절 / 📉 트레일링 / 💵 부분 익절).
+- [x] **테스트** · `tests/test_position_guard.py` 11건 (stop 발동·트레일 발동·partial 후 트레일·우선순위·quantity 0·reset·전량 ratio·비활성) + `tests/test_notify_telegram.py` 2건. 306/306 PASS, ruff/mypy 클린.
+- [ ] **검증** (사용자): YAML 프로파일에서 한도 활성 후 mock dry-run 에서 `position_guard.*` 로그 + 텔레그램 발화 확인 (Phase G 의 --profile 도입 후).
 
 ### Phase D · 다회 진입 + 쿨다운 (IndexMomentumDayTrade 신규)
 
