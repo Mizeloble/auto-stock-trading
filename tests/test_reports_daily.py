@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
+from auto_trading.account.balance import AccountSnapshot, Holding
 from auto_trading.notify.state import RunnerStateSnapshot
 from auto_trading.reports.daily import (
+    ClosingHolding,
     DailyReport,
     LiquidationRecord,
     MarketGateInfo,
@@ -181,3 +184,178 @@ def test_pnl_aggregate_when_both_prices_present() -> None:
     assert len(report.buys) == 1
     # sell_price 가 없으므로 realized_pnl 은 None — 우리가 가진 입력으로는 자연스러운 결과.
     assert report.realized_pnl is None
+
+
+def test_build_attaches_names_to_records_and_chosen_map() -> None:
+    """LogEvents.symbol_names 가 buys/liquidations.name 과 discovery_chosen_names 둘 다에 흘러간다."""
+    events = LogEvents(
+        discovery={"chosen": ["005930", "001500"]},
+        symbol_names={"005930": "삼성전자", "001500": "한솔홀딩스"},
+        orders_simulated=[
+            {"symbol": "005930", "side": "buy", "qty": 13, "price": 254000.0},
+            {"symbol": "001500", "side": "buy", "qty": 254, "price": 13100.0},
+        ],
+        liquidations_simulated=[
+            {"symbol": "005930", "qty": 13},
+            {"symbol": "001500", "qty": 254},
+        ],
+    )
+    report = build_daily_report(date="2026-05-06", events=events, snapshot=None)
+    assert report.discovery_chosen_names == {"005930": "삼성전자", "001500": "한솔홀딩스"}
+    assert {b.symbol: b.name for b in report.buys} == {"005930": "삼성전자", "001500": "한솔홀딩스"}
+    assert {li.symbol: li.name for li in report.liquidations} == {
+        "005930": "삼성전자",
+        "001500": "한솔홀딩스",
+    }
+
+
+def test_liquidation_buy_price_from_log_field_overrides_buy_prices_map() -> None:
+    """liquidate_simulated 의 buy_price 필드(러너 로그) 가 buys 매핑보다 우선."""
+    events = LogEvents(
+        orders_simulated=[{"symbol": "A", "side": "buy", "qty": 10, "price": 100.0}],
+        liquidations_accepted=[
+            # buy_price 가 명시 → 이 값을 사용
+            {"symbol": "A", "qty": 10, "buy_price": 95.0, "sell_price": 110.0},
+        ],
+    )
+    report = build_daily_report(date="2026-05-06", events=events, snapshot=None)
+    assert len(report.liquidations) == 1
+    li = report.liquidations[0]
+    assert li.buy_price == 95.0
+    assert li.sell_price == 110.0
+    # 이 케이스는 sell + buy 둘 다 있어 realized 계산 가능
+    assert report.realized_pnl == (110.0 - 95.0) * 10
+
+
+def test_build_extracts_closing_balance_from_snapshot() -> None:
+    """snapshot.snapshot 에 잔고가 있으면 closing_* 필드 채워짐."""
+    account = AccountSnapshot(
+        deposit=Decimal("50000000"),
+        total_evaluation=Decimal("50050000"),
+        total_pnl=Decimal("50000"),
+        holdings=[
+            Holding(
+                symbol="005930",
+                name="삼성전자",
+                quantity=13,
+                avg_price=Decimal("254000"),
+                current_price=Decimal("256500"),
+                market_value=Decimal("3334500"),
+                pnl=Decimal("32500"),
+                pnl_pct=Decimal("0.98"),
+            ),
+            # 0 수량은 거름.
+            Holding(
+                symbol="ZZZ",
+                name="청산완료",
+                quantity=0,
+                avg_price=Decimal("0"),
+                current_price=Decimal("0"),
+                market_value=Decimal("0"),
+                pnl=Decimal("0"),
+                pnl_pct=Decimal("0"),
+            ),
+        ],
+    )
+    snap = RunnerStateSnapshot(
+        mode="mock",
+        dry_run=False,
+        symbols=[],
+        strategies={},
+        started_at=None,
+        snapshot=account,
+        account=None,
+        recent_signals={},
+        balance_failures=0,
+        runner_mode="day-trade",
+    )
+    report = build_daily_report(date="2026-05-06", events=LogEvents(), snapshot=snap)
+    assert report.closing_cash == 50000000
+    assert report.closing_equity == 50050000
+    assert report.closing_total_pnl == 50000
+    assert len(report.closing_holdings) == 1
+    h = report.closing_holdings[0]
+    assert isinstance(h, ClosingHolding)
+    assert h.symbol == "005930"
+    assert h.name == "삼성전자"
+    assert h.quantity == 13
+
+
+def test_closing_balance_blank_when_snapshot_missing() -> None:
+    """snapshot.snapshot 이 None 이면 closing_* 모두 비움."""
+    snap = RunnerStateSnapshot(
+        mode="mock",
+        dry_run=False,
+        symbols=[],
+        strategies={},
+        started_at=None,
+        snapshot=None,
+        account=None,
+        recent_signals={},
+        balance_failures=0,
+        runner_mode="day-trade",
+    )
+    report = build_daily_report(date="2026-05-06", events=LogEvents(), snapshot=snap)
+    assert report.closing_cash is None
+    assert report.closing_equity is None
+    assert report.closing_total_pnl is None
+    assert report.closing_holdings == []
+
+
+def test_save_load_roundtrip_with_new_fields(tmp_path: Path) -> None:
+    """names/closing_* 필드 라운드트립 — 누락 없이 보존."""
+    report = DailyReport(
+        date="2026-05-06",
+        mode="day-trade",
+        dry_run=False,
+        discovery_chosen=["005930"],
+        discovery_blocked=[],
+        market_gates=[],
+        buys=[
+            TradeRecord(
+                symbol="005930",
+                side="buy",
+                quantity=13,
+                price=254000.0,
+                simulated=False,
+                name="삼성전자",
+            )
+        ],
+        liquidations=[],
+        error_count=0,
+        note_ko="t",
+        discovery_chosen_names={"005930": "삼성전자"},
+        closing_cash=50_000_000,
+        closing_equity=50_032_500,
+        closing_total_pnl=32_500,
+        closing_holdings=[
+            ClosingHolding(
+                symbol="005930",
+                name="삼성전자",
+                quantity=13,
+                avg_price=254000.0,
+                current_price=256500.0,
+                market_value=3334500.0,
+                pnl=32500.0,
+                pnl_pct=0.98,
+            )
+        ],
+    )
+    path = save_daily_report(report, root=tmp_path)
+    loaded = load_daily_report(path)
+    assert loaded == report
+
+
+def test_load_report_with_legacy_schema_uses_defaults(tmp_path: Path) -> None:
+    """names/closing_* 가 없는 (구) JSON 도 기본값으로 안전 로드."""
+    legacy = tmp_path / "daily-2026-05-06.json"
+    legacy.write_text(
+        '{"date":"2026-05-06","mode":"day-trade","dry_run":true,'
+        '"discovery_chosen":["A"],"discovery_blocked":[],"market_gates":[],'
+        '"buys":[],"liquidations":[],"error_count":0,"note_ko":""}',
+        encoding="utf-8",
+    )
+    loaded = load_daily_report(legacy)
+    assert loaded.discovery_chosen_names == {}
+    assert loaded.closing_cash is None
+    assert loaded.closing_holdings == []

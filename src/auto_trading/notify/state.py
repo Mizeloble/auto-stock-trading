@@ -80,6 +80,123 @@ def _signed_pct(value: Decimal | float | int) -> str:
     return f"{sign}{n:.2f}%"
 
 
+def _with_name(symbol: str, name: str | None) -> str:
+    """`005930 삼성전자` 형태 — 종목명 없으면 코드만."""
+    if name:
+        return f"{symbol} {name}"
+    return symbol
+
+
+def _build_trade_lines(
+    buys: list[dict],
+    liqs: list[dict],
+) -> tuple[list[str], list[str], list[str]]:
+    """매수·청산 records → (페어 라인, 매수만 라인, 청산만 라인) 세 묶음.
+
+    같은 종목이 buys 와 liqs 양쪽에 있으면 페어로, 한쪽만 있으면 별 묶음으로.
+    여러 건 매수가 한 종목에 누적되면 첫 매수만 페어 베이스로 본다 — day-trade 1:1 가정.
+    """
+    buy_by_sym: dict[str, dict] = {}
+    for t in buys:
+        sym = str(t.get("symbol") or "")
+        if sym and sym not in buy_by_sym:
+            buy_by_sym[sym] = t
+    liq_by_sym: dict[str, dict] = {}
+    for li in liqs:
+        sym = str(li.get("symbol") or "")
+        if sym and sym not in liq_by_sym:
+            liq_by_sym[sym] = li
+
+    paired_syms = [s for s in buy_by_sym if s in liq_by_sym]
+    only_buy_syms = [s for s in buy_by_sym if s not in liq_by_sym]
+    only_sell_syms = [s for s in liq_by_sym if s not in buy_by_sym]
+
+    pair_lines: list[str] = []
+    for sym in paired_syms:
+        b = buy_by_sym[sym]
+        li = liq_by_sym[sym]
+        name = b.get("name") or li.get("name")
+        head = _with_name(sym, name if isinstance(name, str) else None)
+        qty = int(b.get("quantity") or 0)
+        sim = " (시뮬)" if b.get("simulated") or li.get("simulated") else ""
+        buy_p = b.get("price")
+        sell_p = li.get("sell_price")
+        if buy_p is None:
+            buy_p = li.get("buy_price")
+        buy_part = f"@{_won(buy_p)}" if buy_p is not None else "@시장가"
+        sell_part = f"@{_won(sell_p)}" if sell_p is not None else "@시장가"
+        pnl_part = ""
+        if buy_p is not None and sell_p is not None and float(buy_p) > 0:
+            delta = (float(sell_p) - float(buy_p)) * qty
+            pct = (float(sell_p) / float(buy_p) - 1.0) * 100.0
+            pnl_part = f"  {_signed_won(delta)}/{_signed_pct(pct)}"
+        pair_lines.append(f"- {head}  {qty}주 {buy_part} → {sell_part}{pnl_part}{sim}")
+
+    only_buy_lines: list[str] = []
+    for sym in only_buy_syms[:6]:
+        t = buy_by_sym[sym]
+        name = t.get("name") if isinstance(t.get("name"), str) else None
+        sim = " (시뮬)" if t.get("simulated") else ""
+        qty = int(t.get("quantity") or 0)
+        price = t.get("price")
+        price_part = f" @{_won(price)}" if price is not None else " @시장가"
+        only_buy_lines.append(f"- {_with_name(sym, name)} BUY {qty}주{price_part}{sim}")
+    if len(only_buy_syms) > 6:
+        only_buy_lines.append(f"  외 {len(only_buy_syms) - 6}건")
+
+    only_sell_lines: list[str] = []
+    for sym in only_sell_syms[:6]:
+        li = liq_by_sym[sym]
+        name = li.get("name") if isinstance(li.get("name"), str) else None
+        sim = " (시뮬)" if li.get("simulated") else ""
+        qty = int(li.get("quantity") or 0)
+        sell = li.get("sell_price")
+        buy = li.get("buy_price")
+        price_part = f" @{_won(sell)}" if sell is not None else " @시장가"
+        pnl_part = ""
+        if sell is not None and buy is not None and float(buy) > 0:
+            delta = (float(sell) - float(buy)) * qty
+            pct = (float(sell) / float(buy) - 1.0) * 100.0
+            pnl_part = f" ({_signed_won(delta)}/{_signed_pct(pct)})"
+        only_sell_lines.append(f"- {_with_name(sym, name)} SELL {qty}주{price_part}{pnl_part}{sim}")
+    if len(only_sell_syms) > 6:
+        only_sell_lines.append(f"  외 {len(only_sell_syms) - 6}건")
+
+    return pair_lines, only_buy_lines, only_sell_lines
+
+
+def _build_closing_balance(payload: dict) -> list[str]:
+    """마감 잔고 섹션 — closing_cash 가 있을 때만 렌더. 없으면 빈 리스트."""
+    cash = payload.get("closing_cash")
+    if cash is None:
+        return []
+    equity = payload.get("closing_equity")
+    holdings = payload.get("closing_holdings") or []
+    out: list[str] = ["💰 마감 잔고"]
+    out.append(f"예수금: {_won(cash)}")
+    if equity is not None:
+        out.append(f"총평가: {_won(equity)}")
+    if not holdings:
+        out.append("보유: 없음 (전량 청산)")
+        return out
+    out.append(f"보유: {len(holdings)}종목")
+    for h in holdings[:6]:
+        sym = str(h.get("symbol") or "?")
+        name = h.get("name") if isinstance(h.get("name"), str) else None
+        qty = int(h.get("quantity") or 0)
+        cur = h.get("current_price")
+        pnl = h.get("pnl")
+        pct = h.get("pnl_pct")
+        cur_part = f" @{_won(cur)}" if cur is not None else ""
+        pnl_part = ""
+        if pnl is not None and pct is not None:
+            pnl_part = f" ({_signed_won(pnl)}/{_signed_pct(pct)})"
+        out.append(f"- {_with_name(sym, name)} {qty}주{cur_part}{pnl_part}")
+    if len(holdings) > 6:
+        out.append(f"  외 {len(holdings) - 6}종목")
+    return out
+
+
 def _uptime(started_at: datetime | None, now: datetime) -> str:
     if started_at is None:
         return "-"
@@ -193,6 +310,12 @@ def format_daily_report(payload: dict) -> str:
 
     chosen = payload.get("discovery_chosen") or []
     blocked = payload.get("discovery_blocked") or []
+    chosen_names_raw = payload.get("discovery_chosen_names") or {}
+    chosen_names: dict[str, str] = (
+        {str(k): str(v) for k, v in chosen_names_raw.items()}
+        if isinstance(chosen_names_raw, dict)
+        else {}
+    )
     if chosen or blocked:
         lines.append("")
         head = f"🔎 발굴: 채택 {len(chosen)}건"
@@ -203,7 +326,7 @@ def format_daily_report(payload: dict) -> str:
             head += f" (ETF {excluded_etf}건 제외)"
         lines.append(head)
         if chosen:
-            lines.append(f"선정: {', '.join(chosen)}")
+            lines.append(f"선정: {', '.join(_with_name(s, chosen_names.get(s)) for s in chosen)}")
         if blocked:
             shown = ", ".join(f"{s}({r})" for s, r in blocked[:5])
             tail = f" 외 {len(blocked) - 5}" if len(blocked) > 5 else ""
@@ -224,36 +347,25 @@ def format_daily_report(payload: dict) -> str:
             lines.append(f"- {g.get('market', '?')} {mark}{metric}")
 
     buys = payload.get("buys") or []
-    if buys:
-        lines.append("")
-        lines.append(f"💰 매수: {len(buys)}건")
-        for t in buys[:6]:
-            sim = " (시뮬)" if t.get("simulated") else ""
-            qty = int(t.get("quantity") or 0)
-            price = t.get("price")
-            price_part = f" @ {_won(price)}" if price is not None else ""
-            lines.append(f"- {t.get('symbol', '?')} BUY {qty}주{price_part}{sim}")
-        if len(buys) > 6:
-            lines.append(f"  외 {len(buys) - 6}건")
-
     liqs = payload.get("liquidations") or []
-    if liqs:
+    pair_lines, only_buy_lines, only_sell_lines = _build_trade_lines(buys, liqs)
+    if pair_lines:
         lines.append("")
-        lines.append(f"🧹 청산: {len(liqs)}건")
-        for li in liqs[:6]:
-            sim = " (시뮬)" if li.get("simulated") else ""
-            qty = int(li.get("quantity") or 0)
-            sell = li.get("sell_price")
-            buy = li.get("buy_price")
-            price_part = f" @ {_won(sell)}" if sell is not None else ""
-            pnl_part = ""
-            if sell is not None and buy is not None and float(buy) > 0:
-                delta = (float(sell) - float(buy)) * qty
-                pct = (float(sell) / float(buy) - 1.0) * 100.0
-                pnl_part = f" ({_signed_won(delta)}/{_signed_pct(pct)})"
-            lines.append(f"- {li.get('symbol', '?')} SELL {qty}주{price_part}{pnl_part}{sim}")
-        if len(liqs) > 6:
-            lines.append(f"  외 {len(liqs) - 6}건")
+        lines.append(f"📋 매매 결과: {len(pair_lines)}건")
+        lines.extend(pair_lines)
+    if only_buy_lines:
+        lines.append("")
+        lines.append(f"💰 매수: {len(only_buy_lines)}건")
+        lines.extend(only_buy_lines)
+    if only_sell_lines:
+        lines.append("")
+        lines.append(f"🧹 청산: {len(only_sell_lines)}건")
+        lines.extend(only_sell_lines)
+
+    closing_lines = _build_closing_balance(payload)
+    if closing_lines:
+        lines.append("")
+        lines.extend(closing_lines)
 
     realized = payload.get("realized_pnl")
     realized_pct = payload.get("realized_pnl_pct")
@@ -267,7 +379,8 @@ def format_daily_report(payload: dict) -> str:
         summary_parts.append(f"에러 {err}건")
     if summary_parts:
         lines.append("")
-        lines.append("📋 " + " · ".join(summary_parts))
+        # 📋 는 매매 결과 섹션이 쓰므로 요약은 다른 이모지로 시각 구분.
+        lines.append("📊 " + " · ".join(summary_parts))
 
     note = str(payload.get("note_ko") or "")
     if note:

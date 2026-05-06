@@ -88,6 +88,7 @@ def test_format_skips_pnl_when_prices_missing() -> None:
     """sell_price 없는 시뮬 청산은 손익 라벨 없이 표기."""
     msg = format_daily_report(
         _payload(
+            buys=[],  # 페어 분기를 회피해 only-sell 케이스로 강제.
             liquidations=[
                 {
                     "symbol": "A",
@@ -104,3 +105,95 @@ def test_format_skips_pnl_when_prices_missing() -> None:
     # 청산 라인은 있으나 (+/-) 손익 표기는 없음.
     assert "🧹 청산" in msg
     assert "(+" not in msg.split("🧹 청산")[1].split("📋")[0]
+
+
+def test_format_renders_chosen_names_next_to_codes() -> None:
+    """선정 라인에 종목명이 있으면 코드 옆에 붙는다."""
+    msg = format_daily_report(
+        _payload(
+            discovery_chosen_names={"018880": "한진", "010170": "현대건설"},
+        )
+    )
+    assert "선정: 018880 한진, 010170 현대건설" in msg
+
+
+def test_format_renders_pair_view_when_buy_and_liquidation_match() -> None:
+    """같은 종목에 buy + liquidation 있으면 한 줄 페어 렌더로."""
+    msg = format_daily_report(
+        _payload(
+            discovery_chosen_names={"018880": "한진"},
+            buys=[
+                {
+                    "symbol": "018880",
+                    "side": "buy",
+                    "quantity": 10,
+                    "price": 5000.0,
+                    "simulated": False,
+                    "name": "한진",
+                }
+            ],
+            liquidations=[
+                {
+                    "symbol": "018880",
+                    "quantity": 10,
+                    "sell_price": 5500.0,
+                    "buy_price": 5000.0,
+                    "simulated": False,
+                    "name": "한진",
+                }
+            ],
+        )
+    )
+    assert "📋 매매 결과" in msg
+    assert "018880 한진" in msg
+    assert "@5,000원" in msg
+    assert "@5,500원" in msg
+    assert "+5,000원" in msg and "+10.00%" in msg
+    # 페어로 갔으니 별도 매수/청산 섹션은 안 뜬다.
+    assert "💰 매수:" not in msg
+    assert "🧹 청산:" not in msg
+
+
+def test_format_includes_closing_balance_when_present() -> None:
+    msg = format_daily_report(
+        _payload(
+            closing_cash=50_000_000,
+            closing_equity=50_032_500,
+            closing_holdings=[],
+        )
+    )
+    assert "💰 마감 잔고" in msg
+    assert "예수금: 50,000,000원" in msg
+    assert "총평가: 50,032,500원" in msg
+    assert "보유: 없음 (전량 청산)" in msg
+
+
+def test_format_closing_holdings_render_with_pnl() -> None:
+    msg = format_daily_report(
+        _payload(
+            closing_cash=46_700_000,
+            closing_equity=50_034_500,
+            closing_holdings=[
+                {
+                    "symbol": "005930",
+                    "name": "삼성전자",
+                    "quantity": 13,
+                    "avg_price": 254000.0,
+                    "current_price": 256500.0,
+                    "market_value": 3334500.0,
+                    "pnl": 32500.0,
+                    "pnl_pct": 0.98,
+                }
+            ],
+        )
+    )
+    assert "보유: 1종목" in msg
+    assert "005930 삼성전자" in msg
+    assert "+32,500원" in msg
+    assert "+0.98%" in msg
+
+
+def test_format_omits_closing_section_when_cash_missing() -> None:
+    """closing_cash=None (수동 재생성 등) 이면 마감 잔고 섹션 자체가 안 뜬다."""
+    msg = format_daily_report(_payload(closing_cash=None))
+    assert "마감 잔고" not in msg

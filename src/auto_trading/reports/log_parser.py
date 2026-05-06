@@ -38,10 +38,14 @@ class LogEvents:
     signal_rejected: list[dict[str, Any]] = field(default_factory=list)  # runner.signal_rejected
     balance_failures: int = 0  # runner.balance_fetch_failed 누적 카운트
     fatal: list[dict[str, Any]] = field(default_factory=list)  # runner.balance_failed_fatal 등
+    # daytrade.discovery / universe_chosen 로그의 names 필드 통합 — 코드→종목명.
+    # 같은 코드가 두 라인에서 모두 보이면 마지막 비어있지 않은 값으로 갱신.
+    symbol_names: dict[str, str] = field(default_factory=dict)
 
 
 _INTEREST: dict[str, str] = {
     "daytrade.discovery": "discovery",
+    "daytrade.universe_chosen": "_universe_chosen",
     "market.rank.top_volume": "rank",
     "market.index.gate": "market_gates",
     "runner.order_simulated": "orders_simulated",
@@ -97,6 +101,11 @@ def _ingest_line(events: LogEvents, line: str) -> None:
         return
     if target == "discovery":
         events.discovery = record
+        _absorb_names(events, record.get("names"))
+        return
+    if target == "_universe_chosen":
+        # universe_chosen 자체는 따로 저장하지 않는다 — names 만 흡수.
+        _absorb_names(events, record.get("names"))
         return
     if target == "rank":
         events.rank = record
@@ -104,6 +113,17 @@ def _ingest_line(events: LogEvents, line: str) -> None:
     bucket = getattr(events, target)
     if isinstance(bucket, list):
         bucket.append(record)
+
+
+def _absorb_names(events: LogEvents, raw: object) -> None:
+    """names dict 가 있으면 비어있지 않은 값으로 events.symbol_names 갱신."""
+    if not isinstance(raw, dict):
+        return
+    for sym, name in raw.items():
+        if not isinstance(sym, str) or not isinstance(name, str):
+            continue
+        if name.strip():
+            events.symbol_names[sym] = name.strip()
 
 
 def parse_lines(lines: Iterable[str]) -> LogEvents:
