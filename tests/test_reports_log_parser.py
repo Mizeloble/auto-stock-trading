@@ -100,6 +100,47 @@ def test_parse_log_reads_real_file(tmp_path: Path) -> None:
     assert len(events.orders_simulated) == 1
 
 
+def test_discovery_names_absorbed_into_symbol_names() -> None:
+    """daytrade.discovery 의 names dict 가 LogEvents.symbol_names 로 흡수."""
+    lines = [
+        _line(
+            "daytrade.discovery",
+            chosen=["005930", "001500"],
+            blocked=[],
+            names={"005930": "삼성전자", "001500": "한솔홀딩스"},
+        ),
+    ]
+    events = parse_lines(lines)
+    assert events.symbol_names == {"005930": "삼성전자", "001500": "한솔홀딩스"}
+
+
+def test_universe_chosen_names_supplement_discovery() -> None:
+    """universe_chosen 의 names 가 discovery 누락분을 보강. 둘 다 있으면 마지막 비어있지 않은 값."""
+    lines = [
+        _line(
+            "daytrade.discovery",
+            chosen=["005930"],
+            blocked=[],
+            names={"005930": "", "001500": "한솔홀딩스"},  # 005930 빈 이름은 무시
+        ),
+        _line(
+            "daytrade.universe_chosen",
+            symbols=["005930"],
+            names={"005930": "삼성전자"},  # 보강
+        ),
+    ]
+    events = parse_lines(lines)
+    assert events.symbol_names == {"005930": "삼성전자", "001500": "한솔홀딩스"}
+
+
+def test_missing_names_field_is_safe() -> None:
+    """names 필드가 없는 (구) discovery 로그도 깨지지 않음 — 호환성."""
+    lines = [_line("daytrade.discovery", chosen=["A"], blocked=[])]
+    events = parse_lines(lines)
+    assert events.symbol_names == {}
+    assert events.discovery is not None
+
+
 def test_malformed_json_lines_are_skipped() -> None:
     """JSON 으로 시작하지만 깨진 라인도 조용히 skip — 트레이딩 보고를 막지 않게."""
     lines = [

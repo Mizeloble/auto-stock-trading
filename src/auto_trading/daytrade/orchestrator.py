@@ -87,12 +87,16 @@ async def discover_and_arm(
             continue
         chosen.append(cand)
 
+    # names: 일일 리포트가 코드 옆에 종목명을 붙일 수 있도록 후보·채택 종목의
+    # 코드→이름 매핑을 함께 남긴다. RankedSymbol.name 은 키움 응답에서 파싱됨.
+    names = {c.symbol: c.name for c in candidates if c.name}
     log.info(
         "daytrade.discovery",
         candidates=[(c.symbol, c.market, c.volume) for c in candidates],
         chosen=[c.symbol for c in chosen],
         blocked=blocked,
         gates={m: g.above_5_and_20 for m, g in gates.items()},
+        names=names,
     )
 
     if not chosen:
@@ -108,6 +112,7 @@ async def discover_and_arm(
         "daytrade.universe_chosen",
         symbols=symbols,
         markets={c.symbol: c.market for c in chosen},
+        names={c.symbol: c.name for c in chosen if c.name},
     )
 
     note = f"매수 후보 {len(chosen)}/{len(candidates)}: {', '.join(symbols)}"

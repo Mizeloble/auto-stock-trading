@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from dataclasses import asdict
 from datetime import date, datetime, time
 from pathlib import Path
 
@@ -632,22 +633,9 @@ def report(
     save_path = save_daily_report(daily, root=out)
     console.print(f"[green]리포트 저장:[/green] {save_path}")
 
-    payload = {
-        "date": daily.date,
-        "mode": daily.mode,
-        "dry_run": daily.dry_run,
-        "discovery_chosen": daily.discovery_chosen,
-        "discovery_blocked": [list(t) for t in daily.discovery_blocked],
-        "market_gates": [g.__dict__ for g in daily.market_gates],
-        "buys": [t.__dict__ for t in daily.buys],
-        "liquidations": [li.__dict__ for li in daily.liquidations],
-        "error_count": daily.error_count,
-        "note_ko": daily.note_ko,
-        "realized_pnl": daily.realized_pnl,
-        "realized_pnl_pct": daily.realized_pnl_pct,
-        "excluded_etf_count": daily.excluded_etf_count,
-        "rank_candidates": daily.rank_candidates,
-    }
+    # asdict 으로 신규 필드 자동 포함. discovery_blocked tuple 만 list 로 호환 변환.
+    payload = asdict(daily)
+    payload["discovery_blocked"] = [list(t) for t in daily.discovery_blocked]
     console.print(format_daily_report(payload))
 
     if push:

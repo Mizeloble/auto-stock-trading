@@ -27,6 +27,7 @@ class TradeRecord:
     quantity: int
     price: float | None
     simulated: bool  # dry-run 시뮬이면 True
+    name: str | None = None  # 종목명 — 발굴 로그에서 알 수 있을 때만 채움
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class LiquidationRecord:
     sell_price: float | None
     buy_price: float | None
     simulated: bool
+    name: str | None = None
 
     @property
     def pnl(self) -> float | None:
@@ -64,6 +66,20 @@ class MarketGateInfo:
 
 
 @dataclass(frozen=True)
+class ClosingHolding:
+    """마감 시점 보유 종목 1건. 러너 종료 직후 키움 잔고 스냅샷에서 추출."""
+
+    symbol: str
+    name: str
+    quantity: int
+    avg_price: float
+    current_price: float
+    market_value: float
+    pnl: float
+    pnl_pct: float
+
+
+@dataclass(frozen=True)
 class DailyReport:
     """하루치 트레이딩 요약. JSON 직렬화 → `data/reports/daily-YYYY-MM-DD.json`."""
 
@@ -82,6 +98,14 @@ class DailyReport:
     realized_pnl_pct: float | None = None
     excluded_etf_count: int = 0
     rank_candidates: list[str] = field(default_factory=list)
+    # 코드→종목명. discovery 로그의 names 필드에서 흡수. 없는 종목은 키 자체가 없음.
+    discovery_chosen_names: dict[str, str] = field(default_factory=dict)
+    # 마감 시점 잔고 — 러너 인메모리 snapshot 가용 시만 채움 (자동 호출 시 ✓, 수동 재생성 X).
+    # day-trade 청산 후엔 closing_holdings 가 빈 리스트인 게 정상.
+    closing_cash: int | None = None
+    closing_equity: int | None = None
+    closing_total_pnl: int | None = None
+    closing_holdings: list[ClosingHolding] = field(default_factory=list)
 
 
 # ---- 빌더 ---------------------------------------------------------------
@@ -102,7 +126,8 @@ def build_daily_report(
     """
     discovery_chosen, discovery_blocked = _extract_discovery(events)
     market_gates = _extract_gates(events)
-    buys, liquidations = _extract_trades(events)
+    names = dict(events.symbol_names)
+    buys, liquidations = _extract_trades(events, names)
     error_count = (
         len(events.orders_failed)
         + len(events.liquidations_failed)
@@ -119,6 +144,13 @@ def build_daily_report(
         dry_run = bool(events.orders_simulated or events.liquidations_simulated)
 
     realized_pnl, realized_pnl_pct = _aggregate_pnl(liquidations)
+    closing_cash, closing_equity, closing_total_pnl, closing_holdings = _extract_closing(snapshot)
+    # snapshot.holdings 의 name 도 흡수 — discovery 에 없던 종목(swing 등) 보강.
+    if snapshot is not None and snapshot.snapshot is not None:
+        for h in snapshot.snapshot.holdings:
+            if h.name and h.symbol not in names:
+                names[h.symbol] = h.name
+    chosen_names = {sym: names[sym] for sym in discovery_chosen if sym in names}
 
     note_ko = _summary_ko(
         chosen=discovery_chosen,
@@ -157,6 +189,11 @@ def build_daily_report(
         realized_pnl_pct=realized_pnl_pct,
         excluded_etf_count=excluded,
         rank_candidates=rank_candidates,
+        discovery_chosen_names=chosen_names,
+        closing_cash=closing_cash,
+        closing_equity=closing_equity,
+        closing_total_pnl=closing_total_pnl,
+        closing_holdings=closing_holdings,
     )
 
 
@@ -193,7 +230,9 @@ def _extract_gates(events: LogEvents) -> list[MarketGateInfo]:
     return out
 
 
-def _extract_trades(events: LogEvents) -> tuple[list[TradeRecord], list[LiquidationRecord]]:
+def _extract_trades(
+    events: LogEvents, names: dict[str, str]
+) -> tuple[list[TradeRecord], list[LiquidationRecord]]:
     buys: list[TradeRecord] = []
     buy_prices: dict[str, float] = {}  # symbol -> last buy price (시뮬·실거래 공통)
     for rec in events.orders_simulated:
@@ -205,7 +244,14 @@ def _extract_trades(events: LogEvents) -> tuple[list[TradeRecord], list[Liquidat
         price = _as_float(rec.get("price"))
         if symbol and qty > 0:
             buys.append(
-                TradeRecord(symbol=symbol, side="buy", quantity=qty, price=price, simulated=True)
+                TradeRecord(
+                    symbol=symbol,
+                    side="buy",
+                    quantity=qty,
+                    price=price,
+                    simulated=True,
+                    name=names.get(symbol),
+                )
             )
             if price is not None:
                 buy_prices[symbol] = price
@@ -215,39 +261,85 @@ def _extract_trades(events: LogEvents) -> tuple[list[TradeRecord], list[Liquidat
             continue
         symbol = str(rec.get("symbol", ""))
         qty = _as_int(rec.get("qty")) or 0
+        # 신규: 러너가 봉 종가로 근사한 매수가를 함께 로깅 (시장가 체결가 사후 보정 X).
+        price = _as_float(rec.get("price"))
         if symbol and qty > 0:
             buys.append(
-                TradeRecord(symbol=symbol, side="buy", quantity=qty, price=None, simulated=False)
+                TradeRecord(
+                    symbol=symbol,
+                    side="buy",
+                    quantity=qty,
+                    price=price,
+                    simulated=False,
+                    name=names.get(symbol),
+                )
             )
+            if price is not None:
+                buy_prices[symbol] = price
 
     liqs: list[LiquidationRecord] = []
     for rec in events.liquidations_simulated:
         symbol = str(rec.get("symbol", ""))
         qty = _as_int(rec.get("qty")) or 0
         if symbol and qty > 0:
+            buy_price = _as_float(rec.get("buy_price")) or buy_prices.get(symbol)
             liqs.append(
                 LiquidationRecord(
                     symbol=symbol,
                     quantity=qty,
-                    sell_price=None,  # 시뮬 청산은 시장가 — 가격 미기록
-                    buy_price=buy_prices.get(symbol),
+                    sell_price=_as_float(rec.get("sell_price")),
+                    buy_price=buy_price,
                     simulated=True,
+                    name=names.get(symbol),
                 )
             )
     for rec in events.liquidations_accepted:
         symbol = str(rec.get("symbol", ""))
         qty = _as_int(rec.get("qty")) or 0
         if symbol and qty > 0:
+            buy_price = _as_float(rec.get("buy_price")) or buy_prices.get(symbol)
             liqs.append(
                 LiquidationRecord(
                     symbol=symbol,
                     quantity=qty,
-                    sell_price=None,
-                    buy_price=buy_prices.get(symbol),
+                    sell_price=_as_float(rec.get("sell_price")),
+                    buy_price=buy_price,
                     simulated=False,
+                    name=names.get(symbol),
                 )
             )
     return buys, liqs
+
+
+def _extract_closing(
+    snapshot: RunnerStateSnapshot | None,
+) -> tuple[int | None, int | None, int | None, list[ClosingHolding]]:
+    """러너 종료 시 인메모리 잔고 → 마감 잔고 필드들. snapshot 없으면 모두 비움.
+
+    snapshot.snapshot 이 None 이면(잔고 폴백 실패 등) 마감 잔고도 채우지 않음.
+    숫자는 키움 Decimal 을 정수 won 으로 떨어뜨림 — JSON 직렬화·표시 둘 다 단순.
+    """
+    if snapshot is None or snapshot.snapshot is None:
+        return None, None, None, []
+    raw = snapshot.snapshot
+    cash = int(raw.deposit)
+    equity = int(raw.total_evaluation)
+    total_pnl = int(raw.total_pnl)
+    holdings = [
+        ClosingHolding(
+            symbol=h.symbol,
+            name=h.name,
+            quantity=int(h.quantity),
+            avg_price=float(h.avg_price),
+            current_price=float(h.current_price),
+            market_value=float(h.market_value),
+            pnl=float(h.pnl),
+            pnl_pct=float(h.pnl_pct),
+        )
+        for h in raw.holdings
+        if int(h.quantity) > 0  # 청산 직후 0짜리 잔재는 거름
+    ]
+    return cash, equity, total_pnl, holdings
 
 
 def _aggregate_pnl(liqs: list[LiquidationRecord]) -> tuple[float | None, float | None]:
@@ -339,6 +431,12 @@ def _to_json_dict(report: DailyReport) -> dict[str, Any]:
 
 
 def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
+    chosen_names_raw = payload.get("discovery_chosen_names") or {}
+    chosen_names = {
+        str(k): str(v) for k, v in chosen_names_raw.items() if isinstance(k, str)
+    }
+    closing_holdings_raw = payload.get("closing_holdings") or []
+    closing_holdings = [ClosingHolding(**h) for h in closing_holdings_raw]
     return DailyReport(
         date=payload["date"],
         mode=payload["mode"],
@@ -358,10 +456,16 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
         realized_pnl_pct=payload.get("realized_pnl_pct"),
         excluded_etf_count=int(payload.get("excluded_etf_count") or 0),
         rank_candidates=list(payload.get("rank_candidates") or []),
+        discovery_chosen_names=chosen_names,
+        closing_cash=payload.get("closing_cash"),
+        closing_equity=payload.get("closing_equity"),
+        closing_total_pnl=payload.get("closing_total_pnl"),
+        closing_holdings=closing_holdings,
     )
 
 
 __all__ = [
+    "ClosingHolding",
     "DailyReport",
     "LiquidationRecord",
     "MarketGateInfo",

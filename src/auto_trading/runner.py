@@ -368,12 +368,15 @@ class PaperRunner:
         """REST 송신 + 성공·실패 분기. 성공 시 로컬 포지션·평단 즉시 갱신, notifier 양방향."""
         try:
             result = await place_order(rest, order)
+            # 시장가는 order.price=None. 봉 종가로 근사 — 정확한 체결가는 사후 잔고 갱신 시점에.
+            ref_price = float(order.price or Decimal(str(bar.close)))
             log.info(
                 "runner.order_accepted",
                 order_no=result.order_no,
                 symbol=order.symbol,
                 side=order.side.value,
                 qty=order.quantity,
+                price=ref_price,
             )
             await self.notifier.notify(
                 "runner.order_accepted",
@@ -386,7 +389,7 @@ class PaperRunner:
             delta = order.quantity if order.side is Side.BUY else -order.quantity
             account.positions[order.symbol] = max(0, account.positions.get(order.symbol, 0) + delta)
             if order.side is Side.BUY:
-                account.avg_prices[order.symbol] = float(order.price or Decimal(str(bar.close)))
+                account.avg_prices[order.symbol] = ref_price
         except Exception as exc:
             log.error(
                 "runner.order_failed",
@@ -535,6 +538,7 @@ class PaperRunner:
                 quantity=qty,
                 order_type=OrderType.MARKET,
             )
+            buy_price = account.avg_prices.get(symbol)
             if self.dry_run:
                 log.info(
                     "runner.liquidate_simulated",
@@ -542,6 +546,7 @@ class PaperRunner:
                     side="sell",
                     qty=qty,
                     reason=reason,
+                    buy_price=buy_price,
                 )
                 # 시뮬에서도 로컬 포지션 즉시 0 으로 — 다음 청산 호출이 idempotent.
                 account.positions[symbol] = 0
@@ -553,6 +558,7 @@ class PaperRunner:
                     order_no=result.order_no,
                     symbol=symbol,
                     qty=qty,
+                    buy_price=buy_price,
                 )
                 account.positions[symbol] = 0
             except Exception as exc:
