@@ -414,6 +414,9 @@ class PaperRunner:
                 price=action.price,
                 dry_run=True,
             )
+            # 23단계 Phase D — quantity 0 면 last_exit_ts + guard reset.
+            if account.positions.get(action.symbol, 0) <= 0:
+                self._mark_exit(action.symbol, bar.ts)
             return
         # 실거래 송신 — _place_and_track 재사용. 성공 시 로컬 포지션 차감 + 알림은 그쪽이 처리.
         await self._place_and_track(rest, order, bar, account)
@@ -500,6 +503,9 @@ class PaperRunner:
                 account.avg_prices[order.symbol] = ref_price
                 # 23단계 Phase B — 일일 매수대금 누적. 실패 시(except 분기) 누적 X.
                 account.today_notional_used += ref_price * order.quantity
+            # 23단계 Phase D — SELL 로 잔량 0 이면 last_exit_ts 갱신 + guard reset.
+            if order.side is Side.SELL and account.positions.get(order.symbol, 0) <= 0:
+                self._mark_exit(order.symbol, bar.ts)
         except Exception as exc:
             log.error(
                 "runner.order_failed",
@@ -514,6 +520,18 @@ class PaperRunner:
                 side=order.side.value,
                 qty=order.quantity,
             )
+
+    def _mark_exit(self, symbol: str, ts: datetime) -> None:
+        """SELL 로 잔량 0 이 됐을 때의 정리 — 23단계 Phase D.
+
+        - 해당 종목의 strategy.state["last_exit_ts"] = ts (다회 진입 전략의 쿨다운 기준).
+        - PositionGuard.reset(symbol) — 재진입 시 highest_seen·partial_taken 초기화.
+        """
+        strat = self.strategies.get(symbol)
+        if strat is not None:
+            strat.state["last_exit_ts"] = ts
+        if self.position_guard is not None:
+            self.position_guard.reset(symbol)
 
     def state_snapshot(self) -> RunnerStateSnapshot:
         """텔레그램 명령 핸들러가 호출하는 읽기 전용 스냅샷.
