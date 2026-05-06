@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Awaitable, Callable
 from datetime import date, datetime, time
 from pathlib import Path
 
@@ -27,7 +26,7 @@ from ._common import KST
 from .account.balance import get_balance
 from .backtest.engine import Backtester, save_result
 from .config import get_settings
-from .daytrade.orchestrator import discover_and_arm
+from .daytrade.cli_helpers import paper_day_main, paper_day_with_commands
 from .kiwoom.rest import KiwoomRestClient
 from .market.chart import bars_to_dataframe, get_daily_bars
 from .market.quote import get_quote
@@ -427,7 +426,12 @@ def paper_day(
         f" · top_n={top_n} · {'dry-run' if dry_run else '실주문'}"
     )
 
-    on_insight = _build_insight_callback() if get_settings().has_anthropic else None
+    on_insight = None
+    if get_settings().has_anthropic:
+        on_insight = insight_mod.build_insight_callback(
+            _build_anthropic_client(),  # type: ignore[arg-type]
+            model=get_settings().anthropic_model,
+        )
     handler = build_command_handler(
         runner.state_snapshot,
         on_pause=runner.pause,
@@ -440,7 +444,7 @@ def paper_day(
     try:
         if handler is None:
             asyncio.run(
-                _paper_day_main(
+                paper_day_main(
                     runner,
                     top_n=top_n,
                     discover_delay=discover_delay_sec,
@@ -450,7 +454,7 @@ def paper_day(
         else:
             console.print("[cyan]텔레그램 인커밍 명령 폴링 활성[/cyan]")
             asyncio.run(
-                _paper_day_with_commands(
+                paper_day_with_commands(
                     runner,
                     handler,
                     top_n=top_n,
@@ -460,127 +464,6 @@ def paper_day(
             )
     except KeyboardInterrupt:
         console.print("[yellow]사용자 중단.[/yellow]")
-
-
-async def _paper_day_main(
-    runner: PaperRunner, *, top_n: int, discover_delay: int, exclude_etf: bool
-) -> None:
-    """러너를 백그라운드로 시동 + discover_and_arm 으로 universe 주입."""
-    runner_task = asyncio.create_task(runner.run(), name="paper-day-runner")
-    discover_task = asyncio.create_task(
-        _delayed_discover(runner, top_n=top_n, delay=discover_delay, exclude_etf=exclude_etf),
-        name="day-discover",
-    )
-    try:
-        await runner_task  # 청산 시각 도달 후 자기 종료
-    finally:
-        discover_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await discover_task
-
-
-async def _paper_day_with_commands(
-    runner: PaperRunner,
-    handler: TelegramCommandHandler,
-    *,
-    top_n: int,
-    discover_delay: int,
-    exclude_etf: bool,
-) -> None:
-    """텔레그램 명령 동시 폴링 버전."""
-    runner_task = asyncio.create_task(runner.run(), name="paper-day-runner")
-    cmd_task = asyncio.create_task(handler.run(), name="tg-commands")
-    discover_task = asyncio.create_task(
-        _delayed_discover(runner, top_n=top_n, delay=discover_delay, exclude_etf=exclude_etf),
-        name="day-discover",
-    )
-    try:
-        done, pending = await asyncio.wait(
-            {runner_task, cmd_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for t in pending:
-            t.cancel()
-        for t in pending:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await t
-        for t in done:
-            t.result()
-    finally:
-        discover_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await discover_task
-        await handler.aclose()
-
-
-async def _delayed_discover(
-    runner: PaperRunner, *, top_n: int, delay: int, exclude_etf: bool = True
-) -> None:
-    """러너 시동 후 `delay` 초 대기 → discover_and_arm.
-
-    실패해도 러너 자체는 청산 시계로 종료될 수 있게 예외를 swallow + 로그.
-    """
-    log = structlog.get_logger("daytrade.cli")
-    if delay > 0:
-        await asyncio.sleep(delay)
-    try:
-        async with KiwoomRestClient() as rest:
-            result = await discover_and_arm(rest, runner, top_n=top_n, exclude_etf=exclude_etf)
-        console.print(f"[cyan]발굴 결과:[/cyan] {result.note_ko}")
-        await runner.notifier.notify(
-            "daytrade.discovery_done",
-            chosen=[c.symbol for c in result.chosen],
-            blocked=result.blocked,
-            note=result.note_ko,
-        )
-        # universe 0 건이면 set_universe() 호출되지 않아 _universe_ready 도 안 set 된다.
-        # 청산 시계 task 는 ws.start 이후에 시작되므로 universe 대기 중엔 안 돔 →
-        # 러너가 무한 hang. 발굴 실패와 동일하게 명시적으로 stop 트리거.
-        # (5/3 21:42 dry-run 에서 게이트 차단으로 chosen=[] → 6시간 hang 실증.)
-        if not result.chosen:
-            log.info("daytrade.no_candidates_stopping")
-            runner.request_stop()
-    except Exception as exc:
-        log.error("daytrade.discover_failed", error=str(exc), exc_info=exc)
-        # 발굴 실패 — universe 안 채워지므로 명시적 stop 으로 hang 회피.
-        runner.request_stop()
-
-
-def _build_insight_callback(
-    *, days: int = 7, reports_root: Path = Path("data/reports")
-) -> Callable[[], Awaitable[str]]:
-    """텔레그램 `/insight` 가 호출하면 직전 N일 리포트로 LLM 인사이트 생성.
-
-    무엇/왜:
-    - paper-day 러너 안에서 호출됨 — hot path 가 아니지만 LLM 콜은 동기 SDK.
-      `asyncio.to_thread` 로 별도 스레드에서 돌려 이벤트 루프 안 막음.
-    - Anthropic 키 없으면 호출자 (paper-day CLI) 가 None 으로 주입 — 본 함수가 직접
-      Exit(1) 하면 러너 시동 자체가 막힌다. 키 검사는 paper-day 가 책임.
-    """
-    from anthropic import Anthropic
-
-    s = get_settings()
-    client = Anthropic(api_key=s.anthropic_api_key.get_secret_value())
-
-    async def _runner() -> str:
-        reports = insight_mod.collect_recent_reports(root=reports_root, days=days)
-        if not reports:
-            return (
-                "🧭 인사이트 생성 불가 — 직전 일일 리포트 데이터가 없습니다.\n"
-                "(paper-day 가 며칠 운영된 후 다시 시도하세요.)"
-            )
-        date_range = (reports[0].date, reports[-1].date)
-        response = await asyncio.to_thread(
-            insight_mod.insight,
-            reports,
-            client=client,
-            model=s.anthropic_model,
-        )
-        return insight_mod.format_insight_message(
-            response, days=len(reports), date_range=date_range
-        )
-
-    return _runner
 
 
 def _build_anthropic_client() -> object:

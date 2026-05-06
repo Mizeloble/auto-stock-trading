@@ -13,7 +13,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import asyncio
+from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -255,10 +256,41 @@ def format_insight_message(
     return "\n".join(lines)
 
 
+def build_insight_callback(
+    client: _AnthropicLike,
+    *,
+    days: int = 7,
+    reports_root: Path = Path("data/reports"),
+    model: str = "claude-opus-4-7",
+) -> Callable[[], Awaitable[str]]:
+    """텔레그램 `/insight` → 직전 N일 리포트로 LLM 인사이트 생성하는 비동기 콜백.
+
+    paper-day 러너 안에서 호출됨 — hot path 가 아니지만 LLM 콜은 동기 SDK.
+    `asyncio.to_thread` 로 별도 스레드에서 돌려 이벤트 루프 안 막음.
+
+    Anthropic 클라이언트 생성은 호출자 책임 — 키 없으면 호출자가 콜백을 주입하지
+    않아야 한다(이 함수가 직접 Exit/검사하면 러너 시동을 막을 수 있음).
+    """
+
+    async def _runner() -> str:
+        reports = collect_recent_reports(root=reports_root, days=days)
+        if not reports:
+            return (
+                "🧭 인사이트 생성 불가 — 직전 일일 리포트 데이터가 없습니다.\n"
+                "(paper-day 가 며칠 운영된 후 다시 시도하세요.)"
+            )
+        date_range = (reports[0].date, reports[-1].date)
+        response = await asyncio.to_thread(insight, reports, client=client, model=model)
+        return format_insight_message(response, days=len(reports), date_range=date_range)
+
+    return _runner
+
+
 __all__ = [
     "PROPOSE_INSIGHT_TOOL",
     "SYSTEM_PROMPT_KO",
     "InsightResponse",
+    "build_insight_callback",
     "collect_recent_reports",
     "format_insight_message",
     "insight",
