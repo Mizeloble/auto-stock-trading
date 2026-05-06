@@ -432,9 +432,7 @@ def _to_json_dict(report: DailyReport) -> dict[str, Any]:
 
 def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
     chosen_names_raw = payload.get("discovery_chosen_names") or {}
-    chosen_names = {
-        str(k): str(v) for k, v in chosen_names_raw.items() if isinstance(k, str)
-    }
+    chosen_names = {str(k): str(v) for k, v in chosen_names_raw.items() if isinstance(k, str)}
     closing_holdings_raw = payload.get("closing_holdings") or []
     closing_holdings = [ClosingHolding(**h) for h in closing_holdings_raw]
     return DailyReport(
