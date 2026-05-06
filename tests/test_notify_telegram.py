@@ -168,3 +168,16 @@ async def test_runner_liquidate_done_korean_format(notifier: TelegramNotifier) -
     assert "청산 완료" in text
     assert "2종목" in text
     assert "dry-run" in text
+
+
+async def test_runner_kill_switch_korean_format(notifier: TelegramNotifier) -> None:
+    """23단계 Phase B — 일일 손실 한도 강제 청산 알림."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify("runner.kill_switch_triggered", daily_loss_limit=0.03)
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "일일 손실 한도 도달" in text
+    assert "-3.0%" in text
+    assert "강제 청산" in text

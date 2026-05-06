@@ -47,6 +47,9 @@ class AccountState:
     positions: dict[str, int] = field(default_factory=dict)  # symbol -> 수량
     avg_prices: dict[str, float] = field(default_factory=dict)  # symbol -> 평단가
     day_start_equity: float = 0.0  # 당일 시작 에쿼티 (손실 한도 계산용)
+    # 23단계 Phase B — 일일 누적 매수대금. 매수 체결·시뮬마다 러너가 누적, 잔고 갱신 시
+    # 보존(이전 값 그대로 carry-over). 자정 리셋은 러너 재시작이 자연스럽게 처리.
+    today_notional_used: float = 0.0
 
 
 @dataclass
@@ -55,6 +58,10 @@ class RiskLimits:
     max_portfolio_exposure: float = 0.80  # 현금+주식 중 주식 80% 한도
     daily_loss_limit: float = 0.03  # 당일 -3% 시 신규 진입 차단
     min_order_value: float = 10_000.0  # 너무 작은 주문 차단 (수수료 손해)
+    # 23단계 Phase B — 보수적 기본은 비활성(0/False). 활성은 명시적 설정 필요.
+    max_order_value: float = 0.0  # 1회 주문 절대 한도(원). 0 이면 무제한
+    daily_notional_limit: float = 0.0  # 일일 총 매수대금 한도(원). 0 이면 무제한
+    daily_loss_kill: bool = False  # True 면 daily_loss 도달 시 보유 강제 청산 + 정지
 
 
 @dataclass
@@ -125,6 +132,23 @@ class RiskManager:
         budget = min(remaining_budget, exposure_cap, deposit_d)
         budget *= weight
 
+        # 4) 23단계 Phase B — 1회 주문 절대 한도 (max_order_value > 0 일 때만 적용)
+        max_order = Decimal(str(self.limits.max_order_value))
+        if max_order > 0 and budget > max_order:
+            budget = max_order
+
+        # 5) 23단계 Phase B — 일일 누적 매수대금 한도
+        daily_cap = Decimal(str(self.limits.daily_notional_limit))
+        if daily_cap > 0:
+            used = Decimal(str(account.today_notional_used))
+            remaining = max(Decimal(0), daily_cap - used)
+            if remaining <= 0:
+                reason = f"daily notional limit reached ({float(used):,.0f}/{float(daily_cap):,.0f})"
+                log.info("risk.reject", reason=reason, symbol=signal.symbol)
+                return RiskDecision(Decision.REJECT, reason=reason)
+            if budget > remaining:
+                budget = remaining
+
         if budget < min_order:
             reason = f"budget too small ({int(budget)})"
             log.info("risk.reject", reason=reason, symbol=signal.symbol)
@@ -142,3 +166,20 @@ class RiskManager:
             price=signal.price_hint,
         )
         return RiskDecision(Decision.APPROVE, order=order, reason="buy approved")
+
+    def should_force_liquidate(self, account: AccountState) -> bool:
+        """일일 손실 한도 도달 + `daily_loss_kill` 활성 시 True (kill switch).
+
+        무엇/왜:
+        - `evaluate()` 의 daily_loss 게이트는 신규 BUY 만 차단 — 보유분은 그대로 들고감.
+        - kill switch 는 True 가 되면 러너가 `liquidate_all + request_stop` 으로 즉시 정리.
+        - 기본 비활성. 사용자가 `daily_loss_kill=True` 명시적으로 켜야 동작.
+
+        어떻게 확인: tests/test_risk_manager.py 의 kill switch 케이스에서 검증.
+        """
+        if not self.limits.daily_loss_kill:
+            return False
+        if account.day_start_equity <= 0:
+            return False
+        today_change = account.total_equity / account.day_start_equity - 1.0
+        return today_change <= -abs(self.limits.daily_loss_limit)

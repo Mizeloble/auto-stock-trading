@@ -247,6 +247,23 @@ class PaperRunner:
                         ).total_seconds() >= self.balance_refresh_sec:
                             account = await self._snapshot_account(rest, previous=account)
                             last_refresh = datetime.now()
+                            # 23단계 Phase B — 일일 손실 한도 도달 + kill switch 활성 시 강제 청산.
+                            if self.risk.should_force_liquidate(account):
+                                log.warning(
+                                    "runner.kill_switch_triggered",
+                                    today_change=(
+                                        account.total_equity / account.day_start_equity - 1.0
+                                        if account.day_start_equity
+                                        else 0.0
+                                    ),
+                                    daily_loss_limit=self.risk.limits.daily_loss_limit,
+                                )
+                                await self.notifier.notify(
+                                    "runner.kill_switch_triggered",
+                                    daily_loss_limit=self.risk.limits.daily_loss_limit,
+                                )
+                                await self.liquidate_all(rest, account, reason="daily_loss_kill")
+                                self.request_stop()
                 finally:
                     self._ws = None
                     await ws.stop()
@@ -297,12 +314,15 @@ class PaperRunner:
         avg_prices = {h.symbol: float(h.avg_price) for h in snap.holdings}
         equity = float(snap.total_evaluation) or float(snap.deposit)
         day_start = previous.day_start_equity if previous and previous.day_start_equity else equity
+        # 23단계 Phase B — 잔고 갱신은 누적 매수대금을 리셋하지 않음 (러너 재시작 = 자정 리셋).
+        today_notional = previous.today_notional_used if previous is not None else 0.0
         state = AccountState(
             deposit=float(snap.deposit),
             total_equity=equity,
             positions=positions,
             avg_prices=avg_prices,
             day_start_equity=day_start,
+            today_notional_used=today_notional,
         )
         # 텔레그램 명령 응답을 위해 raw + derived 둘 다 보존.
         self._snapshot = snap
@@ -352,13 +372,17 @@ class PaperRunner:
             )
             return None
         if self.dry_run:
+            sim_price = float(order.price) if order.price else bar.close
             log.info(
                 "runner.order_simulated",
                 symbol=order.symbol,
                 side=order.side.value,
                 qty=order.quantity,
-                price=float(order.price) if order.price else bar.close,
+                price=sim_price,
             )
+            # 23단계 Phase B — dry-run BUY 도 일일 누적에 포함 (한도 검증 회로 똑같이 흘러야).
+            if order.side is Side.BUY:
+                account.today_notional_used += sim_price * order.quantity
             return None
         return order
 
@@ -390,6 +414,8 @@ class PaperRunner:
             account.positions[order.symbol] = max(0, account.positions.get(order.symbol, 0) + delta)
             if order.side is Side.BUY:
                 account.avg_prices[order.symbol] = ref_price
+                # 23단계 Phase B — 일일 매수대금 누적. 실패 시(except 분기) 누적 X.
+                account.today_notional_used += ref_price * order.quantity
         except Exception as exc:
             log.error(
                 "runner.order_failed",
