@@ -339,9 +339,10 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 ### 체험 확인 (사용자가 직접 — 머지 후)
 
 - [x] **probe 실측** · 5/3 3차에 걸쳐 진행 → PR #24/#25/#26 으로 endpoints·필드·ETF 필터 모두 보정. 4건 호출 모두 `return_code=0` + 응답 본체 매핑까지 확정.
-- [~] **dry-run 종일** · 5/3 21:42 1차 검증 → 약세장 `chosen=[]` 흐름(자기 종료 + 텔레그램 한국어 안내)까지 검증됨. **남은 검증**: 매수가 들어가는 날의 발굴→매수→15:15 일괄 청산 풀 사이클 (강세 종목 노출되는 평일에).
+- [x] **dry-run 종일** · 5/3 21:42 1차(약세장 `chosen=[]` 자기 종료) + 5/6 강세장 풀 사이클(KOSPI 게이트 통과 → 005930·001500·006800 균등 매수 시뮬 → 15:15 청산 → 일일 리포트 푸시) 검증됨.
 - [x] **launchd 전환** · day-trade plist 등록 + `kickstart -k` 즉시 시동 검증 (2026-05-05 21:53 KST). 발굴(018880·010170·001510, ETF 53건 제외) → 시장 게이트 통과 → `ws.subscribe`/`ws.connected` → 청산시각 경과로 graceful stop 까지 풀 흐름. 텔레그램 3종 푸시(🔍 발굴 완료 / ▶️ paper 시작 / ⏹ paper 정지) 도착 확인.
-- [ ] **실주문 전환**: 며칠 dry-run 검증 후 사용자 명시 승인이 있을 때만 `paper-day-mode.sh` 의 `--dry-run` 을 `--no-dry-run` 으로.
+- [x] **mock 실주문 전환** (2026-05-06 사용자 승인) · `paper-day-mode.sh` 의 `--dry-run` 을 `--no-dry-run` 으로 변경. KIWOOM_MODE=mock 유지(진짜 돈 X) 하면서 키움 모의투자 서버에 실제 주문 송신 → 체결/잔고/청산 라이프사이클 검증 단계. real 전환은 별도 명시 승인 필요.
+- [ ] **mock 실주문 검증 관찰** · 다음 평일 실행 후 `logs/paper-day-YYYY-MM-DD.log` 에 `runner.order_accepted`(`order_simulated` 가 안 보여야 OK) + `runner.liquidate_accepted` + 키움 mock 잔고에 실제 보유/realized PnL 반영 확인. 며칠 안정적이면 real 전환 후보.
 
 ---
 

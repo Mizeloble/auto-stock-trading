@@ -24,10 +24,12 @@ mkdir -p logs
 
 LOG="logs/paper-day-$(date +%Y-%m-%d).log"
 
-# 운영 사양 변경(top_n, 청산 시각 등) 은 이 줄만 수정. --dry-run 은 모의 시뮬.
-# 실주문 전환은 며칠 dry-run 검증 후 사용자 명시 승인 필요 — 그때만 --no-dry-run 으로.
+# 운영 사양 변경(top_n, 청산 시각 등) 은 이 줄만 수정.
+# KIWOOM_MODE=mock 인 한 진짜 돈은 안 움직임. --no-dry-run 은 키움 모의투자 서버에
+# 실제 주문을 보내(체결/잔고/청산 라이프사이클 검증), 결과가 mock 잔고에 반영되도록 함.
+# real(실거래) 전환은 사용자 명시 승인이 있을 때만 KIWOOM_MODE 를 real 로 바꾼다.
 exec "$CAFFEINATE" -i "$UV_BIN" run auto-trade paper-day \
   --top-n 3 \
   --liquidate 15:15 \
-  --dry-run \
+  --no-dry-run \
   >> "$LOG" 2>&1
