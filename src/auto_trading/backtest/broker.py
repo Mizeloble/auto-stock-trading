@@ -3,8 +3,8 @@
 실제 체결의 단순화된 모델:
 - 지정가/시장가 구분 없이 **다음 봉 시가**에 체결 (look-ahead 방지)
 - 수수료: 매수/매도 각 0.015% (실제 증권사 평균 수준)
-- 거래세: **매도 시** 0.18% (KOSPI/KOSDAQ 평균. 2025년 기준 값이며 변동 가능)
-- 슬리피지: 기본 0 bp. 필요 시 외부에서 주입.
+- 거래세: **매도 시** 0.20% (KOSPI/KOSDAQ. 2026년 인상 반영, 이전 0.18%)
+- 슬리피지: 기본 5 bp = 0.05% (시장가 체결 시 호가창 차이 보수적 추정)
 
 변경 시 `__init__` 파라미터 기본값을 조정한다.
 """
@@ -56,8 +56,8 @@ class Position:
 class SimulatedBroker:
     cash: float
     commission_rate: float = 0.00015  # 0.015%
-    tax_rate_sell: float = 0.0018  # 0.18% 매도 시
-    slippage_bps: float = 0.0  # 1bp = 0.01%
+    tax_rate_sell: float = 0.0020  # 0.20% 매도 시 (2026년 인상 반영)
+    slippage_bps: float = 5.0  # 1bp = 0.01% — 5bp = 0.05% 시장가 체결 보수적 기본
     positions: dict[str, Position] = field(default_factory=dict)
     trades: list[Trade] = field(default_factory=list)
 

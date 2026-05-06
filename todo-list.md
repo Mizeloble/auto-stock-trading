@@ -382,6 +382,114 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 
 ---
 
+## 🎯 23단계 · paper-day 정통 데이트레이딩 전환 (C 옵션) — **진행 중** (2026-05-06 ~)
+
+현재 paper-day 는 09:00 첫 봉 1회 매수 → 15:15 일괄 청산의 단발 형태. 정통 데이트레이딩에 필요한 위험 통제(stop·트레일링·일일 강제청산), 수익 보존(부분 익절), 비용 가시화, 다회 진입, 지수 일중 모멘텀 트리거를 8개 Phase 로 나눠 추가. 각 Phase = 1 PR. Plan: `~/.claude/plans/c-witty-hartmanis.md`.
+
+### Phase A · 비용 모델 갱신 + 일일 리포트 비용 차감 PnL — **✅ 완료** (2026-05-06)
+
+- [x] **`backtest/broker.py` + `engine.py`** · `tax_rate_sell` 0.0018 → **0.0020** (2026 거래세 인상). `slippage_bps` 0 → **5.0** (0.05% 보수적). docstring·CLAUDE.md 표기 갱신.
+- [x] **`reports/daily.py`** · `DailyReport` 에 `total_fees`/`total_taxes`/`total_slippage`/`realized_pnl_after_cost` 4개 필드 + `_estimate_costs` 함수. broker 의 비용 상수와 일치하는 단일 진실 출처 상수(`COST_*`) 별도 정의 — reports/ 가 backtest/ 를 import 하지 않도록(외부 호출 금지 규칙).
+- [x] **`notify/state.format_daily_report`** · realized_pnl 과 차감치가 다를 때만 "💸 비용 차감 PnL: ±X,XXX원" 별도 라인.
+- [x] **테스트** · `tests/test_reports_daily.py` 비용 4건 추가 (정상 추정·완전 라운드트립·매매0/가격None 시 None) + `tests/test_notify_state_daily_report.py` 비용 라인 표시·생략 2건 추가 + `tests/test_backtest_engine.py` 슬리피지 0 명시 주입 회귀 1건 갱신. 271/271 PASS, ruff/mypy 클린.
+- [ ] **검증** (사용자): `uv run auto-trade report --date <오늘> --push` 또는 다음 paper-day 자동 푸시에서 "💸 비용 차감 PnL" 라인 도착 확인.
+
+### Phase B · 1회/일일 절대금액 한도 + kill switch
+
+- [ ] **`risk/manager.py`** · `RiskLimits` 에 `max_order_value` (1회 주문 원화 절대 한도, 0=무제한), `daily_notional_limit` (일일 총 매수대금, 0=무제한), `daily_loss_kill` (True 면 강제 청산) 추가. 기본값 모두 보수 측 비활성.
+- [ ] **`AccountState`** · `today_notional_used: float` 필드. 러너가 매수 체결 후 갱신.
+- [ ] **`should_force_liquidate(account) -> bool`** · 새 메서드. 러너 사이클 끝에 호출 → True 면 `liquidate_all` + `request_stop`.
+- [ ] **테스트** · `tests/test_risk_manager.py` 4건 — 1회 초과 거절, 일일 노셔널 초과 거절, kill switch 트리거, 기본값 0 무제한 정상.
+- [ ] **검증**: `--max-order-value 100000 --daily-notional 500000` mock dry-run 에서 한도 도달 시 `risk.reject` 로그.
+
+### Phase C · 종목별 stop-loss + 트레일링 + 부분 익절 (PositionGuard)
+
+- [ ] **`risk/position_guard.py`** · 신규 모듈. 종목별 상태(`avg_price`, `highest_seen`, `partial_taken`) 추적. `check(symbol, price, position) -> SellSignal | None`.
+- [ ] **`RiskLimits`** · `stop_loss_pct`, `trailing_stop_pct`, `partial_take_pct`, `partial_take_qty_ratio` 추가 (기본 0=비활성).
+- [ ] **러너 통합** · 매 봉 끝에 `position_guard.check` → 강제 SELL 시그널 직통 → Order. 전략 `on_bar` 와 별개 채널, 구조화 로그 `position_guard.{stop_loss|trailing|partial_take}`.
+- [ ] **테스트** · `tests/test_position_guard.py` — stop 발동, 트레일 발동, 부분 익절 후 트레일, 모두 비활성 무동작.
+- [ ] **검증**: 가짜 가격 시나리오 mock dry-run 에서 stop/trail/partial 로그 시퀀스 확인.
+
+### Phase D · 다회 진입 + 쿨다운 (IndexMomentumDayTrade 신규)
+
+- [ ] **`strategy/index_daytrade.py`** · 새 전략 `IndexMomentumDayTrade` (`@register("index_momentum_daytrade")`). 단발 제약 X. 진입 조건 1차: "포지션 0 + 마지막 청산 후 `cooldown_min` 분 경과".
+- [ ] **state 추적** · `last_exit_ts` per symbol. 청산은 PositionGuard + liquidate_at 가 처리.
+- [ ] **기존 IntradayMomentum 유지** · 후방 호환. registry 에 둘 다 등록.
+- [ ] **테스트** · `tests/test_strategy_index_daytrade.py` — 진입 후 청산 → 쿨다운 → 재진입 시퀀스 검증.
+
+### Phase E · 지수(KOSPI/KOSDAQ) 일중 모멘텀 시세
+
+- [ ] **`kiwoom/endpoints.py`** · 지수 분봉 차트 path 확인/추가 (현재 `PATH_CHART` 가 분봉 지원하면 그대로, 아니면 `ka20012` 같은 분봉 TR 신규).
+- [ ] **`market/index.py`** · `index_momentum(rest, market, lookback_min=5) -> IndexMomentum(market, last, lookback_return_pct, ts)`. 60초 TTL 캐시.
+- [ ] **테스트** · `tests/test_market_index.py` 분봉 fake fixture 로 모멘텀 계산 검증.
+
+### Phase F · 지수 모멘텀 게이트를 IndexMomentumDayTrade 에 결합
+
+- [ ] **전략 파라미터** · `momentum_lookback_min`, `momentum_threshold_pct` 추가. 진입 조건에 "지수 모멘텀 ≥ threshold" AND.
+- [ ] **`daytrade/orchestrator.py`** · 지수 모멘텀 1분 갱신 task. `Bar.meta` 또는 `StrategyContext` 로 전략에 주입 (전략이 직접 REST 안 부르도록).
+- [ ] **테스트** · 지수 모멘텀 fixture 로 게이트 통과/차단 통합 검증.
+
+### Phase G · paper-day --profile + day-trade YAML 프로파일
+
+- [ ] **`cli.py paper_day`** · `--profile <yaml>` 옵션. 지정 시 YAML 의 `strategy` + `params` 로 universe·게이트·한도 일괄 적용.
+- [ ] **`strategy/profile.py StrategyProfile`** · day-trade 키(`top_n`, `cooldown_min`, `momentum_*`, `stop_pct`, `trail_pct`, `partial_take_*`, `max_order_value`, `daily_notional_limit`, `daily_loss_kill`) 허용. `symbol` optional.
+- [ ] **`strategies/profiles/daytrade-default.yaml`** · 샘플 프로파일 추가. 모든 새 파라미터 노출 + 한국어 주석.
+- [ ] **테스트** · `tests/test_cli_paper_day.py` `--profile` 케이스.
+
+### Phase H · 텔레그램 5분 요약 throttle
+
+- [ ] **`notify/throttle.py`** · `ThrottledNotifier` 가 5분 윈도우의 매수/부분익절/stop 이벤트를 1개 요약 메시지로. 중요 이벤트(kill switch·시작·종료·시스템 에러) 는 즉시 푸시(throttle 우회).
+- [ ] **`notify/telegram.py`** · 옵셔널 `--telegram-throttle` 플래그로 wrap 활성/비활성.
+- [ ] **테스트** · `tests/test_notify_throttle.py` 5분 안 N건 → 1개 요약 + 중요 이벤트 즉통과.
+
+### 23단계 검증 (전 Phase 완료 시)
+
+- [ ] `uv run pytest` 전부 PASS (신규 LOC ~600 + 테스트 ~500 예상).
+- [ ] mock `uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run` 에서 `daytrade.universe_chosen` → `index.momentum` → `runner.order_simulated`(×N) → `position_guard.{stop|trailing|partial}` 1개 이상 → `runner.liquidate_simulated` → `runner.stopped` 시퀀스.
+- [ ] daily report JSON 에 `realized_pnl_after_cost` 정상.
+- [ ] kill switch 시뮬에서 강제 청산 + 종료 흐름.
+
+---
+
+## 🗞 24단계 · 주간 뉴스 → 다음 주 day-trade 전략 자동 반영
+
+토요일 09:00 KST 인사이트 cron 에 뉴스 수집·LLM 분석·YAML 프로파일 자동 갱신 단계 추가. LLM 호출은 주 1회 한정 ([feedback_llm_cost](memory)). 23단계 G(--profile) 가 머지된 뒤 진행.
+
+### Phase A · 네이버 금융 RSS/공시 뉴스 수집기
+
+- [ ] **`news/collector.py`** · feedparser 의존 추가 (`uv add feedparser`). 네이버 금융 뉴스 RSS + DART 공시 RSS(선택). User-Agent 명시·robots.txt 준수·feed 비면 빈 리스트 안전 종료.
+- [ ] **`NewsItem(title, summary, url, published_at, source, tickers)`** · dataclass. 종목 코드 추출은 6자리 + KOSPI/KOSDAQ 키워드 정규식.
+- [ ] **`collect_recent_news(days=7) -> list[NewsItem]`** · `data/news/YYYY-MM-DD.json` 캐시. 매일 호출 가능.
+- [ ] **테스트** · `tests/test_news_collector.py` fake feed parser fixture.
+
+### Phase B · 주간 LLM 입력에 뉴스 + 다음주 프로파일 제안
+
+- [ ] **`notify/insight.py`** · 새 함수 `build_strategy_proposal_callback`. 입력: 5일 daily reports + 7일 뉴스 헤드라인 50건. 출력: `DaytradeProposal` (stop_pct, trail_pct, partial_take_pct, momentum_*, top_n, themes_to_watch[], symbols_to_avoid[], rationale_ko).
+- [ ] **강제 도구** · `propose_daytrade_profile` tool_use, Pydantic 검증. 토큰 예산: input ~3000 / output ~800.
+- [ ] **테스트** · 모킹된 Anthropic 응답으로 프로파일 추출 검증.
+
+### Phase C · daytrade-current.yaml 자동 갱신 + 백업 + 알림
+
+- [ ] **`news/profile_writer.py`** · `DaytradeProposal` → `strategies/profiles/daytrade-current.yaml`. 기존 파일 `daytrade-current.yaml.bak.YYYY-MM-DD` 로 백업.
+- [ ] **안전장치** · `stop_pct ≤ 3%`, `top_n ≤ 5`, `daily_loss_kill 강제 True` 등 한도 벗어나면 적용 거부 + 경고 텔레그램.
+- [ ] **변경 diff 푸시** · "다음 주 stop_pct 0.8% → 1.0% 로 완화. 사유: 변동성 ↑" 형식 한국어 요약.
+- [ ] **테스트** · `tests/test_profile_writer.py` 정상 갱신 / 한도 초과 거부 / 백업 생성.
+
+### Phase D · 토요일 cron 통합 + paper-day 자동 사용
+
+- [ ] **`scripts/insight-weekly.sh`** · 뉴스 수집 + 프로파일 작성 단계 체이닝.
+- [ ] **`scripts/launchd/com.mizeloble.auto-trade.paper-day.plist`** · 실행 명령에 `--profile strategies/profiles/daytrade-current.yaml` 추가. 파일 없으면 paper-day 가 기본값 폴백.
+- [ ] **월요일 첫날 알림** · 08:55 시동 시 텔레그램에 "이번 주 사용 프로파일: stop_pct=X, momentum_threshold=Y…" 한 줄 푸시 (사용자가 토요일 변경 못 봤을 경우 대비).
+- [ ] **`manual.md` §11** · "주간 뉴스 자동 반영" 섹션 추가.
+
+### 24단계 검증 (전 Phase 완료 시)
+
+- [ ] 토요일 09:00 KST 에 7일 뉴스 수집 + LLM 1회 + `daytrade-current.yaml` 갱신 + 텔레그램 변경 요약 도착.
+- [ ] 한도 초과 응답 시 자동 거부 + 경고 푸시.
+- [ ] 다음 월요일 08:55 시동 시 "이번 주 사용 프로파일" 푸시.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후). 사전 검토: 집 맥북 launchd 의존이 실거래 신뢰성에 충분한지 — 부족하다고 판단되면 그 시점에 systemd(Oracle 무료/한국 리전) 이전을 같이 진행.

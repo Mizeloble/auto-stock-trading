@@ -359,3 +359,81 @@ def test_load_report_with_legacy_schema_uses_defaults(tmp_path: Path) -> None:
     assert loaded.discovery_chosen_names == {}
     assert loaded.closing_cash is None
     assert loaded.closing_holdings == []
+
+
+# ---- 23단계 Phase A · 비용 추정 + realized_pnl_after_cost --------------------
+
+
+def test_cost_estimation_with_buy_and_liq_prices() -> None:
+    """매수·청산 가격이 모두 있을 때 fees/taxes/slippage 추정치 계산."""
+    events = LogEvents(
+        orders_simulated=[
+            {"symbol": "A", "side": "buy", "qty": 10, "price": 100.0},  # 1,000원
+        ],
+        liquidations_simulated=[
+            # sell_price 없음 → buy_price(100.0) 로 fallback. 1,000원 매도 추정.
+            {"symbol": "A", "qty": 10},
+        ],
+    )
+    report = build_daily_report(date="2026-05-05", events=events, snapshot=None)
+    # 수수료: (1,000 매수 + 1,000 매도) * 0.015% = 0.30
+    assert report.total_fees == 0.30
+    # 거래세: 1,000 매도 * 0.20% = 2.0
+    assert report.total_taxes == 2.0
+    # 슬리피지: (1,000 + 1,000) * 0.05% = 1.0
+    assert report.total_slippage == 1.0
+
+
+def test_realized_pnl_after_cost_when_all_prices_present(tmp_path: Path) -> None:
+    """sell/buy 가격 둘 다 있는 청산을 직접 build → 비용 차감 PnL 계산."""
+    report = DailyReport(
+        date="2026-05-05",
+        mode="day-trade",
+        dry_run=False,
+        discovery_chosen=["A"],
+        discovery_blocked=[],
+        market_gates=[],
+        buys=[TradeRecord(symbol="A", side="buy", quantity=10, price=100.0, simulated=False)],
+        liquidations=[
+            LiquidationRecord(
+                symbol="A", quantity=10, sell_price=110.0, buy_price=100.0, simulated=False
+            )
+        ],
+        error_count=0,
+        note_ko="",
+        realized_pnl=100.0,  # 10 * (110 - 100)
+        realized_pnl_pct=10.0,
+        total_fees=0.315,  # (1,000 + 1,100) * 0.00015
+        total_taxes=2.20,  # 1,100 * 0.0020
+        total_slippage=1.05,  # (1,000 + 1,100) * 0.0005
+        realized_pnl_after_cost=100.0 - (0.315 + 2.20 + 1.05),
+    )
+    path = save_daily_report(report, root=tmp_path)
+    loaded = load_daily_report(path)
+    # 비용 4개 필드 모두 라운드트립.
+    assert loaded.total_fees == 0.315
+    assert loaded.total_taxes == 2.20
+    assert loaded.total_slippage == 1.05
+    assert loaded.realized_pnl_after_cost is not None
+    # 100 - 3.565 = 96.435
+    assert abs(loaded.realized_pnl_after_cost - 96.435) < 1e-9
+
+
+def test_cost_fields_none_when_no_trades() -> None:
+    """매매 0건이면 비용 필드 모두 None."""
+    report = build_daily_report(date="2026-05-05", events=LogEvents(), snapshot=None)
+    assert report.total_fees is None
+    assert report.total_taxes is None
+    assert report.total_slippage is None
+    assert report.realized_pnl_after_cost is None
+
+
+def test_cost_fields_none_when_buy_price_missing() -> None:
+    """가격 없는 거래(실거래 accepted) 가 섞이면 추정 불가 → None 유지."""
+    events = LogEvents(
+        orders_accepted=[{"symbol": "A", "side": "buy", "qty": 10}],  # price 미기록
+    )
+    report = build_daily_report(date="2026-05-05", events=events, snapshot=None)
+    assert report.total_fees is None
+    assert report.total_taxes is None
+    assert report.total_slippage is None

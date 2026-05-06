@@ -38,8 +38,8 @@ class Backtester:
     initial_cash: float = 10_000_000.0  # 기본 천만원
     position_sizing: str = "all_in"  # all_in: 가용 현금 전부로 매수
     commission_rate: float = 0.00015
-    tax_rate_sell: float = 0.0018
-    slippage_bps: float = 0.0
+    tax_rate_sell: float = 0.0020  # 2026 인상 반영
+    slippage_bps: float = 5.0  # 0.05% 보수적 기본
 
     _broker: SimulatedBroker = field(init=False)
     _equity: list[tuple[datetime, float]] = field(init=False, default_factory=list)

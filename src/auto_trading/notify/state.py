@@ -369,6 +369,7 @@ def format_daily_report(payload: dict) -> str:
 
     realized = payload.get("realized_pnl")
     realized_pct = payload.get("realized_pnl_pct")
+    realized_after_cost = payload.get("realized_pnl_after_cost")
     err = int(payload.get("error_count") or 0)
     summary_parts: list[str] = []
     if realized is not None:
@@ -381,6 +382,14 @@ def format_daily_report(payload: dict) -> str:
         lines.append("")
         # 📋 는 매매 결과 섹션이 쓰므로 요약은 다른 이모지로 시각 구분.
         lines.append("📊 " + " · ".join(summary_parts))
+
+    # 비용 차감 PnL — 23단계 Phase A. 같은 값이면 노이즈라 생략.
+    if (
+        realized is not None
+        and realized_after_cost is not None
+        and float(realized_after_cost) != float(realized)
+    ):
+        lines.append(f"💸 비용 차감 PnL: {_signed_won(realized_after_cost)}")
 
     note = str(payload.get("note_ko") or "")
     if note:
