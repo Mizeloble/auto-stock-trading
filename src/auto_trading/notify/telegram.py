@@ -100,10 +100,17 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         return head + body
 
     if event == "runner.liquidate_done":
-        count = fields.get("count", 0)
+        # count = 성공 건수, failed = 실패 건수 (2026-05-08 분리). 둘 다 보여
+        # 사용자가 "1종목 청산 완료" 푸시를 보고 실제 0건 청산을 오해하지 않게.
+        success = fields.get("count", 0)
+        failed = int(fields.get("failed") or 0)
         reason = fields.get("reason", "?")
         dry = " (dry-run)" if fields.get("dry_run") else ""
-        return f"🧹 청산 완료{dry} · {count}종목 ({reason})"
+        if failed > 0 and success > 0:
+            return f"⚠️ 청산 부분 성공{dry} · {success}종목 성공 / {failed}종목 실패 ({reason})"
+        if failed > 0:
+            return f"❌ 청산 전부 실패{dry} · {failed}종목 ({reason})"
+        return f"🧹 청산 완료{dry} · {success}종목 ({reason})"
 
     if event == "runner.liquidate_failed":
         return (

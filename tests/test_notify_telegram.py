@@ -170,6 +170,43 @@ async def test_runner_liquidate_done_korean_format(notifier: TelegramNotifier) -
     assert "dry-run" in text
 
 
+async def test_runner_liquidate_partial_success_format(notifier: TelegramNotifier) -> None:
+    """2026-05-08 회귀 — 일부 실패 시 '부분 성공' 라벨 + 둘 다 표시."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.liquidate_done",
+            reason="liquidate_at_reached",
+            count=1,
+            failed=1,
+            attempted=2,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "⚠️ 청산 부분 성공" in text
+    assert "1종목 성공" in text
+    assert "1종목 실패" in text
+
+
+async def test_runner_liquidate_all_failed_format(notifier: TelegramNotifier) -> None:
+    """전부 실패 — '청산 전부 실패' + 실패 카운트만."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.liquidate_done",
+            reason="liquidate_at_reached",
+            count=0,
+            failed=1,
+            attempted=1,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "❌ 청산 전부 실패" in text
+    assert "1종목" in text
+
+
 async def test_runner_kill_switch_korean_format(notifier: TelegramNotifier) -> None:
     """23단계 Phase B — 일일 손실 한도 강제 청산 알림."""
     async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
