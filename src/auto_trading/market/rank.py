@@ -8,6 +8,7 @@ from typing import Literal
 import structlog
 
 from .._common import extract_rows, to_decimal
+from .._common import normalize_symbol as _normalize_symbol
 from ..kiwoom.endpoints import (
     MARKET_TP_KOSDAQ,
     MARKET_TP_KOSPI,
@@ -44,17 +45,8 @@ def _pick(row: dict, *keys: str) -> object:
     return None
 
 
-def _normalize_symbol(raw: object) -> str:
-    """키움 응답의 종목코드 정규화.
-
-    실제로 본 케이스 (probe 2026-05-03):
-    - `'A005930'` → `'005930'`     · 일부 응답이 'A' prefix 붙임
-    - `'252670_AL'` → `'252670'`   · 통합 거래소(AL) suffix 붙임
-    - `'005930'` → `'005930'`      · 보통 케이스
-    주문 API 는 6자리 숫자 코드만 받기 때문에 발굴기 단에서 정규화한다.
-    """
-    s = str(raw).strip().lstrip("A")
-    return s.split("_", 1)[0]
+# 종목 코드 정규화는 _common.normalize_symbol 로 통합 (probe 2026-05-03 + 2026-05-08
+# 청산 거절 회귀 — 잔고/feed/주문 모든 경계에서 동일 정규화 적용).
 
 
 # day-trade 부적합 종목 휴리스틱 — probe 2026-05-03 결과 KOSPI 거래량 상위가

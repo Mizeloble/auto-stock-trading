@@ -82,4 +82,31 @@ def extract_rows(payload: dict) -> list[dict]:
     return []
 
 
-__all__ = ["KST", "Bar", "Side", "extract_rows", "parse_kiwoom_ts", "to_decimal"]
+def normalize_symbol(raw: object) -> str:
+    """키움 응답의 종목코드 정규화 — 6자리 코드 추출.
+
+    실제 케이스 (probe 2026-05-03):
+    - ``'A005930'`` → ``'005930'`` · 일부 응답이 'A' prefix 붙임 (잔고 조회 등)
+    - ``'252670_AL'`` → ``'252670'`` · 통합 거래소 suffix
+    - ``'005930'`` → ``'005930'`` · 보통 케이스
+
+    무엇/왜:
+    - 키움 주문 API 는 6자리 숫자 코드만 받음. 응답 단에서 prefix/suffix 가
+      섞여 들어오면 호출 시 거절됨 (`종목 정보가 없습니다 종목코드=A005930`).
+    - 발굴/잔고/실시간 시세/주문 송신 모든 경계에서 정규화.
+
+    어떻게 확인: tests 의 normalize_symbol 회귀 + 통합 흐름.
+    """
+    s = str(raw).strip().lstrip("A")
+    return s.split("_", 1)[0]
+
+
+__all__ = [
+    "KST",
+    "Bar",
+    "Side",
+    "extract_rows",
+    "normalize_symbol",
+    "parse_kiwoom_ts",
+    "to_decimal",
+]
