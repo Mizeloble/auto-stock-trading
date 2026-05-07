@@ -1,0 +1,31 @@
+# day-trade 기본 프로파일 — 보수적 비활성 위주. 사용자가 한도만 켜서 시작.
+# 실행: uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run
+# strategy:
+#   - index_momentum_daytrade (다회 진입 + 모멘텀 게이트, Phase D~F)
+#   - intraday_momentum       (21단계 호환, 첫 봉 1회 진입)
+# risk: 모두 0/false 가 비활성. 활성 시작 추천:
+#   stop_loss_pct=0.01 (매수가 -1% 손절)
+#   trailing_stop_pct=0.005 (고점 -0.5% 트레일링)
+#   partial_take_pct=0.015 (매수가 +1.5% 도달 시 절반 익절)
+
+name: "daytrade default"
+strategy: "index_momentum_daytrade"
+top_n: 3
+exclude_etf: true
+liquidate: "15:15"
+discover_delay_sec: 30
+params:
+  cooldown_min: 30
+  momentum_lookback_min: 5
+  momentum_threshold_pct: 0.0   # 0 이면 게이트 비활성. +0.3 이면 직전 5분 +0.3% 이상일 때만 진입.
+risk:
+  stop_loss_pct: 0.0            # 예: 0.01 → -1% 매수가 대비 손절
+  trailing_stop_pct: 0.0        # 예: 0.005 → -0.5% 고점 대비 트레일링
+  partial_take_pct: 0.0         # 예: 0.015 → +1.5% 도달 시 부분 익절
+  partial_take_qty_ratio: 0.5
+  max_order_value: 0.0          # 예: 1_000_000 → 1회 100만원 캡
+  daily_notional_limit: 0.0     # 예: 5_000_000 → 일일 총 500만원 캡
+  daily_loss_kill: false        # true 면 일일 -3% 도달 시 강제 청산 + 정지
+notes: |
+  Phase G 첫 머지 시 추가된 보수적 기본. Phase H(알림 throttle) 머지 후
+  실 운용 시 한도부터 1~2개 켜고 며칠 dry-run.
