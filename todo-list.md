@@ -437,12 +437,15 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **테스트** · 전략 게이트 5건 (차단/통과/threshold=0 비활성/tracker 누락 시 차단/history 부족) + orchestrator loop 2건 (cancel 시 정리·실패 swallow). 333/333 PASS, ruff/mypy 클린.
 - [ ] **검증** (사용자): Phase G 머지 후 YAML 의 `params.momentum_threshold_pct: 0.3` 으로 mock dry-run 에서 게이트 통과/차단 로그 확인.
 
-### Phase G · paper-day --profile + day-trade YAML 프로파일
+### Phase G · paper-day --profile + day-trade YAML 프로파일 — **✅ 완료** (2026-05-07)
 
-- [ ] **`cli.py paper_day`** · `--profile <yaml>` 옵션. 지정 시 YAML 의 `strategy` + `params` 로 universe·게이트·한도 일괄 적용.
-- [ ] **`strategy/profile.py StrategyProfile`** · day-trade 키(`top_n`, `cooldown_min`, `momentum_*`, `stop_pct`, `trail_pct`, `partial_take_*`, `max_order_value`, `daily_notional_limit`, `daily_loss_kill`) 허용. `symbol` optional.
-- [ ] **`strategies/profiles/daytrade-default.yaml`** · 샘플 프로파일 추가. 모든 새 파라미터 노출 + 한국어 주석.
-- [ ] **테스트** · `tests/test_cli_paper_day.py` `--profile` 케이스.
+- [x] **`daytrade/profile.py`** 신규 · `DaytradeProfile` (pydantic) — name/strategy/top_n/liquidate/exclude_etf/discover_delay_sec + `params` (cooldown/momentum) + `risk` (stop_loss/trailing/partial_take/max_order/daily_*). swing 의 `StrategyProfile` 와 별개 — day-trade 는 종목 미지정 + 한도가 풍부해 별도 모델이 더 깔끔. 검증: top_n ≤ 10, stop_loss ≤ 10%, liquidate HH:MM 형식.
+- [x] **`strategies/profiles/daytrade-default.yaml`** · 보수적 비활성 기본 (모든 한도 0/false) + 한국어 주석 안내.
+- [x] **`daytrade/cli_helpers.py`** · `apply_profile_to_runner` (RiskLimits 인플레이스 반영) + `build_profile_factory` (전략 팩토리) + `_spawn_momentum_task` (게이트 활성 시 별도 KiwoomRestClient 컨텍스트로 1분 모멘텀 loop). paper_day_main/with_commands 가 `profile`/`momentum_tracker` 인자 받음.
+- [x] **`orchestrator.discover_and_arm`** · `strategy_factory` 시그니처 `(symbol, *, market)` 으로 확장 — IndexMomentumDayTrade 가 종목별 시장 정보를 받도록.
+- [x] **`cli.py paper_day`** · `--profile <path>` 옵션. 지정 시 top_n/liquidate/discover_delay/exclude_etf/RiskLimits 모두 프로파일 값으로 덮어쓰고 IndexMomentumTracker 자동 생성.
+- [x] **테스트** · `tests/test_daytrade_profile.py` 8건 (라운드트립·검증·샘플 yaml 로드) + `tests/test_cli_paper_day.py` 1건 (--profile override). `tests/test_daytrade_orchestrator.py` 기존 fake factory 시그니처 갱신. 342/342 PASS, ruff/mypy 클린.
+- [ ] **검증** (사용자): `uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run` mock 에서 정상 시동 확인. 한도 1~2개(예: stop_loss_pct=0.01) 켜고 며칠 dry-run 후 본격 활성.
 
 ### Phase H · 텔레그램 5분 요약 throttle
 
