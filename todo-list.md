@@ -413,12 +413,13 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **테스트** · `tests/test_position_guard.py` 11건 (stop 발동·트레일 발동·partial 후 트레일·우선순위·quantity 0·reset·전량 ratio·비활성) + `tests/test_notify_telegram.py` 2건. 306/306 PASS, ruff/mypy 클린.
 - [ ] **검증** (사용자): YAML 프로파일에서 한도 활성 후 mock dry-run 에서 `position_guard.*` 로그 + 텔레그램 발화 확인 (Phase G 의 --profile 도입 후).
 
-### Phase D · 다회 진입 + 쿨다운 (IndexMomentumDayTrade 신규)
+### Phase D · 다회 진입 + 쿨다운 (IndexMomentumDayTrade 신규) — **✅ 완료** (2026-05-06)
 
-- [ ] **`strategy/index_daytrade.py`** · 새 전략 `IndexMomentumDayTrade` (`@register("index_momentum_daytrade")`). 단발 제약 X. 진입 조건 1차: "포지션 0 + 마지막 청산 후 `cooldown_min` 분 경과".
-- [ ] **state 추적** · `last_exit_ts` per symbol. 청산은 PositionGuard + liquidate_at 가 처리.
-- [ ] **기존 IntradayMomentum 유지** · 후방 호환. registry 에 둘 다 등록.
-- [ ] **테스트** · `tests/test_strategy_index_daytrade.py` — 진입 후 청산 → 쿨다운 → 재진입 시퀀스 검증.
+- [x] **`strategy/index_daytrade.py`** · 신규 `IndexMomentumDayTrade` (`@register("index_momentum_daytrade")`). state 의 `last_entry_ts`/`last_exit_ts` 비교로 보유 추정 + cooldown_min 경과 시 재진입.
+- [x] **러너 `_mark_exit(symbol, ts)`** · `_place_and_track` SELL 잔량 0 분기 + `_place_guard_action` 끝에서 호출. strategy.state["last_exit_ts"] 갱신 + `position_guard.reset(symbol)` (재진입 시 highest_seen·partial_taken 초기화).
+- [x] **registry 등록** · `load_builtin_strategies()` 에 `index_daytrade` import 추가. 기존 `intraday`(`IntradayMomentum`) 그대로 유지.
+- [x] **테스트** · `tests/test_strategy_index_daytrade.py` 8건 — 첫 진입·보유 중 차단·쿨다운 차단·쿨다운 경과 재진입·zero 쿨다운·다회 사이클·reset·registry 조회. 314/314 PASS.
+- [ ] **검증** (사용자): Phase G `--profile` 머지 후 YAML 의 `strategy: index_momentum_daytrade` + `params.cooldown_min` 설정으로 mock dry-run 에서 다회 진입 시퀀스 확인.
 
 ### Phase E · 지수(KOSPI/KOSDAQ) 일중 모멘텀 시세
 
