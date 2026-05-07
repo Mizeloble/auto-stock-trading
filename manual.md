@@ -97,6 +97,10 @@ uv run auto-trade quote 005930
 | `uv run auto-trade paper --profile <yaml> --dry-run` | 실시간으로 동작은 하되 **주문은 안 보냄** (안전 시운전) |
 | `uv run auto-trade paper --profile <yaml>` | 실시간 모의투자 매매 (주문 전송 ON, 단 모의계좌이므로 가상 돈) |
 | `uv run auto-trade paper-day --top-n 3 --dry-run` | **day-trade 모드**: 매일 거래량 상위 3종목 자동 선정 → 즉시 매수 → 15:15 일괄 청산. 자세히는 §11. |
+| `uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run` | **23단계 정통 데이트레이딩**: PositionGuard / 다회 진입 / 모멘텀 게이트 / kill switch / 비용 차감 PnL. 자세히는 §11. |
+| `uv run auto-trade report --date YYYY-MM-DD --push` | 그날 paper-day 로그 → 일일 리포트 JSON + 텔레그램 푸시 (수동 재생성). |
+| `uv run auto-trade insight --days 7 --push` | (선택) 직전 7일 일일 리포트를 LLM 분석 → 한국어 인사이트 푸시. ANTHROPIC_API_KEY 필요. |
+| `uv run auto-trade weekly-proposal --dry-run` | (선택) 24단계 — 다음 주 day-trade 프로파일 자동 갱신 시뮬. 토요일 cron 이 자동 호출. |
 | `uv run auto-trade strategy advise --profile <yaml>` | (선택) Claude 가 YAML 의 숫자를 조언으로 갱신 |
 
 > 윈도우 PowerShell 에서 줄을 `\` 로 이어 적을 땐 `` ` `` 백틱을 쓰세요.
@@ -311,6 +315,8 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 - `--liquidate 15:15` : 청산 시각 (기본 15:15 KST. 정규장 마감 15:30 직전).
 - `--include-etf` : (선택) ETF/ETN/SPAC 도 매수 대상에 포함. 기본은 제외 (일반 주식 day-trade 의도).
 - `--discover-delay 30` : 09:00 직후 거래량 데이터 안정화 대기 초. 빠른 검증 시 0.
+- `--profile <yaml>` : (23단계) DaytradeProfile YAML 로드. 지정 시 strategy/top_n/liquidate/RiskLimits 가 프로파일 값으로 덮어써짐. 샘플: [strategies/profiles/daytrade-default.yaml](strategies/profiles/daytrade-default.yaml).
+- `--telegram-throttle 5` : (23단계) 매매 알림 5분 윈도우 요약. 다회 진입 시 채터링 방지. 0=비활성.
 
 ### 결과 해석 — 로그 키워드
 
