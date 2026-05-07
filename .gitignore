@@ -27,6 +27,8 @@ logs/
 # Claude Code 로컬 상태 (세션별 plan/memory/worktree)
 .claude/
 
-# 자동 생성된 전략 프로파일 (개인 설정 — .gitkeep 만 추적)
+# 자동 생성된 전략 프로파일 (개인 설정 — .gitkeep + 저장소 샘플만 추적)
 strategies/profiles/*.yaml
+!strategies/profiles/daytrade-default.yaml
 strategies/profiles/*.yaml.bak
+strategies/profiles/*.yaml.bak.*

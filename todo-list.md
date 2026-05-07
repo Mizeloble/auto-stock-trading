@@ -488,12 +488,14 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **`build_proposal_callback`** · 비동기 콜백 (Phase D 토요일 cron 에서 호출 예정). reports/news 모두 비면 None 반환.
 - [x] **테스트** · `tests/test_news_proposal.py` 8건 (minimal/with_changes/invalid validation/no tool_use/payload 전달/caching·forced tool/format 변경 + 노 변경). 367/367 PASS, ruff/mypy 클린.
 
-### Phase C · daytrade-current.yaml 자동 갱신 + 백업 + 알림
+### Phase C · daytrade-current.yaml 자동 갱신 + 백업 + 알림 — **✅ 완료** (2026-05-07)
 
-- [ ] **`news/profile_writer.py`** · `DaytradeProposal` → `strategies/profiles/daytrade-current.yaml`. 기존 파일 `daytrade-current.yaml.bak.YYYY-MM-DD` 로 백업.
-- [ ] **안전장치** · `stop_pct ≤ 3%`, `top_n ≤ 5`, `daily_loss_kill 강제 True` 등 한도 벗어나면 적용 거부 + 경고 텔레그램.
-- [ ] **변경 diff 푸시** · "다음 주 stop_pct 0.8% → 1.0% 로 완화. 사유: 변동성 ↑" 형식 한국어 요약.
-- [ ] **테스트** · `tests/test_profile_writer.py` 정상 갱신 / 한도 초과 거부 / 백업 생성.
+- [x] **`news/profile_writer.py`** 신규 — `apply_proposal` + `write_with_backup` + `apply_and_persist` (1차 진입점) + `format_apply_message`.
+- [x] **`SafetyCaps`** · top_n ≤ 5, stop_loss/trailing ≤ 3%, partial_take ≤ 5%, momentum_threshold ≤ 3%, cooldown ≤ 120, lookback ≤ 30. `block_daily_loss_kill_change` 옵션으로 daily_loss_kill 자동 변경 차단도 선택.
+- [x] **백업** · 기존 yaml 이 있으면 `<name>.bak.YYYY-MM-DD` 로 shutil.copy2. 첫 작성 시 백업 X. 같은 날 두 번이면 덮어쓰기 (cron 1회 가정).
+- [x] **변경 diff** · `ApplyResult.accepted`/`rejected` 한국어 라인. `format_apply_message` 가 변경/거부/테마/회피/근거/신뢰도/백업명 텔레그램 메시지 조립.
+- [x] **`apply_and_persist`** · current 없으면 fallback(`daytrade-default.yaml`) → 둘 다 없으면 기본 인스턴스. last_updated_at 자동 갱신.
+- [x] **테스트** · `tests/test_profile_writer.py` 15건 (no change/change/cap reject/부분 거부+부분 통과/daily_loss_kill 차단/동일값 skip/backup 생성·생략/풀 사이클/fallback/format 3종/메타 보존). 382/382 PASS, ruff/mypy 클린.
 
 ### Phase D · 토요일 cron 통합 + paper-day 자동 사용
 
