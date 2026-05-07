@@ -6,6 +6,13 @@ Phase C: news/profile_writer.py — 제안을 daytrade-current.yaml 로 자동 �
 """
 
 from .collector import NewsItem, collect_recent_news, parse_feed
+from .profile_writer import (
+    ApplyResult,
+    SafetyCaps,
+    apply_and_persist,
+    apply_proposal,
+    format_apply_message,
+)
 from .proposal import (
     DaytradeProposal,
     build_proposal_callback,
@@ -14,10 +21,15 @@ from .proposal import (
 )
 
 __all__ = [
+    "ApplyResult",
     "DaytradeProposal",
     "NewsItem",
+    "SafetyCaps",
+    "apply_and_persist",
+    "apply_proposal",
     "build_proposal_callback",
     "collect_recent_news",
+    "format_apply_message",
     "format_proposal_message",
     "parse_feed",
     "propose_daytrade_profile",
