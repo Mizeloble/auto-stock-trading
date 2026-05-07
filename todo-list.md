@@ -478,11 +478,15 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **테스트** · `tests/test_news_collector.py` 10건 (parse_feed 5 + collect 5: 캐시 hit·days 필터·fetch 실패·라운드트립·정렬). 359/359 PASS, ruff/mypy 클린.
 - [ ] **검증** (사용자): `python -c "from auto_trading.news import collect_recent_news; print(len(collect_recent_news(days=1)))"` 로 실 RSS 호출 확인.
 
-### Phase B · 주간 LLM 입력에 뉴스 + 다음주 프로파일 제안
+### Phase B · 주간 LLM 입력에 뉴스 + 다음주 프로파일 제안 — **✅ 완료** (2026-05-07)
 
-- [ ] **`notify/insight.py`** · 새 함수 `build_strategy_proposal_callback`. 입력: 5일 daily reports + 7일 뉴스 헤드라인 50건. 출력: `DaytradeProposal` (stop_pct, trail_pct, partial_take_pct, momentum_*, top_n, themes_to_watch[], symbols_to_avoid[], rationale_ko).
-- [ ] **강제 도구** · `propose_daytrade_profile` tool_use, Pydantic 검증. 토큰 예산: input ~3000 / output ~800.
-- [ ] **테스트** · 모킹된 Anthropic 응답으로 프로파일 추출 검증.
+- [x] **`news/proposal.py`** 신규 — `notify/insight.py` 와 별개 모듈. 인사이트는 "지난 주 결과 사람용 요약", proposal 은 "다음 주 day-trade 프로파일 어떻게 바꿀지 → Phase C YAML 자동 갱신용".
+- [x] **`DaytradeProposal`** — pydantic. summary_ko/rationale_ko/confidence 필수 + 변경 옵션(top_n, cooldown_min, momentum_*, stop_loss_pct, trailing_stop_pct, partial_take_*, daily_loss_kill) 모두 None 가능 → "유지". themes_to_watch/symbols_to_avoid 옵션 리스트.
+- [x] **`propose_daytrade_profile(reports, news, ..., client, current_profile, model)`** · 강제 도구 `propose_daytrade_profile` tool_use + Pydantic 검증. system 프롬프트 cache_control: ephemeral (재호출 시 토큰 절약).
+- [x] **`_summarize_reports/_news/_current_profile`** · 토큰 예산: 뉴스 30건 + 본문 240자 truncate (collector 에서) → input ~2000 tokens / output ~1024. 호출당 추정 $0.04~0.08 (Opus 가격 기준, 주 1회 = 월 $0.16~0.32).
+- [x] **`format_proposal_message`** · 텔레그램·CLI 출력. 변경 파라미터 / 주목 테마 / 회피 종목 / 근거 / 신뢰도 섹션.
+- [x] **`build_proposal_callback`** · 비동기 콜백 (Phase D 토요일 cron 에서 호출 예정). reports/news 모두 비면 None 반환.
+- [x] **테스트** · `tests/test_news_proposal.py` 8건 (minimal/with_changes/invalid validation/no tool_use/payload 전달/caching·forced tool/format 변경 + 노 변경). 367/367 PASS, ruff/mypy 클린.
 
 ### Phase C · daytrade-current.yaml 자동 갱신 + 백업 + 알림
 
