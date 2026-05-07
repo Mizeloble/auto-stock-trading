@@ -429,11 +429,13 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **테스트** · `tests/test_market_index_momentum.py` 12건 — 빈 history / lookback 매칭·tolerance / cutoff 정리 / 시장 격리 / fake client fetch · update 통합. 326/326 PASS, ruff/mypy 클린.
 - [ ] **검증** (사용자): Phase F 머지 후 mock dry-run 에서 `market.index.momentum` 로그 (last + return_pct) 1분 단위로 찍히는지 확인.
 
-### Phase F · 지수 모멘텀 게이트를 IndexMomentumDayTrade 에 결합
+### Phase F · 지수 모멘텀 게이트를 IndexMomentumDayTrade 에 결합 — **✅ 완료** (2026-05-07)
 
-- [ ] **전략 파라미터** · `momentum_lookback_min`, `momentum_threshold_pct` 추가. 진입 조건에 "지수 모멘텀 ≥ threshold" AND.
-- [ ] **`daytrade/orchestrator.py`** · 지수 모멘텀 1분 갱신 task. `Bar.meta` 또는 `StrategyContext` 로 전략에 주입 (전략이 직접 REST 안 부르도록).
-- [ ] **테스트** · 지수 모멘텀 fixture 로 게이트 통과/차단 통합 검증.
+- [x] **전략 파라미터** · `momentum_lookback_min`/`momentum_threshold_pct`/`momentum_tracker`/`market` 추가. 진입 조건에 "지수 모멘텀 ≥ threshold" AND. threshold=0 이면 게이트 비활성(기본).
+- [x] **주입 방식** · `Bar.meta` 추가 대신 전략 init 시 `IndexMomentumTracker` 직접 주입 — 전략은 인메모리 조회만(부작용 X), strategy/CLAUDE.md "외부 부작용 금지" 규칙 유지.
+- [x] **`daytrade/orchestrator.py`** · `start_momentum_loop(rest, tracker, markets, interval_sec, lookback_min)` helper. `_momentum_loop` 가 `update_index_momentum` 을 주기 호출하며 실패는 swallow + 다음 사이클 재시도.
+- [x] **테스트** · 전략 게이트 5건 (차단/통과/threshold=0 비활성/tracker 누락 시 차단/history 부족) + orchestrator loop 2건 (cancel 시 정리·실패 swallow). 333/333 PASS, ruff/mypy 클린.
+- [ ] **검증** (사용자): Phase G 머지 후 YAML 의 `params.momentum_threshold_pct: 0.3` 으로 mock dry-run 에서 게이트 통과/차단 로그 확인.
 
 ### Phase G · paper-day --profile + day-trade YAML 프로파일
 

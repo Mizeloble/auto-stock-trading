@@ -152,3 +152,65 @@ async def test_discover_custom_factory_used(monkeypatch) -> None:
     )
 
     assert runner.strategies["005930"] is sentinel
+
+
+# ---- 23단계 Phase F · 모멘텀 갱신 task --------------------------------------
+
+
+async def test_start_momentum_loop_updates_tracker_until_cancelled(monkeypatch) -> None:
+    """start_momentum_loop 은 update_index_momentum 을 주기적으로 호출한다."""
+    import asyncio
+    import contextlib
+
+    from auto_trading.market.index import IndexMomentumTracker
+
+    tracker = IndexMomentumTracker()
+    update_mock = AsyncMock()
+    monkeypatch.setattr(orch, "update_index_momentum", update_mock)
+
+    task = orch.start_momentum_loop(
+        rest=object(),  # type: ignore[arg-type]
+        tracker=tracker,
+        markets=("KOSPI",),
+        interval_sec=0,  # 즉시 다음 사이클로
+        lookback_min=5,
+    )
+    # 한 두 사이클 돌게 두고 cancel
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert update_mock.await_count >= 1
+    # 첫 호출이 KOSPI + lookback_min=5 로 들어갔는지
+    call = update_mock.await_args_list[0]
+    assert call.args[2] == "KOSPI"
+    assert call.kwargs["lookback_min"] == 5
+
+
+async def test_momentum_loop_swallows_update_failures(monkeypatch) -> None:
+    """update 실패해도 loop 가 죽지 않는다 — 다음 사이클에서 다시 시도."""
+    import asyncio
+    import contextlib
+
+    from auto_trading.market.index import IndexMomentumTracker
+
+    tracker = IndexMomentumTracker()
+    update_mock = AsyncMock(side_effect=RuntimeError("kiwoom 5xx"))
+    monkeypatch.setattr(orch, "update_index_momentum", update_mock)
+
+    task = orch.start_momentum_loop(
+        rest=object(),  # type: ignore[arg-type]
+        tracker=tracker,
+        markets=("KOSPI",),
+        interval_sec=0,
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    # 실패해도 여러 번 호출됨 (loop 가 swallow + 계속).
+    assert update_mock.await_count >= 1

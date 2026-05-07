@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from auto_trading.market.index import IndexMomentumTracker
 from auto_trading.strategy.base import Bar, Side
 from auto_trading.strategy.index_daytrade import IndexMomentumDayTrade
 
@@ -92,3 +93,71 @@ def test_strategy_registered_in_registry() -> None:
     assert isinstance(s, IndexMomentumDayTrade)
     assert s.params["weight"] == 0.33
     assert s.params["cooldown_min"] == 15
+
+
+# ---- 23단계 Phase F · 지수 모멘텀 게이트 결합 -------------------------------
+
+
+def _tracker_with_pct(market: str, pct: float) -> IndexMomentumTracker:
+    """직접 push 해서 momentum() 이 정확히 `pct`% 를 돌려주도록 만든 tracker."""
+    t = IndexMomentumTracker()
+    base = datetime(2026, 5, 7, 9, 0)
+    t.push(market, base, 1000.0)
+    t.push(market, base + timedelta(minutes=5), 1000.0 * (1.0 + pct / 100.0))
+    return t
+
+
+def test_momentum_gate_blocks_buy_when_pct_below_threshold() -> None:
+    """게이트 활성 + 모멘텀 +0.2% < threshold +0.5% → BUY 차단."""
+    tracker = _tracker_with_pct("KOSPI", 0.2)
+    s = IndexMomentumDayTrade(
+        momentum_threshold_pct=0.5,
+        momentum_lookback_min=5,
+        momentum_tracker=tracker,
+        market="KOSPI",
+    )
+    bar = _bar(datetime(2026, 5, 7, 9, 5))
+    assert s.on_bar(bar) == []
+
+
+def test_momentum_gate_allows_buy_when_pct_above_threshold() -> None:
+    """모멘텀 +0.8% ≥ threshold +0.5% → BUY 발사."""
+    tracker = _tracker_with_pct("KOSPI", 0.8)
+    s = IndexMomentumDayTrade(
+        momentum_threshold_pct=0.5,
+        momentum_lookback_min=5,
+        momentum_tracker=tracker,
+        market="KOSPI",
+    )
+    bar = _bar(datetime(2026, 5, 7, 9, 5))
+    sigs = s.on_bar(bar)
+    assert len(sigs) == 1
+
+
+def test_momentum_gate_zero_threshold_means_inactive() -> None:
+    """threshold=0 (기본) — tracker/market 없어도 BUY 발사."""
+    s = IndexMomentumDayTrade()  # 기본
+    sigs = s.on_bar(_bar(datetime(2026, 5, 7, 9, 0)))
+    assert len(sigs) == 1
+
+
+def test_momentum_gate_blocks_when_active_but_tracker_missing() -> None:
+    """threshold > 0 인데 tracker 주입 안 됐으면 보수적 차단."""
+    s = IndexMomentumDayTrade(momentum_threshold_pct=0.5)  # tracker 없음
+    sigs = s.on_bar(_bar(datetime(2026, 5, 7, 9, 0)))
+    assert sigs == []
+
+
+def test_momentum_gate_blocks_when_history_insufficient() -> None:
+    """tracker 는 있지만 lookback 데이터 없음 → 차단."""
+    from auto_trading.market.index import IndexMomentumTracker
+
+    tracker = IndexMomentumTracker()
+    tracker.push("KOSPI", datetime(2026, 5, 7, 9, 5), 1000.0)  # 1포인트만
+    s = IndexMomentumDayTrade(
+        momentum_threshold_pct=0.5,
+        momentum_tracker=tracker,
+        market="KOSPI",
+    )
+    bar = _bar(datetime(2026, 5, 7, 9, 5))
+    assert s.on_bar(bar) == []

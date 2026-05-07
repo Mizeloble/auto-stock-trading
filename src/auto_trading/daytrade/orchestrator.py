@@ -12,13 +12,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 
 import structlog
 
 from ..kiwoom.rest import KiwoomRestClient
-from ..market.index import IndexGate, index_gate
+from ..market.index import IndexGate, IndexMomentumTracker, index_gate, update_index_momentum
 from ..market.rank import Market, RankedSymbol, top_volume
 from ..runner import PaperRunner
 from ..strategy.base import Strategy
@@ -121,4 +122,46 @@ async def discover_and_arm(
     return DiscoveryResult(chosen=chosen, blocked=blocked, gates=gates, note_ko=note)
 
 
-__all__ = ["DiscoveryResult", "discover_and_arm"]
+async def _momentum_loop(
+    rest: KiwoomRestClient,
+    tracker: IndexMomentumTracker,
+    markets: tuple[Market, ...],
+    interval_sec: int,
+    lookback_min: int,
+) -> None:
+    """1분 주기로 KOSPI/KOSDAQ 지수 가격 fetch + tracker.push.
+
+    무엇/왜:
+    - tracker 는 인메모리 시계열 — 별도 task 로 갱신 안 하면 momentum() 결과가 안 변함.
+    - paper-day 한 사이클에 한 번 시동, runner stop 시 호출자가 task.cancel() 책임.
+
+    어떻게 확인: tests/test_daytrade_orchestrator.py 의 momentum_loop 단위 테스트.
+    """
+    while True:
+        for market in markets:
+            try:
+                await update_index_momentum(rest, tracker, market, lookback_min=lookback_min)
+            except Exception:
+                log.warning("daytrade.momentum_update_failed", market=market, exc_info=True)
+        await asyncio.sleep(interval_sec)
+
+
+def start_momentum_loop(
+    rest: KiwoomRestClient,
+    tracker: IndexMomentumTracker,
+    *,
+    markets: tuple[Market, ...] = ("KOSPI", "KOSDAQ"),
+    interval_sec: int = 60,
+    lookback_min: int = 5,
+) -> asyncio.Task[None]:
+    """`_momentum_loop` 을 background task 로 시동. 호출자가 cancel·await 책임.
+
+    무엇/왜: paper-day 1 사이클에 1개 task. runner.run() 종료 후 cli_helpers 가 cancel.
+    """
+    return asyncio.create_task(
+        _momentum_loop(rest, tracker, markets, interval_sec, lookback_min),
+        name="index-momentum-loop",
+    )
+
+
+__all__ = ["DiscoveryResult", "discover_and_arm", "start_momentum_loop"]
