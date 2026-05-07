@@ -497,18 +497,20 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **`apply_and_persist`** · current 없으면 fallback(`daytrade-default.yaml`) → 둘 다 없으면 기본 인스턴스. last_updated_at 자동 갱신.
 - [x] **테스트** · `tests/test_profile_writer.py` 15건 (no change/change/cap reject/부분 거부+부분 통과/daily_loss_kill 차단/동일값 skip/backup 생성·생략/풀 사이클/fallback/format 3종/메타 보존). 382/382 PASS, ruff/mypy 클린.
 
-### Phase D · 토요일 cron 통합 + paper-day 자동 사용
+### Phase D · 토요일 cron 통합 + paper-day 자동 사용 — **✅ 완료** (2026-05-07)
 
-- [ ] **`scripts/insight-weekly.sh`** · 뉴스 수집 + 프로파일 작성 단계 체이닝.
-- [ ] **`scripts/launchd/com.mizeloble.auto-trade.paper-day.plist`** · 실행 명령에 `--profile strategies/profiles/daytrade-current.yaml` 추가. 파일 없으면 paper-day 가 기본값 폴백.
-- [ ] **월요일 첫날 알림** · 08:55 시동 시 텔레그램에 "이번 주 사용 프로파일: stop_pct=X, momentum_threshold=Y…" 한 줄 푸시 (사용자가 토요일 변경 못 봤을 경우 대비).
-- [ ] **`manual.md` §11** · "주간 뉴스 자동 반영" 섹션 추가.
+- [x] **`auto-trade weekly-proposal`** CLI 신규 — `--days-reports`/`--days-news`/`--current`/`--fallback`/`--target`/`--push`/`--dry-run`. dry-run 은 LLM 호출 없이 입력 요약 출력. 정상 호출 시 collect_recent_news + collect_recent_reports → propose_daytrade_profile (LLM) → apply_and_persist (안전 캡 통과한 변경만 yaml 작성 + 백업) → format_apply_message → 콘솔 + 옵션 텔레그램.
+- [x] **`scripts/insight-weekly.sh`** · `auto-trade insight --push` 다음에 `auto-trade weekly-proposal --push` 체이닝. 제안 단계 실패해도 인사이트는 이미 푸시됐으니 `|| true` 로 cron 자체는 성공 마감.
+- [x] **`scripts/paper-day-mode.sh`** · `daytrade-current.yaml` 가 있으면 `--profile` 자동 추가. 없으면 `daytrade-default.yaml` 폴백. 둘 다 없으면 CLI 인자만으로 동작 (안전).
+- [x] **`notify/telegram.py`** · `runner.weekly_proposal` 이벤트 처리 (text 본문 그대로).
+- [x] **`manual.md` §11** · "23단계 정통 데이트레이딩 옵션 + YAML 프로파일" + "24단계 주간 뉴스 → 다음 주 day-trade 프로파일 자동 반영" 두 섹션 추가.
+- [x] **테스트** · `tests/test_cli_weekly_proposal.py` 4건 (no data exit / dry-run / 풀 사이클 / news-only path). 386/386 PASS, ruff/mypy 클린.
 
 ### 24단계 검증 (전 Phase 완료 시)
 
-- [ ] 토요일 09:00 KST 에 7일 뉴스 수집 + LLM 1회 + `daytrade-current.yaml` 갱신 + 텔레그램 변경 요약 도착.
+- [ ] 토요일 09:00 KST 에 `auto-trade weekly-proposal --push` 실행 → 뉴스 수집 + LLM 1회 + `daytrade-current.yaml` 갱신 + 텔레그램 "🗞 다음 주 day-trade 프로파일 갱신" 도착.
 - [ ] 한도 초과 응답 시 자동 거부 + 경고 푸시.
-- [ ] 다음 월요일 08:55 시동 시 "이번 주 사용 프로파일" 푸시.
+- [ ] 다음 월요일 08:55 시동 시 paper-day 가 `daytrade-current.yaml` 자동 사용 (콘솔에 "프로파일 로드:" 라인).
 
 ---
 
