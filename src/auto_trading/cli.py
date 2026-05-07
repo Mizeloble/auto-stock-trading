@@ -784,5 +784,87 @@ def insight(
         console.print("[green]텔레그램 푸시 완료[/green]")
 
 
+@app.command("weekly-proposal")
+def weekly_proposal(
+    days_reports: int = typer.Option(7, "--days-reports", help="직전 N일치 일일 리포트 (기본 7)."),
+    days_news: int = typer.Option(7, "--days-news", help="직전 N일치 RSS 뉴스 (기본 7)."),
+    current: Path = typer.Option(
+        Path("strategies/profiles/daytrade-current.yaml"),
+        "--current",
+        help="현재 프로파일 경로 (없으면 fallback 으로 fall back).",
+    ),
+    fallback: Path = typer.Option(
+        Path("strategies/profiles/daytrade-default.yaml"),
+        "--fallback",
+        help="current 가 없을 때 base 로 사용할 프로파일.",
+    ),
+    target: Path | None = typer.Option(
+        None,
+        "--target",
+        help="작성할 프로파일 경로. 기본은 current 와 동일 (덮어쓰기 + 백업).",
+    ),
+    push: bool = typer.Option(False, "--push/--no-push", help="True 면 텔레그램에 변경 요약 푸시."),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="LLM 호출 없이 입력 요약만 출력 (디버그용).",
+    ),
+) -> None:
+    """24단계 Phase B+C+D — 주간 LLM 으로 다음 주 day-trade 프로파일 자동 갱신.
+
+    흐름:
+    1. 직전 7일 일일 리포트 + RSS 뉴스 수집
+    2. 현재 daytrade-current.yaml 로드 (없으면 daytrade-default.yaml)
+    3. propose_daytrade_profile (LLM, 강제 도구) → DaytradeProposal
+    4. apply_and_persist (안전 캡 통과한 변경만 적용 + 백업)
+    5. format_apply_message → 콘솔 + 옵션 텔레그램
+
+    토요일 09:00 KST cron 또는 사용자 수동 호출용. LLM 호출은 주 1회 한정.
+    """
+    from .news.collector import collect_recent_news
+    from .news.profile_writer import apply_and_persist, format_apply_message
+    from .news.proposal import _summarize_news, _summarize_reports, propose_daytrade_profile
+
+    reports = insight_mod.collect_recent_reports(days=days_reports)
+    news = collect_recent_news(days=days_news)
+    if not reports and not news:
+        console.print("[red]데이터 부족:[/red] reports + news 모두 비어있습니다.")
+        raise typer.Exit(code=1)
+    console.print(f"[cyan]입력:[/cyan] reports {len(reports)}건 · news {len(news)}건")
+
+    if dry_run:
+        console.print({"reports": _summarize_reports(reports), "news": _summarize_news(news)})
+        return
+
+    target_path = target or current
+    client = _build_anthropic_client()
+    proposal = propose_daytrade_profile(
+        reports,
+        news,
+        client=client,  # type: ignore[arg-type]
+        model=get_settings().anthropic_model,
+    )
+    result = apply_and_persist(
+        proposal,
+        current_path=current,
+        target_path=target_path,
+        fallback_path=fallback,
+    )
+    msg = format_apply_message(result, proposal)
+    console.print(msg)
+
+    if push:
+        notifier = build_notifier()
+
+        async def _push() -> None:
+            try:
+                await notifier.notify("runner.weekly_proposal", text=msg)
+            finally:
+                await notifier.aclose()
+
+        asyncio.run(_push())
+        console.print("[green]텔레그램 푸시 완료[/green]")
+
+
 if __name__ == "__main__":
     app()

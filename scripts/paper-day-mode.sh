@@ -24,12 +24,25 @@ mkdir -p logs
 
 LOG="logs/paper-day-$(date +%Y-%m-%d).log"
 
+# 24단계 Phase D — 토요일 cron 이 갱신해 둔 daytrade-current.yaml 가 있으면
+# 자동 사용. 없으면 daytrade-default.yaml 로 폴백. 둘 다 없으면 CLI 인자만으로 동작.
+PROFILE="strategies/profiles/daytrade-current.yaml"
+PROFILE_FALLBACK="strategies/profiles/daytrade-default.yaml"
+PROFILE_ARG=""
+if [ -f "$PROFILE" ]; then
+  PROFILE_ARG="--profile $PROFILE"
+elif [ -f "$PROFILE_FALLBACK" ]; then
+  PROFILE_ARG="--profile $PROFILE_FALLBACK"
+fi
+
 # 운영 사양 변경(top_n, 청산 시각 등) 은 이 줄만 수정.
 # KIWOOM_MODE=mock 인 한 진짜 돈은 안 움직임. --no-dry-run 은 키움 모의투자 서버에
 # 실제 주문을 보내(체결/잔고/청산 라이프사이클 검증), 결과가 mock 잔고에 반영되도록 함.
 # real(실거래) 전환은 사용자 명시 승인이 있을 때만 KIWOOM_MODE 를 real 로 바꾼다.
+# --profile 가 있으면 그 안의 top_n/liquidate/risk 한도가 CLI 인자보다 우선.
 exec "$CAFFEINATE" -i "$UV_BIN" run auto-trade paper-day \
   --top-n 3 \
   --liquidate 15:15 \
   --no-dry-run \
+  $PROFILE_ARG \
   >> "$LOG" 2>&1

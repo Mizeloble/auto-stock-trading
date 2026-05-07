@@ -351,6 +351,33 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 
 > 처음엔 둘 다 dry-run 으로 일주일씩 돌려보고 어느 쪽이 본인 성향에 맞는지 보세요. 동시 운영은 권장 X (launchd plist 충돌).
 
+### 23단계 — 정통 데이트레이딩 옵션 + YAML 프로파일
+
+23단계 머지 후 `paper-day --profile <yaml>` 로 다음을 한 번에 활성화 가능 (모두 보수적 비활성 기본):
+
+- **위험 통제**: 종목별 stop-loss / 트레일링 스톱 / 부분 익절 (`PositionGuard`), 1회·일일 절대금액 한도, 일일 손실 도달 시 강제 청산(kill switch).
+- **다회 진입**: 청산 후 쿨다운 경과 시 재진입 (`IndexMomentumDayTrade` 전략).
+- **지수 일중 모멘텀 게이트**: KOSPI/KOSDAQ 직전 N분 수익률이 임계 이상일 때만 진입.
+- **비용 가시화**: 거래세 0.20% / 슬리피지 5bp / 수수료 추정 → 일일 리포트에 "💸 비용 차감 PnL".
+- **알림 throttle**: `--telegram-throttle 5` 로 매매 이벤트를 5분 윈도우 요약. 중요 이벤트(kill switch·시작·종료) 는 즉시 푸시.
+
+샘플 프로파일: [strategies/profiles/daytrade-default.yaml](strategies/profiles/daytrade-default.yaml). 첫 활성은 한도 1~2개만 켜고 며칠 dry-run.
+
+### 24단계 — 주간 뉴스 → 다음 주 day-trade 프로파일 자동 반영
+
+매주 토요일 09:00 KST 의 launchd cron 이 다음 흐름을 실행:
+
+1. 직전 7일 일일 리포트 + 한국경제·매일경제 RSS 뉴스 수집 (`data/news/news-*.json` 캐시)
+2. LLM(Anthropic) 호출 1회 — 다음 주 프로파일 변경 제안 (`DaytradeProposal`)
+3. 안전 캡(top_n ≤ 5, stop_loss ≤ 3% 등) 통과한 변경만 `strategies/profiles/daytrade-current.yaml` 에 적용. 기존은 `.bak.YYYY-MM-DD` 로 백업
+4. 텔레그램에 "🗞 다음 주 day-trade 프로파일 갱신" 변경 요약 푸시
+
+월요일 08:55 의 paper-day cron 이 자동으로 `daytrade-current.yaml` 을 읽어 그 주 운용에 반영. 파일 없으면 `daytrade-default.yaml` 로 폴백, 둘 다 없으면 CLI 인자만으로 동작 (안전).
+
+수동 호출: `uv run auto-trade weekly-proposal --push` (또는 `--dry-run` 으로 입력 요약만).
+
+LLM 비용은 호출당 약 $0.04~0.08 (Opus + 캐싱) → 주 1회 = 월 $0.16~0.32. [feedback_llm_cost](memory) 의 "주 1회 이하 저빈도" 규칙 안.
+
 ---
 
 ## 12. 자주 막히는 곳 (트러블슈팅)

@@ -20,5 +20,12 @@ mkdir -p logs
 
 LOG="logs/insight-$(date +%Y-%m-%d).log"
 
-# 운영 사양 변경(--days, --reports-root) 은 이 줄만 수정. 키 없으면 CLI 가 Exit(1).
-exec "$UV_BIN" run auto-trade insight --days 7 --push >> "$LOG" 2>&1
+# 22단계 Phase B — 주간 인사이트 (사람용 결과 요약).
+"$UV_BIN" run auto-trade insight --days 7 --push >> "$LOG" 2>&1
+
+# 24단계 Phase D — 다음 주 day-trade 프로파일 자동 갱신.
+# 인사이트 푸시는 이미 됐으므로, 제안 단계 실패해도 cron 자체는 성공으로 마감(|| true).
+# data/news 수집 + LLM 1회 호출 + strategies/profiles/daytrade-current.yaml 갱신 + 백업 + 텔레그램 푸시.
+"$UV_BIN" run auto-trade weekly-proposal --push >> "$LOG" 2>&1 || true
+
+exit 0
