@@ -421,11 +421,13 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **테스트** · `tests/test_strategy_index_daytrade.py` 8건 — 첫 진입·보유 중 차단·쿨다운 차단·쿨다운 경과 재진입·zero 쿨다운·다회 사이클·reset·registry 조회. 314/314 PASS.
 - [ ] **검증** (사용자): Phase G `--profile` 머지 후 YAML 의 `strategy: index_momentum_daytrade` + `params.cooldown_min` 설정으로 mock dry-run 에서 다회 진입 시퀀스 확인.
 
-### Phase E · 지수(KOSPI/KOSDAQ) 일중 모멘텀 시세
+### Phase E · 지수(KOSPI/KOSDAQ) 일중 모멘텀 시세 — **✅ 완료** (2026-05-07)
 
-- [ ] **`kiwoom/endpoints.py`** · 지수 분봉 차트 path 확인/추가 (현재 `PATH_CHART` 가 분봉 지원하면 그대로, 아니면 `ka20012` 같은 분봉 TR 신규).
-- [ ] **`market/index.py`** · `index_momentum(rest, market, lookback_min=5) -> IndexMomentum(market, last, lookback_return_pct, ts)`. 60초 TTL 캐시.
-- [ ] **테스트** · `tests/test_market_index.py` 분봉 fake fixture 로 모멘텀 계산 검증.
+- [x] **`market/index.py`** · `IndexMomentum` dataclass + `IndexMomentumTracker` 인메모리 시계열(보관 30분, 매칭 톨러런스 90초). 시장별 격리. push 가 cutoff 자동 정리.
+- [x] **데이터 소스** · 별도 분봉 TR 없이 기존 `ka20009` 의 가장 최근 일봉 row close 를 "현재 지수값"으로 활용 — 오늘 일봉은 진행 중이라 실시간 갱신, probe 2026-05-03 의 `cur_prc_n` 필드 그대로.
+- [x] **`fetch_latest_index_price` + `update_index_momentum`** · 1분 주기로 호출자(Phase F orchestrator)가 fetch+push+momentum 한 번에. 실패 시 None.
+- [x] **테스트** · `tests/test_market_index_momentum.py` 12건 — 빈 history / lookback 매칭·tolerance / cutoff 정리 / 시장 격리 / fake client fetch · update 통합. 326/326 PASS, ruff/mypy 클린.
+- [ ] **검증** (사용자): Phase F 머지 후 mock dry-run 에서 `market.index.momentum` 로그 (last + return_pct) 1분 단위로 찍히는지 확인.
 
 ### Phase F · 지수 모멘텀 게이트를 IndexMomentumDayTrade 에 결합
 
