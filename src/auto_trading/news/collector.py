@@ -29,12 +29,21 @@ from .._common import KST
 
 log = structlog.get_logger(__name__)
 
-#: 기본 RSS feed URL 목록. 네이버 금융은 공식 RSS 미제공 → 한국 시장 뉴스 공개 feed.
+#: 기본 RSS feed URL 목록 — day-trade 분석에 의미 있도록 **시장·증권·경제** 카테고리만.
+#: "전체 뉴스(all-news)" feed 는 사회·연예 노이즈가 너무 많아 LLM 입력으로 부적합.
 #: 사용자가 settings 또는 collect_recent_news(feed_urls=...) 로 override 가능.
+#:
+#: 매일경제 RSS(`file.mk.co.kr/news/rss/...`) 는 2026-05-07 실측 시 빈 응답이라 제외.
+#: 한경 finance + economy 두 카테고리만으로도 일평균 ~100건 — proposal.py 가 30건으로
+#: truncate 하니 LLM 입력 다양성에 충분. 다른 매체 추가는 settings/profile 에서.
 DEFAULT_FEED_URLS: tuple[str, ...] = (
-    "https://www.hankyung.com/feed/all-news",  # 한국경제
-    "https://www.mk.co.kr/rss/30000001/",  # 매일경제 경제일반
+    "https://www.hankyung.com/feed/finance",  # 한국경제 증권
+    "https://www.hankyung.com/feed/economy",  # 한국경제 경제
 )
+
+#: 캐시 파일명에 포함되는 schema 버전 — feed URL 이나 NewsItem 구조 변경 시 bump
+#: 해서 기존 캐시를 자동 무효화. 같은 날 호출이라도 새 schema 면 새 RSS 호출.
+CACHE_SCHEMA_VERSION = "v2"
 
 #: 한국 종목 코드 — 단어 경계 + 6자리 숫자.
 _TICKER_RE = re.compile(r"\b(\d{6})\b")
@@ -137,7 +146,7 @@ def _source_label_for(url: str) -> str:
 
 
 def _cache_path(root: Path, day: datetime) -> Path:
-    return root / f"news-{day.date().isoformat()}.json"
+    return root / f"news-{CACHE_SCHEMA_VERSION}-{day.date().isoformat()}.json"
 
 
 def _save_cache(items: list[NewsItem], path: Path) -> None:
