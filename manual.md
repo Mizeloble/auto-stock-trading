@@ -359,7 +359,7 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 
 ### 23단계 — 정통 데이트레이딩 옵션 + YAML 프로파일
 
-23단계 머지 후 `paper-day --profile <yaml>` 로 다음을 한 번에 활성화 가능 (모두 보수적 비활성 기본):
+23단계 머지 후 `paper-day --profile <yaml>` 로 다음을 한 번에 활성화. 기본 `daytrade-default.yaml` 은 위험 통제 4종(stop_loss=-1% / trailing=-0.5% / partial_take=+1.5% / daily_loss_kill) 활성, 모멘텀 게이트와 절대금액 캡은 비활성으로 시작:
 
 - **위험 통제**: 종목별 stop-loss / 트레일링 스톱 / 부분 익절 (`PositionGuard`), 1회·일일 절대금액 한도, 일일 손실 도달 시 강제 청산(kill switch).
 - **다회 진입**: 청산 후 쿨다운 경과 시 재진입 (`IndexMomentumDayTrade` 전략).

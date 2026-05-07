@@ -1,12 +1,21 @@
-# day-trade 기본 프로파일 — 보수적 비활성 위주. 사용자가 한도만 켜서 시작.
+# day-trade 기본 프로파일 — 정통 데이트레이딩 위험 통제 4종 활성.
 # 실행: uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run
 # strategy:
-#   - index_momentum_daytrade (다회 진입 + 모멘텀 게이트, Phase D~F)
+#   - index_momentum_daytrade (23단계 다회 진입 + 모멘텀 게이트)
 #   - intraday_momentum       (21단계 호환, 첫 봉 1회 진입)
-# risk: 모두 0/false 가 비활성. 활성 시작 추천:
-#   stop_loss_pct=0.01 (매수가 -1% 손절)
-#   trailing_stop_pct=0.005 (고점 -0.5% 트레일링)
-#   partial_take_pct=0.015 (매수가 +1.5% 도달 시 절반 익절)
+#
+# 활성 한도 (의식적으로 켜둠):
+# - stop_loss_pct:        0.01   매수가 대비 -1% 도달 시 전량 손절
+# - trailing_stop_pct:    0.005  보유 중 고점 대비 -0.5% 도달 시 잔량 청산
+# - partial_take_pct:     0.015  매수가 대비 +1.5% 도달 시 절반 부분 익절
+# - daily_loss_kill:      true   일일 -3% 손실 도달 시 강제 청산 + 정지
+#
+# 비활성 (사용자 의식 선택용 0):
+# - momentum_threshold_pct: 0.0   지수 일중 모멘텀 게이트 — 매수 막히면 0건 종료라
+#                                 첫 운용에는 비활성. LLM 이 며칠 데이터 누적 후 활성 권장.
+# - max_order_value / daily_notional_limit: 0  절대 금액 캡 — 자본 규모에 맞춰 사용자 설정.
+#
+# 토요일 cron 의 weekly-proposal 가 LLM 제안으로 위 값들을 점진 조정 (안전 캡 통과 한도만).
 
 name: "daytrade default"
 strategy: "index_momentum_daytrade"
@@ -17,15 +26,16 @@ discover_delay_sec: 30
 params:
   cooldown_min: 30
   momentum_lookback_min: 5
-  momentum_threshold_pct: 0.0   # 0 이면 게이트 비활성. +0.3 이면 직전 5분 +0.3% 이상일 때만 진입.
+  momentum_threshold_pct: 0.0   # 0 이면 게이트 비활성. 첫 운용 후 LLM 이 활성 권장.
 risk:
-  stop_loss_pct: 0.0            # 예: 0.01 → -1% 매수가 대비 손절
-  trailing_stop_pct: 0.0        # 예: 0.005 → -0.5% 고점 대비 트레일링
-  partial_take_pct: 0.0         # 예: 0.015 → +1.5% 도달 시 부분 익절
-  partial_take_qty_ratio: 0.5
-  max_order_value: 0.0          # 예: 1_000_000 → 1회 100만원 캡
-  daily_notional_limit: 0.0     # 예: 5_000_000 → 일일 총 500만원 캡
-  daily_loss_kill: false        # true 면 일일 -3% 도달 시 강제 청산 + 정지
+  stop_loss_pct: 0.01           # -1% 손절
+  trailing_stop_pct: 0.005      # 고점 -0.5% 트레일링
+  partial_take_pct: 0.015       # +1.5% 부분 익절
+  partial_take_qty_ratio: 0.5   # 절반만 부분 익절, 잔량은 트레일링 추적
+  max_order_value: 0.0          # 0 = 무제한. 예: 1_000_000 (1회 100만원 캡)
+  daily_notional_limit: 0.0     # 0 = 무제한. 예: 5_000_000 (일일 총 500만원 캡)
+  daily_loss_kill: true         # 일일 -3% 도달 시 보유 강제 청산 + 정지
 notes: |
-  Phase G 첫 머지 시 추가된 보수적 기본. Phase H(알림 throttle) 머지 후
-  실 운용 시 한도부터 1~2개 켜고 며칠 dry-run.
+  23~24단계 풀 도입 default — 위험 통제 활성, 모멘텀 게이트는 비활성으로 시작.
+  이 값들은 토요일 weekly-proposal cron 이 LLM 제안으로 daytrade-current.yaml 에
+  점진 갱신. 본 default 는 fallback (current 파일 없을 때만 사용).
