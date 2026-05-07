@@ -159,7 +159,7 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run
 ```
 
-**`--profile <yaml>` 로 활성화 가능 (모두 보수적 비활성 기본):**
+**`--profile <yaml>` 로 활성화. 기본 프로파일(`daytrade-default.yaml`) 은 위험 통제 4종(stop_loss / trailing / partial_take / daily_loss_kill) 활성, 모멘텀 게이트는 비활성으로 시작:**
 - 종목별 stop-loss / 트레일링 스톱 / 부분 익절 (`PositionGuard`)
 - 1회·일일 절대금액 한도 + 일일 손실 도달 시 강제 청산(kill switch)
 - `IndexMomentumDayTrade` 전략 — 청산 후 쿨다운 경과 시 재진입
@@ -207,7 +207,7 @@ uv run mypy
 
 - 기본 `KIWOOM_MODE=mock`. 실거래 전환은 `KIWOOM_MODE=real` + `--allow-real` 둘 다 있어야 동작.
 - 모든 주문 경로에 [risk/manager.py](src/auto_trading/risk/manager.py) 가 종목 20% / 포트폴리오 80% / 일일 손실 3% 한도를 강제.
-- 23단계 추가 한도 (모두 보수적 비활성 기본): 종목별 stop/트레일링/부분익절 ([risk/position_guard.py](src/auto_trading/risk/position_guard.py)), 1회·일일 절대금액 한도, kill switch (일일 손실 도달 시 강제 청산).
+- 23단계 추가 한도: 종목별 stop/트레일링/부분익절 ([risk/position_guard.py](src/auto_trading/risk/position_guard.py)), 1회·일일 절대금액 한도, kill switch (일일 손실 도달 시 강제 청산). `daytrade-default.yaml` 에서 위험 통제 4종 기본 활성, 절대금액 캡과 모멘텀 게이트는 비활성(자본 규모·시장 안정도에 따라 사용자 또는 LLM 이 켬).
 - LLM 자동 갱신([news/profile_writer.py](src/auto_trading/news/profile_writer.py)) 은 안전 캡(top_n ≤ 5, stop_loss ≤ 3%, trailing/partial 등) 통과한 변경만 적용 + `.bak` 백업.
 - LLM 호출 빈도: 사람 명시 트리거 또는 사전 합의된 주 1회 cron 만. 매일·매시간 호출 금지.
 - `paper --dry-run` 으로 주문 전송 없이 전략·리스크 로직만 검증 가능.
