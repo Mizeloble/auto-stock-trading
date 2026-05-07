@@ -659,6 +659,10 @@ class PaperRunner:
             symbols=list(positions),
             dry_run=self.dry_run,
         )
+        # 2026-05-08 회귀 — 일부 종목이 실패해도 "청산 완료 · N종목" 으로 푸시되어
+        # 사용자가 전부 청산된 줄 오해. 성공/실패를 분리 카운트해 알림에 둘 다 노출.
+        success = 0
+        failed = 0
         for symbol, qty in positions.items():
             order = Order(
                 symbol=symbol,
@@ -678,6 +682,7 @@ class PaperRunner:
                 )
                 # 시뮬에서도 로컬 포지션 즉시 0 으로 — 다음 청산 호출이 idempotent.
                 account.positions[symbol] = 0
+                success += 1
                 continue
             try:
                 result = await place_order(rest, order)
@@ -689,7 +694,9 @@ class PaperRunner:
                     buy_price=buy_price,
                 )
                 account.positions[symbol] = 0
+                success += 1
             except Exception as exc:
+                failed += 1
                 log.error(
                     "runner.liquidate_failed",
                     symbol=symbol,
@@ -705,10 +712,13 @@ class PaperRunner:
                 )
 
         self._liquidation_done = True
+        # count 는 성공 건수만 (backward-compatible). failed 가 추가 필드.
         await self.notifier.notify(
             "runner.liquidate_done",
             reason=reason,
-            count=len(positions),
+            count=success,
+            failed=failed,
+            attempted=len(positions),
             dry_run=self.dry_run,
         )
 

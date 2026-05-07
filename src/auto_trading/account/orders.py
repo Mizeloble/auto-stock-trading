@@ -12,7 +12,7 @@ from enum import StrEnum
 
 import structlog
 
-from .._common import Side
+from .._common import Side, normalize_symbol
 from ..kiwoom.endpoints import PATH_ORDER, TR
 from ..kiwoom.rest import KiwoomRestClient
 
@@ -55,9 +55,13 @@ async def place_order(client: KiwoomRestClient, order: Order) -> OrderResult:
     trde_tp = "3" if order.order_type is OrderType.MARKET else "0"
     price_str = "" if order.order_type is OrderType.MARKET else str(order.price or "")
 
+    # 방어선: 잔고/feed normalize 가 빠진 경로에서 'A005930' 같은 변종이 흘러들어와도
+    # 송신 직전에 6자리 숫자로. 2026-05-08 청산 거절 회귀.
+    symbol = normalize_symbol(order.symbol)
+
     body = {
         "dmst_stex_tp": order.exchange,
-        "stk_cd": order.symbol,
+        "stk_cd": symbol,
         "ord_qty": str(order.quantity),
         "ord_uv": price_str,
         "trde_tp": trde_tp,
@@ -69,7 +73,7 @@ async def place_order(client: KiwoomRestClient, order: Order) -> OrderResult:
 
     log.info(
         "order.placed",
-        symbol=order.symbol,
+        symbol=symbol,
         side=order.side.value,
         qty=order.quantity,
         type=order.order_type.value,

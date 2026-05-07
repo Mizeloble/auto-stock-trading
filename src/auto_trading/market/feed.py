@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from .._common import parse_kiwoom_ts, to_decimal
+from .._common import normalize_symbol, parse_kiwoom_ts, to_decimal
 from ..kiwoom.ws import KiwoomWebSocket
 
 
@@ -28,7 +28,7 @@ async def ticks(ws: KiwoomWebSocket) -> AsyncIterator[Tick]:
             if item.get("type") != "0B":
                 continue
             values = item.get("values") or {}
-            symbol = str(item.get("item") or values.get("9001") or "").strip().lstrip("A")
+            symbol = normalize_symbol(item.get("item") or values.get("9001") or "")
             yield Tick(
                 symbol=symbol,
                 ts=parse_kiwoom_ts(values.get("20")),  # 체결시간 HHMMSS

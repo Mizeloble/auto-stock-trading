@@ -6,7 +6,7 @@ import contextlib
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from .._common import extract_rows, to_decimal
+from .._common import extract_rows, normalize_symbol, to_decimal
 from ..kiwoom.endpoints import PATH_ACCOUNT, TR
 from ..kiwoom.rest import KiwoomRestClient
 
@@ -46,7 +46,10 @@ async def get_balance(client: KiwoomRestClient) -> AccountSnapshot:
 
     holdings = [
         Holding(
-            symbol=str(row.get("stk_cd") or row.get("pdno") or "").strip(),
+            # 잔고 응답의 코드는 'A005930' / '252670_AL' 같은 변종이 섞여 있음.
+            # 키움 주문 API 가 6자리만 받으므로 입력 단에서 정규화 (2026-05-08 청산
+            # 거절 회귀 — 'A' prefix 가 그대로 들어가 liquidate_all 에서 거절).
+            symbol=normalize_symbol(row.get("stk_cd") or row.get("pdno") or ""),
             name=str(row.get("stk_nm") or row.get("prdt_name") or "").strip(),
             quantity=int(to_decimal(row.get("rmnd_qty") or row.get("hldg_qty"))),
             avg_price=to_decimal(row.get("pur_pric") or row.get("pchs_avg_pric")),

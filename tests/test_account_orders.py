@@ -178,3 +178,28 @@ async def test_cancel_order_sends_cancel_tr_and_parses_response(settings: Settin
     assert '"orig_ord_no":"0000123"' in body
     assert '"cncl_qty":"1"' in body
     assert res.order_no == "CANCEL-1"
+
+
+# ---- 2026-05-08 회귀 — 청산 거절 (A prefix) -----------------------------------
+
+
+async def test_place_order_strips_a_prefix_before_sending(settings: Settings) -> None:
+    """잔고/feed 정규화가 빠진 경로에서 'A005930' 이 들어와도 송신은 '005930' 으로.
+
+    회귀: 2026-05-07 paper-day 운영에서 잔고 응답의 'A005930' 이 그대로
+    `account.positions` 에 들어가 liquidate_all 이 SELL 'A005930' 송신 →
+    키움 1902 거절. orders.place_order 의 송신 직전 normalize 가 1차 방어선.
+    """
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        route = mock.post(PATH_ORDER).mock(
+            return_value=httpx.Response(200, json={"return_code": 0, "ord_no": "X1"})
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            await place_order(
+                client,
+                Order(symbol="A005930", side=Side.SELL, quantity=12),
+            )
+    body = route.calls[0].request.read().decode()
+    assert '"stk_cd":"005930"' in body
+    assert "A005930" not in body

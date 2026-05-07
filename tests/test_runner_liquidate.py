@@ -98,6 +98,13 @@ async def test_liquidate_all_one_failure_does_not_block_others() -> None:
     events = [c.args[0] for c in fake_notifier.notify.call_args_list]
     assert "runner.liquidate_failed" in events
     assert "runner.liquidate_done" in events
+    # 2026-05-08 회귀 — done 이벤트의 count 는 성공만, failed 는 실패만, attempted 는 전체.
+    done_call = next(
+        c for c in fake_notifier.notify.call_args_list if c.args[0] == "runner.liquidate_done"
+    )
+    assert done_call.kwargs["count"] == 1  # 000660 성공만
+    assert done_call.kwargs["failed"] == 1  # 005930 실패
+    assert done_call.kwargs["attempted"] == 2
 
 
 async def test_liquidate_all_noop_on_empty_positions() -> None:
