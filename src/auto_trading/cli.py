@@ -42,6 +42,7 @@ from .notify.factory import build_command_handler, build_notifier
 from .notify.reporting import ReportingNotifier
 from .notify.state import format_daily_report
 from .notify.telegram_commands import TelegramCommandHandler
+from .notify.throttle import ThrottledNotifier
 from .reports.daily import build_daily_report, save_daily_report
 from .reports.log_parser import parse_log
 from .runner import PaperRunner
@@ -397,6 +398,14 @@ def paper_day(
             "프로파일 값으로 덮어써진다. CLI 인자는 프로파일 없을 때만 적용."
         ),
     ),
+    telegram_throttle_min: int = typer.Option(
+        0,
+        "--telegram-throttle",
+        help=(
+            "텔레그램 매매 알림 요약 윈도우(분). 0 이면 비활성. 다회 진입·stop·partial 이"
+            " 잦은 운용에서 채터링 방지. 5 권장."
+        ),
+    ),
 ) -> None:
     """day-trade 모드: 매일 발굴 → 즉시 균등 매수 → 청산 시각에 일괄 매도 → 종료.
 
@@ -433,6 +442,10 @@ def paper_day(
 
     liquidate_at = _parse_hhmm_kst(liquidate)
     inner_notifier = build_notifier()
+    # 23단계 Phase H — 옵션 활성 시 매매 이벤트 N분 요약. 중요 이벤트는 즉시 통과.
+    if telegram_throttle_min > 0:
+        inner_notifier = ThrottledNotifier(inner_notifier, window_min=telegram_throttle_min)
+        console.print(f"[cyan]텔레그램 throttle:[/cyan] {telegram_throttle_min}분 윈도우")
     runner = PaperRunner(
         liquidate_at=liquidate_at,
         bar_minutes=minutes,

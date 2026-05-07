@@ -58,6 +58,10 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         limit_part = f" (-{float(limit) * 100:.1f}%)" if limit is not None else ""
         return f"🛑 일일 손실 한도 도달{limit_part} — 강제 청산 후 정지"
 
+    if event == "notify.throttled_summary":
+        # 23단계 Phase H — ThrottledNotifier 가 N분 윈도우 모은 요약. 본문 그대로.
+        return str(fields.get("text") or "🔁 (요약 비어있음)")
+
     if event == "position_guard.fired":
         # 23단계 Phase C — PositionGuard SELL 발화. stop/trailing/partial 한국어.
         symbol = fields.get("symbol", "?")

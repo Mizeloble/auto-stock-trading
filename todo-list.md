@@ -447,11 +447,14 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **테스트** · `tests/test_daytrade_profile.py` 8건 (라운드트립·검증·샘플 yaml 로드) + `tests/test_cli_paper_day.py` 1건 (--profile override). `tests/test_daytrade_orchestrator.py` 기존 fake factory 시그니처 갱신. 342/342 PASS, ruff/mypy 클린.
 - [ ] **검증** (사용자): `uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run` mock 에서 정상 시동 확인. 한도 1~2개(예: stop_loss_pct=0.01) 켜고 며칠 dry-run 후 본격 활성.
 
-### Phase H · 텔레그램 5분 요약 throttle
+### Phase H · 텔레그램 5분 요약 throttle — **✅ 완료** (2026-05-07)
 
-- [ ] **`notify/throttle.py`** · `ThrottledNotifier` 가 5분 윈도우의 매수/부분익절/stop 이벤트를 1개 요약 메시지로. 중요 이벤트(kill switch·시작·종료·시스템 에러) 는 즉시 푸시(throttle 우회).
-- [ ] **`notify/telegram.py`** · 옵셔널 `--telegram-throttle` 플래그로 wrap 활성/비활성.
-- [ ] **테스트** · `tests/test_notify_throttle.py` 5분 안 N건 → 1개 요약 + 중요 이벤트 즉통과.
+- [x] **`notify/throttle.py`** 신규 · `ThrottledNotifier` 가 다른 Notifier 를 wrap. 매매 이벤트(order_accepted/failed, liquidate_done/failed, position_guard.fired, daytrade.discovery_done) 만 buffer 에 한 줄씩 모았다가 N분 윈도우 경과 시 또는 aclose() 시 inner 에 `notify.throttled_summary` 1회 푸시. 즉시 통과: runner.started/stopped/kill_switch/balance_failed/weekly_insight/daily_report.
+- [x] **윈도우 트리거** · timer task 없이 매 notify 시점에 `_maybe_flush` 가 동작 → 단순·시뮬·테스트 용이. 알 수 없는 이벤트는 통과(unknown event passthrough).
+- [x] **`cli.py paper-day --telegram-throttle <int>`** 옵션 (0=비활성, 5 권장). 활성 시 inner_notifier 를 ThrottledNotifier 로 wrap. ReportingNotifier(일일 리포트) 와 호환 — daily_report 는 passthrough 라 자동 통과.
+- [x] **`notify/telegram.py`** · `notify.throttled_summary` 이벤트 케이스 추가 (text 본문 그대로).
+- [x] **테스트** · `tests/test_notify_throttle.py` 7건 (passthrough/buffer/aclose flush/empty/unknown event/window reset/partial_take 라벨). 349/349 PASS, ruff/mypy 클린.
+- [ ] **검증** (사용자): `paper-day --telegram-throttle 5` mock dry-run 에서 다회 매매 시 5분마다 "🔁 최근 5분 요약" 1개 푸시 확인. 즉시 푸시 이벤트(kill switch 등) 는 윈도우와 별개.
 
 ### 23단계 검증 (전 Phase 완료 시)
 
