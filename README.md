@@ -38,7 +38,11 @@ uv run auto-trade --help                      # 전체 명령 목록
 uv run auto-trade quote 005930                # 현재가
 uv run auto-trade balance                      # 모의 계좌 잔고
 uv run auto-trade backtest …                   # 과거 일봉 시뮬
-uv run auto-trade paper    …                   # 모의투자 실시간 루프
+uv run auto-trade paper    …                   # 모의투자 실시간 루프 (swing)
+uv run auto-trade paper-day --profile <yaml>   # day-trade 모드 (자동 발굴 + 15:15 청산)
+uv run auto-trade report --date YYYY-MM-DD     # 일일 리포트 JSON 재생성
+uv run auto-trade insight --days 7 --push      # (LLM) 주간 인사이트
+uv run auto-trade weekly-proposal --push       # (LLM) 다음 주 day-trade 프로파일 자동 갱신
 uv run auto-trade strategy suggest …           # 추천 → YAML 프로파일 저장
 uv run auto-trade strategy advise  …           # (선택) LLM 으로 프로파일 조정
 ```
@@ -143,6 +147,48 @@ uv run auto-trade strategy advise --profile strategies/profiles/auto_005930.yaml
 
 자세한 흐름은 [todo-list.md](./todo-list.md) 의 15·16단계 참고.
 
+## 5) Day-trade 모드 (`paper-day`) — 매일 자동 종목 발굴 + 청산
+
+종목을 미리 정해 들고 가는 swing(`paper`) 와 달리, 매일 09:00 거래량 상위를 자동 발굴해 그날 안에 청산하는 모드. 다음날 갭 리스크가 0.
+
+```bash
+# 첫 실행 — dry-run (안전 시운전)
+uv run auto-trade paper-day --top-n 3 --dry-run
+
+# 23단계 정통 데이트레이딩 옵션 — 한도·게이트·풀 패키지
+uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run
+```
+
+**`--profile <yaml>` 로 활성화 가능 (모두 보수적 비활성 기본):**
+- 종목별 stop-loss / 트레일링 스톱 / 부분 익절 (`PositionGuard`)
+- 1회·일일 절대금액 한도 + 일일 손실 도달 시 강제 청산(kill switch)
+- `IndexMomentumDayTrade` 전략 — 청산 후 쿨다운 경과 시 재진입
+- KOSPI/KOSDAQ 일중 모멘텀 게이트 — 임계 통과 시만 진입
+- 비용 차감 PnL 일일 리포트 (거래세 0.20% / 슬리피지 5bp / 수수료 0.015%)
+- `--telegram-throttle 5` 매매 알림 5분 윈도우 요약
+
+자세한 사용법은 [manual.md §11](./manual.md). 샘플 프로파일은 [strategies/profiles/daytrade-default.yaml](strategies/profiles/daytrade-default.yaml).
+
+## 6) 일일 리포트 + 주간 자동화 (LLM)
+
+`paper-day` 가 종료될 때마다 자동으로 일일 리포트가 `data/reports/daily-YYYY-MM-DD.json` 으로 저장되고 텔레그램에 푸시된다 (페어 PnL, 마감 잔고, 비용 차감 PnL 포함). 토요일 09:00 KST launchd cron 이 두 LLM 작업을 차례로 실행:
+
+| 시점 | 동작 |
+|---|---|
+| 평일 08:55 | `paper-day-mode.sh` → `daytrade-current.yaml`(없으면 `daytrade-default.yaml`) 자동 로드 |
+| 평일 15:15 | 일괄 청산 + 일일 리포트 텔레그램 푸시 |
+| 토요일 09:00 | `auto-trade insight` (사람용 인사이트) → `auto-trade weekly-proposal` (다음 주 프로파일 자동 갱신) |
+
+**`weekly-proposal`** 는 직전 7일 일일 리포트 + 한국경제 시장/증권 RSS 100건을 입력으로 LLM 1회 호출 → `DaytradeProposal` (안전 캡 통과한 변경만 적용) → `daytrade-current.yaml` 작성 + `.bak.YYYY-MM-DD` 백업 + 텔레그램에 변경 요약 푸시. 호출당 약 $0.04~0.08 (Opus + 캐싱), 주 1회 = 월 $0.16~0.32.
+
+수동 호출 / 디버그:
+```bash
+uv run auto-trade weekly-proposal --dry-run   # LLM 호출 없이 입력 요약만
+uv run auto-trade weekly-proposal --push       # 풀 흐름 + 텔레그램 푸시
+```
+
+자동화 설정은 [scripts/launchd/README.md](./scripts/launchd/README.md) 참고.
+
 ## 테스트
 
 ```bash
@@ -161,5 +207,8 @@ uv run mypy
 
 - 기본 `KIWOOM_MODE=mock`. 실거래 전환은 `KIWOOM_MODE=real` + `--allow-real` 둘 다 있어야 동작.
 - 모든 주문 경로에 [risk/manager.py](src/auto_trading/risk/manager.py) 가 종목 20% / 포트폴리오 80% / 일일 손실 3% 한도를 강제.
+- 23단계 추가 한도 (모두 보수적 비활성 기본): 종목별 stop/트레일링/부분익절 ([risk/position_guard.py](src/auto_trading/risk/position_guard.py)), 1회·일일 절대금액 한도, kill switch (일일 손실 도달 시 강제 청산).
+- LLM 자동 갱신([news/profile_writer.py](src/auto_trading/news/profile_writer.py)) 은 안전 캡(top_n ≤ 5, stop_loss ≤ 3%, trailing/partial 등) 통과한 변경만 적용 + `.bak` 백업.
+- LLM 호출 빈도: 사람 명시 트리거 또는 사전 합의된 주 1회 cron 만. 매일·매시간 호출 금지.
 - `paper --dry-run` 으로 주문 전송 없이 전략·리스크 로직만 검증 가능.
 - 시크릿(`.env`, AppKey/Secret, 토큰) 은 git 제외 + 로그 마스킹.

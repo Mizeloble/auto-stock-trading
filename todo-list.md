@@ -512,8 +512,40 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [ ] 한도 초과 응답 시 자동 거부 + 경고 푸시.
 - [ ] 다음 월요일 08:55 시동 시 paper-day 가 `daytrade-current.yaml` 자동 사용 (콘솔에 "프로파일 로드:" 라인).
 
+### 사이드 픽스 — RSS feed 시장 특화 + 캐시 schema 버전 (2026-05-07, PR #47)
+
+24단계 Phase D 직후 `weekly-proposal --dry-run` 검증에서 발견 — 한경 all-news + 매경 30000001 이 사회·연예 뉴스 위주라 LLM 입력 노이즈가 많음.
+
+- [x] **`DEFAULT_FEED_URLS` 교체** · 한국경제 finance + economy 두 카테고리 (각 50건). 매경 `file.mk.co.kr/news/rss/...` 는 실측 빈 응답이라 제외. 사용자가 `feed_urls` 인자로 백업 추가 가능.
+- [x] **`CACHE_SCHEMA_VERSION = "v2"`** · 캐시 파일명 `news-v2-YYYY-MM-DD.json` → URL 변경 시 기존 캐시 자동 무효화. 향후 NewsItem 스키마 변경 시 bump.
+
+---
+
+## ✅ 23단계 + 24단계 풀 완료 (2026-05-07)
+
+| 단계 | Phase | PR |
+|---|---|---|
+| 23 | A. 비용 모델 (거래세 0.20% / 슬리피지 5bp) + 비용 차감 PnL | #35 |
+| 23 | B. 1회/일일 절대금액 한도 + kill switch | #36 |
+| 23 | C. PositionGuard (stop/트레일링/부분 익절) | #37 |
+| 23 | D. IndexMomentumDayTrade (다회 진입 + 쿨다운) | #38 |
+| 23 | E. 지수 일중 모멘텀 트래커 | #39 |
+| 23 | F. 모멘텀 게이트 결합 + 1분 갱신 loop | #40 |
+| 23 | G. paper-day --profile + DaytradeProfile YAML | #41 |
+| 23 | H. 텔레그램 N분 요약 throttle | #42 |
+| 24 | A. 한국 시장 RSS 뉴스 수집기 | #43 |
+| 24 | B. 주간 LLM DaytradeProposal 제안 | #44 |
+| 24 | C. yaml 자동 갱신 + 안전 캡 + 백업 | #45 |
+| 24 | D. 토요일 cron 통합 + paper-day 자동 프로파일 사용 | #46 |
+| ↳ | RSS 시장 특화 + 캐시 schema 버전 | #47 |
+
+**총 변경량**: 신규/변경 코드 ~2,500 LOC + 테스트 ~1,500 LOC + 문서/스크립트 ~400 LOC, 386 단위 테스트 PASS, ruff/mypy 클린.
+
 ---
 
 ## 🚀 남은 과제 (선택)
 
+- **23~24단계 사용자 검증** · 다음 평일 paper-day 시동 후 콘솔 "프로파일 로드:" + 일일 리포트 비용 차감 PnL 라인 확인. 토요일 cron 후 텔레그램에 "🗞 다음 주 day-trade 프로파일 갱신" 도착 확인. 다음 월요일 paper-day 가 `daytrade-current.yaml` 자동 사용 확인.
+- **첫 주 한도 활성** · 며칠 dry-run 으로 로그·푸시 정상 확인 후, `daytrade-default.yaml` 또는 `daytrade-current.yaml` 에서 한도 1~2개부터 켠다 (예: `stop_loss_pct=0.01`). 한 번에 다 켜지 말 것.
+- **RSS feed 추가** · 필요 시 `news/collector.py` 의 `DEFAULT_FEED_URLS` 에 이투데이·연합인포맥스 등 시장 뉴스 RSS 추가. 매일경제 RSS URL 이 안정화되면 복귀.
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후). 사전 검토: 집 맥북 launchd 의존이 실거래 신뢰성에 충분한지 — 부족하다고 판단되면 그 시점에 systemd(Oracle 무료/한국 리전) 이전을 같이 진행.
