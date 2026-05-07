@@ -1,14 +1,18 @@
 #!/bin/zsh
-# launchd 에 paper / paper-stop 두 개 잡 등록.
+# launchd 에 day-trade 자동 운영 잡 등록.
 #
 # 무엇/왜:
-# - ~/Library/LaunchAgents/ 에 plist 두 개 복사 후 bootstrap 으로 등록
-# - 등록 후엔 평일 08:55 자동 시동 / 15:35 자동 종료 사이클이 돌아감
-# - bootstrap 은 macOS Catalina 이후 권장 명령. 구식 `launchctl load` 와 다름
+# - ~/Library/LaunchAgents/ 에 plist 복사 후 bootstrap 으로 등록.
+# - 등록 후 자동 사이클:
+#   * 평일 08:55 KST: paper-day 시동 → 발굴·매수·15:15 자체 청산·종료
+#   * 토요일 09:00 KST: insight-weekly cron → 인사이트 + weekly-proposal LLM 호출
+# - 21단계 시점의 swing(`paper`) + paper-stop 은 day-trade 모드와 동시 운영 X.
+#   필요하면 LABELS 에 추가하되 paper-day 와 충돌 없도록 plist 시각·계좌 점검.
+# - bootstrap 은 macOS Catalina 이후 권장 명령. 구식 `launchctl load` 와 다름.
 #
 # 어떻게 확인:
 # - launchctl list | grep mizeloble.auto-trade
-# - 실행 잡 두 개 보이면 성공
+# - 라벨 두 개 (paper-day + insight-weekly) 보이면 성공
 
 set -euo pipefail
 
@@ -16,15 +20,17 @@ PROJECT_DIR="/Users/jjmize/Project/auto-stock-trading"
 PLIST_SRC="$PROJECT_DIR/scripts/launchd"
 PLIST_DST="$HOME/Library/LaunchAgents"
 LABELS=(
-  "com.mizeloble.auto-trade.paper"
-  "com.mizeloble.auto-trade.paper-stop"
+  "com.mizeloble.auto-trade.paper-day"
+  "com.mizeloble.auto-trade.insight-weekly"
 )
 
 mkdir -p "$PLIST_DST"
 mkdir -p "$PROJECT_DIR/logs"
 
 # 스크립트 실행권한 보장
-chmod +x "$PROJECT_DIR/scripts/paper-day.sh" "$PROJECT_DIR/scripts/paper-stop.sh"
+chmod +x \
+  "$PROJECT_DIR/scripts/paper-day-mode.sh" \
+  "$PROJECT_DIR/scripts/insight-weekly.sh"
 
 for label in $LABELS; do
   src="$PLIST_SRC/$label.plist"
@@ -49,7 +55,9 @@ for label in $LABELS; do
 done
 
 echo
-echo "✅ 등록 완료. 다음 평일 08:55 KST 부터 자동 시동 / 15:35 자동 종료."
+echo "✅ 등록 완료. 자동 사이클:"
+echo "  - 평일 08:55 KST: paper-day 시동 → 15:15 자체 청산"
+echo "  - 토요일 09:00 KST: insight-weekly (인사이트 + weekly-proposal)"
 echo "  확인: launchctl list | grep mizeloble.auto-trade"
-echo "  강제 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.paper"
-echo "  강제 즉시 종료(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.paper-stop"
+echo "  강제 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.paper-day"
+echo "  토요일 cron 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.insight-weekly"

@@ -1,22 +1,14 @@
 # launchd 자동 운영 가이드
 
-집 맥북에서 평일 장중에만 `auto-trade paper` 를 자동으로 돌리고, 회사에선
-텔레그램으로 모니터링/제어하는 셋업.
+집 맥북에서 day-trade 모드 자동 운영 + 토요일 LLM 자동 갱신.
+21~24단계 풀 도입 후 **두 잡** 만 등록하면 사이클 완성:
 
-## 무엇
+| 잡 | 트리거 | 동작 |
+|---|---|---|
+| `paper-day` | 평일 08:55 KST | 발굴 → 매수 → 15:15 자체 청산 → 종료. 일일 리포트 텔레그램 |
+| `insight-weekly` | 토요일 09:00 KST | 인사이트 + weekly-proposal LLM (`daytrade-current.yaml` 자동 갱신) |
 
-- **08:55 KST**: launchd 가 `paper-day.sh` 트리거
-  → `caffeinate -i uv run auto-trade paper --profile … --dry-run`
-  → 텔레그램에 "▶️ paper 시작" 푸시
-- **15:35 KST**: launchd 가 `paper-stop.sh` 트리거
-  → `pkill -TERM` 으로 paper 프로세스 graceful shutdown
-  → 텔레그램에 "⏹ paper 종료" 푸시
-- **로그**: `logs/paper-YYYY-MM-DD.log` 에 일자별 누적
-
-## 왜
-
-회사에 있어 장중 직접 못 켤 때, 매일 자동으로 돌리고 폰에서 상태만 보면 됨.
-`--dry-run` 모드라 실 주문 X — 전략·신호 흐름 검증 단계.
+로그: `logs/paper-day-YYYY-MM-DD.log` / `logs/insight-YYYY-MM-DD.log`.
 
 ## 어떻게 등록
 
@@ -29,20 +21,20 @@ chmod +x scripts/launchd-install.sh scripts/launchd-uninstall.sh
 확인:
 ```bash
 launchctl list | grep mizeloble.auto-trade
-# com.mizeloble.auto-trade.paper       두 줄 보이면 등록 완료
-# com.mizeloble.auto-trade.paper-stop
+# com.mizeloble.auto-trade.paper-day        두 줄 보이면 등록 완료
+# com.mizeloble.auto-trade.insight-weekly
 ```
 
 ## 어떻게 확인 (즉시 시동 테스트)
 
-장 외 시간에 한 번 강제로 돌려 동작 확인:
+장 외 시간에 강제로 돌려 시동 흐름 확인:
 ```bash
-launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.paper
+launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.paper-day
 # 텔레그램에 "▶️ paper 시작" 푸시 도착하면 시동 성공
-# (장 외 시간이라 ws 는 안 붙고 곧 종료됨 — 시동 자체가 성공이면 OK)
+# (장 외 시간이라 ws 는 안 붙고 시계 task 가 청산 시각까지 대기)
 
-# 강제 종료:
-launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.paper-stop
+launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.insight-weekly
+# data/reports/ 가 비어있으면 CLI 가 Exit(1) — paper-day 며칠 운영 후 의미 있음
 ```
 
 ## 사전 준비 (맥 설정)

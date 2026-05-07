@@ -7,7 +7,11 @@
 set -euo pipefail
 
 PLIST_DST="$HOME/Library/LaunchAgents"
+# 21단계 시점의 swing 잡(paper / paper-stop) 도 함께 정리 — 이전에 등록했던 사용자
+# 위해 폭넓게 해제. 이미 해제됐으면 조용히 skip.
 LABELS=(
+  "com.mizeloble.auto-trade.paper-day"
+  "com.mizeloble.auto-trade.insight-weekly"
   "com.mizeloble.auto-trade.paper"
   "com.mizeloble.auto-trade.paper-stop"
 )
