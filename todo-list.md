@@ -469,12 +469,14 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 
 토요일 09:00 KST 인사이트 cron 에 뉴스 수집·LLM 분석·YAML 프로파일 자동 갱신 단계 추가. LLM 호출은 주 1회 한정 ([feedback_llm_cost](memory)). 23단계 G(--profile) 가 머지된 뒤 진행.
 
-### Phase A · 네이버 금융 RSS/공시 뉴스 수집기
+### Phase A · 한국 시장 RSS 뉴스 수집기 — **✅ 완료** (2026-05-07)
 
-- [ ] **`news/collector.py`** · feedparser 의존 추가 (`uv add feedparser`). 네이버 금융 뉴스 RSS + DART 공시 RSS(선택). User-Agent 명시·robots.txt 준수·feed 비면 빈 리스트 안전 종료.
-- [ ] **`NewsItem(title, summary, url, published_at, source, tickers)`** · dataclass. 종목 코드 추출은 6자리 + KOSPI/KOSDAQ 키워드 정규식.
-- [ ] **`collect_recent_news(days=7) -> list[NewsItem]`** · `data/news/YYYY-MM-DD.json` 캐시. 매일 호출 가능.
-- [ ] **테스트** · `tests/test_news_collector.py` fake feed parser fixture.
+- [x] **`news/collector.py`** 신규 + feedparser 의존 추가 (`uv add feedparser`). RSS feed → `NewsItem(title, summary, url, published_at, source, tickers)` 정규화.
+- [x] **기본 RSS** · 한국경제(`hankyung.com/feed/all-news`) + 매일경제(`mk.co.kr/rss/30000001`) 공개 feed. 네이버 금융은 공식 RSS 미제공이라 대체. 사용자가 `feed_urls` 인자로 override 가능. User-Agent 명시 (`auto-trade-bot/1.0`).
+- [x] **`collect_recent_news(days, feed_urls, cache_root, now, fetcher)`** · 같은 날 재호출 시 `data/news/news-YYYY-MM-DD.json` 캐시 히트 → fetcher 안 부름. fetch/parse 실패는 swallow + 다음 feed 시도 (kiwoom 5xx 같은 transient 보호). 결과는 published_at 내림차순.
+- [x] **종목 코드 추출** · title+summary 에서 6자리 정규식 → 정렬·중복제거 tuple. 이름→코드 매핑은 LLM 본문 판단으로 위임.
+- [x] **테스트** · `tests/test_news_collector.py` 10건 (parse_feed 5 + collect 5: 캐시 hit·days 필터·fetch 실패·라운드트립·정렬). 359/359 PASS, ruff/mypy 클린.
+- [ ] **검증** (사용자): `python -c "from auto_trading.news import collect_recent_news; print(len(collect_recent_news(days=1)))"` 로 실 RSS 호출 확인.
 
 ### Phase B · 주간 LLM 입력에 뉴스 + 다음주 프로파일 제안
 
