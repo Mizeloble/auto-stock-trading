@@ -27,9 +27,15 @@ from ._common import KST
 from .account.balance import get_balance
 from .backtest.engine import Backtester, save_result
 from .config import get_settings
-from .daytrade.cli_helpers import paper_day_main, paper_day_with_commands
+from .daytrade.cli_helpers import (
+    apply_profile_to_runner,
+    paper_day_main,
+    paper_day_with_commands,
+)
+from .daytrade.profile import DaytradeProfile
 from .kiwoom.rest import KiwoomRestClient
 from .market.chart import bars_to_dataframe, get_daily_bars
+from .market.index import IndexMomentumTracker
 from .market.quote import get_quote
 from .notify import insight as insight_mod
 from .notify.factory import build_command_handler, build_notifier
@@ -383,6 +389,14 @@ def paper_day(
         "--include-etf",
         help="ETF/ETN/SPAC 도 발굴 대상에 포함. 기본은 제외(일반 주식 day-trade 의도).",
     ),
+    profile_path: Path | None = typer.Option(
+        None,
+        "--profile",
+        help=(
+            "DaytradeProfile YAML 경로. 지정 시 strategy/top_n/liquidate/risk 한도가 "
+            "프로파일 값으로 덮어써진다. CLI 인자는 프로파일 없을 때만 적용."
+        ),
+    ),
 ) -> None:
     """day-trade 모드: 매일 발굴 → 즉시 균등 매수 → 청산 시각에 일괄 매도 → 종료.
 
@@ -404,6 +418,19 @@ def paper_day(
     color = "green" if settings.is_mock else "red"
     console.print(f"[dim]키움 모드:[/dim] [{color}]{settings.kiwoom_mode.value}[/{color}]")
 
+    # 23단계 Phase G — 프로파일 로드 시 strategy/top_n/liquidate/risk 우선 적용.
+    profile: DaytradeProfile | None = None
+    if profile_path is not None:
+        profile = DaytradeProfile.load_yaml(profile_path)
+        top_n = profile.top_n
+        liquidate = profile.liquidate
+        discover_delay_sec = profile.discover_delay_sec
+        include_etf = not profile.exclude_etf
+        console.print(
+            f"[cyan]프로파일 로드:[/cyan] {profile_path.name} "
+            f"({profile.strategy} · top_n={profile.top_n} · 청산 {profile.liquidate})"
+        )
+
     liquidate_at = _parse_hhmm_kst(liquidate)
     inner_notifier = build_notifier()
     runner = PaperRunner(
@@ -413,6 +440,12 @@ def paper_day(
         dry_run=dry_run,
         notifier=inner_notifier,
     )
+    # 프로파일이 있으면 RiskLimits 즉시 반영. PositionGuard 도 자동 갱신(같은 limits 객체 참조).
+    momentum_tracker: IndexMomentumTracker | None = None
+    if profile is not None:
+        apply_profile_to_runner(profile, runner)
+        if profile.strategy == "index_momentum_daytrade":
+            momentum_tracker = IndexMomentumTracker()
     # 22단계 Phase A — 청산·종료 후 자동 일일 리포트 푸시 + JSON 저장.
     today_kst = datetime.now(KST).date()
     runner.notifier = ReportingNotifier(
@@ -450,6 +483,8 @@ def paper_day(
                     top_n=top_n,
                     discover_delay=discover_delay_sec,
                     exclude_etf=exclude_etf,
+                    profile=profile,
+                    momentum_tracker=momentum_tracker,
                 )
             )
         else:
@@ -461,6 +496,8 @@ def paper_day(
                     top_n=top_n,
                     discover_delay=discover_delay_sec,
                     exclude_etf=exclude_etf,
+                    profile=profile,
+                    momentum_tracker=momentum_tracker,
                 )
             )
     except KeyboardInterrupt:

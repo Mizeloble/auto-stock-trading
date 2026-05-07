@@ -38,10 +38,15 @@ class DiscoveryResult:
     note_ko: str  # 사람이 읽는 한 줄 요약
 
 
-def _default_strategy_factory(weight: float) -> Callable[[str], Strategy]:
-    """N 분할 균등 매수용 IntradayMomentum 팩토리."""
+def _default_strategy_factory(weight: float) -> Callable[..., Strategy]:
+    """N 분할 균등 매수용 IntradayMomentum 팩토리.
 
-    def _factory(_symbol: str) -> Strategy:
+    market 키워드는 후방 호환을 위해 받기만 하고 사용하지 않는다 — 프로파일 기반
+    팩토리(`cli_helpers.build_profile_factory`) 가 시장별 모멘텀 게이트를 활용한다.
+    """
+
+    def _factory(_symbol: str, *, market: Market | None = None) -> Strategy:
+        del market  # 미사용
         return IntradayMomentum(weight=weight)
 
     return _factory
@@ -52,7 +57,7 @@ async def discover_and_arm(
     runner: PaperRunner,
     *,
     top_n: int = 3,
-    strategy_factory: Callable[[str], Strategy] | None = None,
+    strategy_factory: Callable[..., Strategy] | None = None,
     markets: tuple[Market, ...] = ("KOSPI", "KOSDAQ"),
     exclude_etf: bool = True,
 ) -> DiscoveryResult:
@@ -107,7 +112,7 @@ async def discover_and_arm(
 
     factory = strategy_factory or _default_strategy_factory(weight=1.0 / max(1, top_n))
     symbols = [c.symbol for c in chosen]
-    strategies = {sym: factory(sym) for sym in symbols}
+    strategies = {c.symbol: factory(c.symbol, market=c.market) for c in chosen}
     runner.set_universe(symbols, strategies)
     log.info(
         "daytrade.universe_chosen",

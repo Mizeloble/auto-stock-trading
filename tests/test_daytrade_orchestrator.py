@@ -141,7 +141,7 @@ async def test_discover_custom_factory_used(monkeypatch) -> None:
 
     sentinel = IntradayMomentum(weight=0.42)
 
-    def _factory(_sym):  # type: ignore[no-untyped-def]
+    def _factory(_sym, *, market=None):  # type: ignore[no-untyped-def]
         return sentinel
 
     await orch.discover_and_arm(

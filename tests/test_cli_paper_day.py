@@ -78,6 +78,63 @@ def test_paper_day_constructs_runner_in_day_trade_mode() -> None:
     assert r.symbols == []  # day-trade 모드는 시작 시 빈 universe
 
 
+def test_paper_day_with_profile_overrides_cli_args(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """`--profile` 지정 시 top_n/liquidate/risk 가 프로파일 값으로 덮어써진다."""
+    from auto_trading.daytrade.profile import (
+        DaytradeProfile,
+        DaytradeRiskLimits,
+        DaytradeStrategyParams,
+    )
+
+    profile = DaytradeProfile(
+        name="t",
+        strategy="index_momentum_daytrade",
+        top_n=2,
+        liquidate="14:50",
+        params=DaytradeStrategyParams(cooldown_min=15, momentum_threshold_pct=0.4),
+        risk=DaytradeRiskLimits(stop_loss_pct=0.012, daily_loss_kill=True),
+    )
+    yaml_path = tmp_path / "p.yaml"
+    profile.dump_yaml(yaml_path)
+
+    runner_holder: dict[str, PaperRunner] = {}
+    real_init = PaperRunner.__init__
+
+    def _capture_init(self, **kwargs):  # type: ignore[no-untyped-def]
+        real_init(self, **kwargs)
+        runner_holder["r"] = self
+
+    async def _no_op(*_a, **_kw):  # type: ignore[no-untyped-def]
+        return None
+
+    runner = CliRunner()
+    with (
+        patch.object(PaperRunner, "__init__", _capture_init),
+        patch.object(cli_module, "paper_day_main", AsyncMock(side_effect=_no_op)),
+        patch.object(cli_module, "build_command_handler", return_value=None),
+    ):
+        # CLI 인자는 top_n=5/liquidate=15:00 인데 profile 이 우선해야.
+        result = runner.invoke(
+            cli_module.app,
+            [
+                "paper-day",
+                "--top-n",
+                "5",
+                "--liquidate",
+                "15:00",
+                "--dry-run",
+                "--profile",
+                str(yaml_path),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    r = runner_holder["r"]
+    assert r.liquidate_at == time(14, 50, tzinfo=KST)  # profile 우선
+    assert r.risk.limits.stop_loss_pct == 0.012
+    assert r.risk.limits.daily_loss_kill is True
+
+
 def test_paper_day_invalid_liquidate_format_fails() -> None:
     runner = CliRunner()
     result = runner.invoke(cli_module.app, ["paper-day", "--liquidate", "afternoon"])
