@@ -384,7 +384,7 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 
 LLM 비용은 호출당 약 $0.04~0.08 (Opus + 캐싱) → 주 1회 = 월 $0.16~0.32. [feedback_llm_cost](memory) 의 "주 1회 이하 저빈도" 규칙 안.
 
-### 25단계 — KRX 휴장일 자동 skip
+### 25단계 Phase A — KRX 휴장일 자동 skip
 
 launchd 가 평일 08:55 만 보고 시동하지만 한국 법정공휴일·임시휴장(예: 어린이날·부처님오신날·대선)에도 그대로 켜져 텔레그램 노이즈가 발생. `paper`, `paper-day`, `weekly-proposal` 세 명령 모두 진입부에서 휴장일이면 안내 메시지 1회 + 정상 종료한다.
 
@@ -392,6 +392,15 @@ launchd 가 평일 08:55 만 보고 시동하지만 한국 법정공휴일·임�
 - 휴장일 텔레그램 메시지 예: "📅 KRX 휴장일(2026-05-25) — paper-day 시동 생략 · 다음 거래일 2026-05-26".
 - 우회: 수동 dry-run·디버그용으로 `--force` 옵션 모든 명령에 제공.
 - weekly-proposal 은 토요일 자체는 항상 비거래일이라 별도 규칙 — 토요일 기준 다음 거래일까지 5일 이상이면(설/추석 등 긴 연휴) LLM 비용 절약을 위해 skip, 일반 토요일은 정상 진행.
+
+### 25단계 Phase B — 로그 자동 정리
+
+매일 02:30 KST launchd 가 `scripts/rotate-logs.sh` 실행:
+- 30일↑ `*.log` → gzip (`.log.gz`)
+- 90일↑ `.log.gz` → 삭제
+- launchd 자체 로그 (`logs/launchd-*.log`) 가 10MB 넘으면 truncate (launchd 가 같은 fd 유지하므로 회전 X)
+
+`scripts/launchd-install.sh` 에 자동 등록. 수동 검증: `LOGS_ROOT=/tmp/test zsh scripts/rotate-logs.sh`. 즉시 시동: `launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.log-rotate`.
 
 ---
 

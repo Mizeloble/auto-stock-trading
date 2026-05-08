@@ -22,6 +22,7 @@ PLIST_DST="$HOME/Library/LaunchAgents"
 LABELS=(
   "com.mizeloble.auto-trade.paper-day"
   "com.mizeloble.auto-trade.insight-weekly"
+  "com.mizeloble.auto-trade.log-rotate"
 )
 
 mkdir -p "$PLIST_DST"
@@ -30,7 +31,8 @@ mkdir -p "$PROJECT_DIR/logs"
 # 스크립트 실행권한 보장
 chmod +x \
   "$PROJECT_DIR/scripts/paper-day-mode.sh" \
-  "$PROJECT_DIR/scripts/insight-weekly.sh"
+  "$PROJECT_DIR/scripts/insight-weekly.sh" \
+  "$PROJECT_DIR/scripts/rotate-logs.sh"
 
 for label in $LABELS; do
   src="$PLIST_SRC/$label.plist"
@@ -58,6 +60,8 @@ echo
 echo "✅ 등록 완료. 자동 사이클:"
 echo "  - 평일 08:55 KST: paper-day 시동 → 15:15 자체 청산"
 echo "  - 토요일 09:00 KST: insight-weekly (인사이트 + weekly-proposal)"
+echo "  - 매일 02:30 KST: log-rotate (30일↑ 압축, 90일↑ 삭제, launchd-*.log truncate)"
 echo "  확인: launchctl list | grep mizeloble.auto-trade"
 echo "  강제 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.paper-day"
 echo "  토요일 cron 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.insight-weekly"
+echo "  로그 회전 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.log-rotate"

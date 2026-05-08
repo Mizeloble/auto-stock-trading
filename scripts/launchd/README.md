@@ -1,14 +1,15 @@
 # launchd 자동 운영 가이드
 
-집 맥북에서 day-trade 모드 자동 운영 + 토요일 LLM 자동 갱신.
-21~24단계 풀 도입 후 **두 잡** 만 등록하면 사이클 완성:
+집 맥북에서 day-trade 모드 자동 운영 + 토요일 LLM 자동 갱신 + 매일 로그 정리.
+21~25단계 풀 도입 후 **세 잡** 만 등록하면 사이클 완성:
 
 | 잡 | 트리거 | 동작 |
 |---|---|---|
 | `paper-day` | 평일 08:55 KST | 발굴 → 매수 → 15:15 자체 청산 → 종료. 일일 리포트 텔레그램 |
 | `insight-weekly` | 토요일 09:00 KST | 인사이트 + weekly-proposal LLM (`daytrade-current.yaml` 자동 갱신) |
+| `log-rotate` | 매일 02:30 KST | 30일↑ `*.log` → `.log.gz`, 90일↑ `.log.gz` 삭제, launchd-*.log 10MB↑ truncate |
 
-로그: `logs/paper-day-YYYY-MM-DD.log` / `logs/insight-YYYY-MM-DD.log`.
+로그: `logs/paper-day-YYYY-MM-DD.log` / `logs/insight-YYYY-MM-DD.log` / `logs/launchd-log-rotate.out.log`.
 
 ## 어떻게 등록
 
