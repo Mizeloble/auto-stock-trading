@@ -66,6 +66,14 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         # 24단계 Phase D — auto-trade weekly-proposal --push. 본문 그대로.
         return str(fields.get("text") or "🗞 (제안 비어있음)")
 
+    if event == "runner.holiday_skip":
+        # 25단계 — KRX 휴장일 진입 가드. paper / paper-day / weekly-proposal 공용.
+        cmd = fields.get("command", "?")
+        d = fields.get("date", "?")
+        next_d = fields.get("next_trading_day")
+        next_part = f" · 다음 거래일 {next_d}" if next_d else ""
+        return f"📅 KRX 휴장일({d}) — {cmd} 시동 생략{next_part}"
+
     if event == "position_guard.fired":
         # 23단계 Phase C — PositionGuard SELL 발화. stop/trailing/partial 한국어.
         symbol = fields.get("symbol", "?")

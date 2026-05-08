@@ -543,6 +543,25 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 
 ---
 
+## 📅 25단계 · 운영 노이즈 정리 (휴장일 + 로그 회전)
+
+23·24단계 풀 머지 후 모의 운영 품질 다지기. 사용자 브레인스토밍 후보 10개 중 신뢰성 우선 2건 선정.
+
+### Phase A · KRX 휴장일 자동 skip — **✅ 완료** (2026-05-09)
+
+- [x] **`src/auto_trading/market/calendar.py`** 신규 · `KRX_HOLIDAYS[2025|2026]` 정적 테이블 + `is_trading_day` / `next_trading_day` / `today_kst`. 매년 12월 KRX 발표 직후 다음 해 항목 1줄 추가 (todo-list 의 12월 알림으로 흡수). 도메인 규칙 준수: market/ 읽기 전용, KST 기준.
+- [x] **`cli.py`** · `_holiday_guard(force, command_label)` 공용 helper + `paper` / `paper-day` / `weekly-proposal` 진입부 호출 + 각 명령에 `--force` 옵션. weekly-proposal 은 토요일 직접 휴장이라 다른 규칙 — 다음 거래일까지 5일 이상이면 LLM skip, 일반 토요일은 통과.
+- [x] **`notify/telegram.py`** · `runner.holiday_skip` 이벤트 한국어 포맷 ("📅 KRX 휴장일(YYYY-MM-DD) — {command} 시동 생략 · 다음 거래일 …").
+- [x] **테스트** · `test_market_calendar.py` 26건 (parametrize 합산) + `test_cli_holiday_guard.py` 7건 + `test_notify_telegram.py` 1건 + `test_cli_paper_day.py` autouse 평일 fixture. 424/424 PASS, ruff/mypy 클린.
+- [x] **manual.md §11.25단계** · 자동 skip 동작 설명 + `--force` 우회 안내.
+- [ ] **검증** (사용자): 다음 휴장일(2026-05-25 부처님오신날) launchd 자동 시동 시 텔레그램에 "📅 KRX 휴장일(2026-05-25) — paper-day 시동 생략" 도착 확인. paper-day-mode.sh 코드 변경 없이 paper-day 자체가 즉시 종료 — `logs/paper-day-2026-05-25.log` 가 짧게 마감.
+
+### Phase B · 로그 회전·압축 — *예정*
+
+- 30일↑ `.log` → `.log.gz`, 90일↑ `.log.gz` 삭제, launchd-*.log 10MB↑ truncate. PR 분리.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
 - **23~24단계 사용자 검증** · 다음 평일 paper-day 시동 후 콘솔 "프로파일 로드:" + 일일 리포트 비용 차감 PnL 라인 확인. 토요일 cron 후 텔레그램에 "🗞 다음 주 day-trade 프로파일 갱신" 도착 확인. 다음 월요일 paper-day 가 `daytrade-current.yaml` 자동 사용 확인.

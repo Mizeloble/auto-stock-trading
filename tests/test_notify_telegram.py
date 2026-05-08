@@ -207,6 +207,26 @@ async def test_runner_liquidate_all_failed_format(notifier: TelegramNotifier) ->
     assert "1종목" in text
 
 
+async def test_runner_holiday_skip_korean_format(notifier: TelegramNotifier) -> None:
+    """25단계 — KRX 휴장일 진입 가드 안내 푸시."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.holiday_skip",
+            command="paper-day",
+            date="2026-05-05",
+            next_trading_day="2026-05-06",
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "📅" in text
+    assert "휴장일" in text
+    assert "2026-05-05" in text
+    assert "paper-day" in text
+    assert "2026-05-06" in text
+
+
 async def test_runner_kill_switch_korean_format(notifier: TelegramNotifier) -> None:
     """23단계 Phase B — 일일 손실 한도 강제 청산 알림."""
     async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
