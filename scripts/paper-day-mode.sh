@@ -26,13 +26,18 @@ LOG="logs/paper-day-$(date +%Y-%m-%d).log"
 
 # 24단계 Phase D — 토요일 cron 이 갱신해 둔 daytrade-current.yaml 가 있으면
 # 자동 사용. 없으면 daytrade-default.yaml 로 폴백. 둘 다 없으면 CLI 인자만으로 동작.
+#
+# 주의: zsh 는 unquoted 변수 확장 시 단어 분리(SH_WORD_SPLIT) 를 기본 비활성화한다.
+# `PROFILE_ARG="--profile $PATH"` + `$PROFILE_ARG` 패턴은 한 인자로 전달돼
+# typer 가 옵션 인식 실패로 즉사. 반드시 배열로 분리해 `"${ARR[@]}"` 로 펼쳐야 함.
+# (5/8 첫 트리거 회귀 — daytrade-default.yaml 가 생기면서 드러난 버그)
 PROFILE="strategies/profiles/daytrade-current.yaml"
 PROFILE_FALLBACK="strategies/profiles/daytrade-default.yaml"
-PROFILE_ARG=""
+PROFILE_ARGS=()
 if [ -f "$PROFILE" ]; then
-  PROFILE_ARG="--profile $PROFILE"
+  PROFILE_ARGS=(--profile "$PROFILE")
 elif [ -f "$PROFILE_FALLBACK" ]; then
-  PROFILE_ARG="--profile $PROFILE_FALLBACK"
+  PROFILE_ARGS=(--profile "$PROFILE_FALLBACK")
 fi
 
 # 운영 사양 변경(top_n, 청산 시각 등) 은 이 줄만 수정.
@@ -44,5 +49,5 @@ exec "$CAFFEINATE" -i "$UV_BIN" run auto-trade paper-day \
   --top-n 3 \
   --liquidate 15:15 \
   --no-dry-run \
-  $PROFILE_ARG \
+  "${PROFILE_ARGS[@]}" \
   >> "$LOG" 2>&1
