@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}백테스트 · auto-trade{% endblock %}
+{% block content %}
+<div x-data="backtestsPage()" x-init="load()">
+  <h2 class="text-2xl font-bold mb-6">백테스트 결과</h2>
+
+  <template x-if="loading">
+    <p class="text-slate-400 text-sm">불러오는 중…</p>
+  </template>
+
+  <div x-show="!loading && runs.length === 0" class="bg-slate-900 border border-slate-800 rounded-lg p-8 text-center" x-cloak>
+    <p class="text-slate-200 mb-2">백테스트 결과가 없습니다.</p>
+    <p class="text-slate-500 text-sm">
+      <code class="bg-slate-800 px-1.5 rounded">auto-trade backtest --strategy ... --symbol ... --from ...</code> 또는<br>
+      <code class="bg-slate-800 px-1.5 rounded">auto-trade backtest --profile strategies/profiles/&lt;name&gt;.yaml --from ...</code>
+      로 결과를 만들어 주세요.
+    </p>
+  </div>
+
+  <div x-show="!loading && runs.length > 0" class="grid grid-cols-12 gap-4" x-cloak>
+    <aside class="col-span-4 bg-slate-900 border border-slate-800 rounded-lg p-3 max-h-[85vh] overflow-y-auto">
+      <p class="text-xs text-slate-500 mb-2 px-1" x-text="`총 ${runs.length}건`"></p>
+      <ul class="space-y-1">
+        <template x-for="r in runs" :key="r.name">
+          <li>
+            <button
+              @click="select(r.name)"
+              class="w-full text-left px-3 py-2 rounded text-xs"
+              :class="r.name === selected ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-300'">
+              <p class="font-mono text-[11px] truncate" x-text="r.name"></p>
+              <p class="text-[10px] opacity-70" x-text="r.created_at"></p>
+            </button>
+          </li>
+        </template>
+      </ul>
+    </aside>
+
+    <section class="col-span-8 space-y-4">
+      <template x-if="!detail">
+        <div class="bg-slate-900 border border-slate-800 rounded-lg p-6 text-slate-400 text-sm">백테스트를 선택하세요.</div>
+      </template>
+
+      <template x-if="detail">
+        <div class="space-y-4">
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+            <h3 class="font-semibold text-sm text-slate-300 mb-3 truncate" x-text="detail.name"></h3>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <template x-for="[label, key, suffix] in metricKeys" :key="key">
+                <div class="bg-slate-950/50 rounded p-3">
+                  <p class="text-xs text-slate-400" x-text="label"></p>
+                  <p class="text-lg font-semibold" :class="metricColor(key)" x-text="formatMetric(key, suffix)"></p>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+            <h4 class="font-semibold text-sm text-slate-300 mb-3">자산 곡선</h4>
+            <div class="relative h-72"><canvas id="btEquityChart"></canvas></div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4" x-show="(detail.symbol_pnl||[]).length > 0">
+            <h4 class="font-semibold text-sm text-slate-300 mb-3">종목별 라운드트립 손익</h4>
+            <div class="relative" :style="`height: ${Math.max(120, (detail.symbol_pnl||[]).length * 28)}px`"><canvas id="btSymbolChart"></canvas></div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+            <h4 class="font-semibold text-sm text-slate-300 mb-3">매매 기록 <span class="text-slate-500" x-text="`(${(detail.trades||[]).length})`"></span></h4>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead class="text-slate-500 border-b border-slate-800">
+                  <tr>
+                    <th class="py-1 text-left">시각</th>
+                    <th class="py-1 text-left">종목</th>
+                    <th class="py-1 text-left">방향</th>
+                    <th class="py-1 text-right">단가</th>
+                    <th class="py-1 text-right">수량</th>
+                    <th class="py-1 text-right">수수료</th>
+                    <th class="py-1 text-right">세금</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="(t, i) in detail.trades" :key="i">
+                    <tr class="border-b border-slate-800/50">
+                      <td class="py-1 text-slate-400 font-mono" x-text="t.ts"></td>
+                      <td class="py-1" x-text="t.symbol"></td>
+                      <td class="py-1" :class="t.side === 'buy' ? 'text-emerald-400' : 'text-rose-400'" x-text="t.side"></td>
+                      <td class="py-1 text-right" x-text="formatNum(t.price)"></td>
+                      <td class="py-1 text-right" x-text="t.quantity"></td>
+                      <td class="py-1 text-right text-slate-400" x-text="formatNum(t.fee)"></td>
+                      <td class="py-1 text-right text-slate-400" x-text="formatNum(t.tax)"></td>
+                    </tr>
+                  </template>
+                  <template x-if="(detail.trades||[]).length === 0">
+                    <tr><td class="py-2 text-slate-500" colspan="7">매매 없음</td></tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </template>
+    </section>
+  </div>
+</div>
+{% endblock %}

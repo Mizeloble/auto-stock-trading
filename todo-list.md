@@ -574,9 +574,30 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 
 ---
 
+## 📊 26단계 · 투자 결과 분석 웹 대시보드 — **✅ MVP 구현 완료** (2026-05-09)
+
+FastAPI(JSON API) + Jinja2(서버사이드 HTML) + Chart.js/Tailwind/Alpine.js(CDN) 조합. 빌드 도구 없이 인터랙티브. 외부 호출·LLM 호출 0건.
+
+- [x] **Phase A · MVP 3페이지** ([src/auto_trading/dashboard/](src/auto_trading/dashboard/))
+  - [x] **Overview (`/`)** — 누적 자산곡선 + 일별 손익 이중축 차트, KPI 카드 4개(누적 손익/승률/매매 수/에러), 최근 7일 표.
+  - [x] **Daily (`/daily`)** — 좌측 날짜 리스트 + 우측 매수·청산·시장 게이트·마감 보유 상세.
+  - [x] **Backtests (`/backtests`)** — `data/backtests/<run>/` 셀렉트 → 메트릭 카드 + equity 라인 + 종목별 라운드트립 PnL 막대 + trades 테이블.
+- [x] CLI: `auto-trade dashboard [--host 127.0.0.1 --port 8000 --reload --reports-root ... --backtests-root ...]`
+- [x] 응답 모델·로더 read-only · path traversal 차단 · 시크릿 화이트리스트
+- [x] 16개 단위/통합 테스트 (`tests/dashboard/`) — 빈 폴더, 깨진 JSON, equity.csv 없음, 잘못된 run 이름 케이스 포함
+- [ ] **Phase B 확장** (별 PR · 사용자 며칠 써본 후 우선순위 정하기)
+  - [ ] `/signals` — `log_parser.parse_log()` 집계, 전략·종목별 시그널 분포
+  - [ ] `/insights` — 이미 만들어진 weekly insight JSON 렌더(새 LLM 호출 X)
+  - [ ] 모바일 접근 (Tailscale 또는 정적 HTML 빌드)
+
+**검증**: `uv run auto-trade dashboard` → `http://127.0.0.1:8000`. 빈 데이터 상태에서도 페이지가 죽지 않고 안내 메시지 노출.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
 - **23~24단계 사용자 검증** · 다음 평일 paper-day 시동 후 콘솔 "프로파일 로드:" + 일일 리포트 비용 차감 PnL 라인 확인. 토요일 cron 후 텔레그램에 "🗞 다음 주 day-trade 프로파일 갱신" 도착 확인. 다음 월요일 paper-day 가 `daytrade-current.yaml` 자동 사용 확인.
+- **26단계 사용자 검증** · 며칠 paper-day 가 돈 후 `auto-trade dashboard` 로 자산곡선·일별 상세가 그려지는지 확인. Phase B 어떤 페이지가 가장 필요한지 결정 후 후속 PR.
 - **첫 주 한도 활성** · 며칠 dry-run 으로 로그·푸시 정상 확인 후, `daytrade-default.yaml` 또는 `daytrade-current.yaml` 에서 한도 1~2개부터 켠다 (예: `stop_loss_pct=0.01`). 한 번에 다 켜지 말 것.
 - **RSS feed 추가** · 필요 시 `news/collector.py` 의 `DEFAULT_FEED_URLS` 에 이투데이·연합인포맥스 등 시장 뉴스 RSS 추가. 매일경제 RSS URL 이 안정화되면 복귀.
 - **실거래 전환** · `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + `--allow-real` (사용자 명시 승인 후). 사전 검토: 집 맥북 launchd 의존이 실거래 신뢰성에 충분한지 — 부족하다고 판단되면 그 시점에 systemd(Oracle 무료/한국 리전) 이전을 같이 진행.

@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}일별 상세 · auto-trade{% endblock %}
+{% block content %}
+<div x-data="dailyPage()" x-init="load()">
+  <h2 class="text-2xl font-bold mb-6">일별 상세</h2>
+
+  <template x-if="loading">
+    <p class="text-slate-400 text-sm">불러오는 중…</p>
+  </template>
+
+  <div x-show="!loading && dates.length === 0" class="bg-slate-900 border border-slate-800 rounded-lg p-8 text-center" x-cloak>
+    <p class="text-slate-200">일일 리포트가 아직 없습니다.</p>
+  </div>
+
+  <div x-show="!loading && dates.length > 0" class="grid grid-cols-12 gap-4" x-cloak>
+    <aside class="col-span-3 bg-slate-900 border border-slate-800 rounded-lg p-3 max-h-[80vh] overflow-y-auto">
+      <p class="text-xs text-slate-500 mb-2 px-1" x-text="`총 ${dates.length}일`"></p>
+      <ul class="space-y-1">
+        <template x-for="d in dates" :key="d">
+          <li>
+            <button
+              @click="select(d)"
+              class="w-full text-left px-3 py-1.5 rounded text-sm"
+              :class="d === selected ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-300'"
+              x-text="d"></button>
+          </li>
+        </template>
+      </ul>
+    </aside>
+
+    <section class="col-span-9 space-y-4">
+      <template x-if="!detail">
+        <div class="bg-slate-900 border border-slate-800 rounded-lg p-6 text-slate-400 text-sm">날짜를 선택하세요.</div>
+      </template>
+
+      <template x-if="detail">
+        <div class="space-y-4">
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+            <div class="flex items-baseline justify-between mb-3">
+              <h3 class="font-semibold text-lg" x-text="detail.date"></h3>
+              <span class="text-xs px-2 py-0.5 rounded" :class="detail.dry_run ? 'bg-amber-700/40 text-amber-300' : 'bg-emerald-700/40 text-emerald-300'" x-text="(detail.dry_run ? '시뮬' : '실거래') + ' · ' + detail.mode"></span>
+            </div>
+            <p class="text-slate-300 mb-3" x-text="detail.note_ko"></p>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div class="bg-slate-950/50 rounded p-3">
+                <p class="text-xs text-slate-400">실현손익</p>
+                <p class="text-lg font-semibold" :class="detail.realized_pnl == null ? 'text-slate-400' : (detail.realized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400')" x-text="formatPnl(detail.realized_pnl)"></p>
+                <p class="text-xs text-slate-500 mt-0.5" x-text="formatPct(detail.realized_pnl_pct)"></p>
+              </div>
+              <div class="bg-slate-950/50 rounded p-3">
+                <p class="text-xs text-slate-400">비용 차감 후</p>
+                <p class="text-lg font-semibold" :class="detail.realized_pnl_after_cost == null ? 'text-slate-400' : (detail.realized_pnl_after_cost >= 0 ? 'text-emerald-400' : 'text-rose-400')" x-text="formatPnl(detail.realized_pnl_after_cost)"></p>
+                <p class="text-xs text-slate-500 mt-0.5" x-text="`수수료 ${formatPnl(detail.total_fees)} / 세 ${formatPnl(detail.total_taxes)}`"></p>
+              </div>
+              <div class="bg-slate-950/50 rounded p-3">
+                <p class="text-xs text-slate-400">마감 자산</p>
+                <p class="text-lg font-semibold text-slate-100" x-text="formatPnl(detail.closing_equity)"></p>
+                <p class="text-xs text-slate-500 mt-0.5" x-text="`현금 ${formatPnl(detail.closing_cash)}`"></p>
+              </div>
+              <div class="bg-slate-950/50 rounded p-3">
+                <p class="text-xs text-slate-400">에러</p>
+                <p class="text-lg font-semibold" :class="detail.error_count > 0 ? 'text-amber-400' : 'text-slate-300'" x-text="detail.error_count"></p>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+              <h4 class="font-semibold text-sm text-slate-300 mb-2">매수 <span class="text-slate-500" x-text="`(${(detail.buys||[]).length})`"></span></h4>
+              <table class="w-full text-xs">
+                <thead class="text-slate-500 border-b border-slate-800">
+                  <tr><th class="py-1 text-left">종목</th><th class="py-1 text-right">수량</th><th class="py-1 text-right">단가</th></tr>
+                </thead>
+                <tbody>
+                  <template x-for="t in detail.buys" :key="t.symbol+'-'+t.quantity+'-'+t.price">
+                    <tr class="border-b border-slate-800/50">
+                      <td class="py-1" x-text="(t.name || '') + ' (' + t.symbol + ')'"></td>
+                      <td class="py-1 text-right" x-text="t.quantity"></td>
+                      <td class="py-1 text-right" x-text="formatPnl(t.price)"></td>
+                    </tr>
+                  </template>
+                  <template x-if="(detail.buys||[]).length === 0">
+                    <tr><td class="py-2 text-slate-500" colspan="3">매수 없음</td></tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+              <h4 class="font-semibold text-sm text-slate-300 mb-2">청산 <span class="text-slate-500" x-text="`(${(detail.liquidations||[]).length})`"></span></h4>
+              <table class="w-full text-xs">
+                <thead class="text-slate-500 border-b border-slate-800">
+                  <tr><th class="py-1 text-left">종목</th><th class="py-1 text-right">수량</th><th class="py-1 text-right">매수→매도</th><th class="py-1 text-right">손익</th></tr>
+                </thead>
+                <tbody>
+                  <template x-for="li in detail.liquidations" :key="li.symbol+'-'+li.quantity+'-'+li.sell_price">
+                    <tr class="border-b border-slate-800/50">
+                      <td class="py-1" x-text="(li.name || '') + ' (' + li.symbol + ')'"></td>
+                      <td class="py-1 text-right" x-text="li.quantity"></td>
+                      <td class="py-1 text-right text-slate-400" x-text="`${formatNum(li.buy_price)} → ${formatNum(li.sell_price)}`"></td>
+                      <td class="py-1 text-right" :class="liquidationPnl(li) == null ? 'text-slate-400' : (liquidationPnl(li) >= 0 ? 'text-emerald-400' : 'text-rose-400')" x-text="formatPnl(liquidationPnl(li))"></td>
+                    </tr>
+                  </template>
+                  <template x-if="(detail.liquidations||[]).length === 0">
+                    <tr><td class="py-2 text-slate-500" colspan="4">청산 없음</td></tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+            <h4 class="font-semibold text-sm text-slate-300 mb-2">시장 게이트</h4>
+            <div class="grid grid-cols-2 gap-3">
+              <template x-for="g in detail.market_gates" :key="g.market">
+                <div class="bg-slate-950/50 rounded p-3 text-xs">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="font-semibold" x-text="g.market"></span>
+                    <span class="px-1.5 py-0.5 rounded text-[10px]" :class="g.above ? 'bg-emerald-700/40 text-emerald-300' : 'bg-rose-700/40 text-rose-300'" x-text="g.above ? '통과' : '차단'"></span>
+                  </div>
+                  <p class="text-slate-400">last <span class="text-slate-200" x-text="formatNum(g.last)"></span> · sma5 <span class="text-slate-200" x-text="formatNum(g.sma5)"></span> · sma20 <span class="text-slate-200" x-text="formatNum(g.sma20)"></span></p>
+                </div>
+              </template>
+              <template x-if="(detail.market_gates||[]).length === 0">
+                <p class="text-slate-500 text-xs">기록 없음.</p>
+              </template>
+            </div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4" x-show="(detail.closing_holdings||[]).length > 0">
+            <h4 class="font-semibold text-sm text-slate-300 mb-2">마감 보유 <span class="text-slate-500" x-text="`(${(detail.closing_holdings||[]).length})`"></span></h4>
+            <table class="w-full text-xs">
+              <thead class="text-slate-500 border-b border-slate-800">
+                <tr><th class="py-1 text-left">종목</th><th class="py-1 text-right">수량</th><th class="py-1 text-right">평단</th><th class="py-1 text-right">현재가</th><th class="py-1 text-right">평가손익</th></tr>
+              </thead>
+              <tbody>
+                <template x-for="h in detail.closing_holdings" :key="h.symbol">
+                  <tr class="border-b border-slate-800/50">
+                    <td class="py-1" x-text="(h.name || '') + ' (' + h.symbol + ')'"></td>
+                    <td class="py-1 text-right" x-text="h.quantity"></td>
+                    <td class="py-1 text-right" x-text="formatNum(h.avg_price)"></td>
+                    <td class="py-1 text-right" x-text="formatNum(h.current_price)"></td>
+                    <td class="py-1 text-right" :class="h.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'" x-text="formatPnl(h.pnl) + ' (' + formatPct(h.pnl_pct) + ')'"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+    </section>
+  </div>
+</div>
+{% endblock %}

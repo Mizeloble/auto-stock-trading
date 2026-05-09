@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}개요 · auto-trade{% endblock %}
+{% block content %}
+<div x-data="overviewPage()" x-init="load()">
+  <div class="flex items-baseline justify-between mb-6">
+    <h2 class="text-2xl font-bold">개요</h2>
+    <span class="text-xs text-slate-500" x-text="period"></span>
+  </div>
+
+  <template x-if="loading">
+    <p class="text-slate-400 text-sm">불러오는 중…</p>
+  </template>
+
+  <template x-if="!loading && empty">
+    <div class="bg-slate-900 border border-slate-800 rounded-lg p-8 text-center">
+      <p class="text-slate-200 mb-2">아직 일일 리포트가 없습니다.</p>
+      <p class="text-slate-500 text-sm leading-relaxed">
+        먼저 <code class="bg-slate-800 px-1.5 rounded">auto-trade paper-day</code> 를 돌리거나,<br>
+        과거 로그가 있다면 <code class="bg-slate-800 px-1.5 rounded">auto-trade report --date YYYY-MM-DD</code> 로 일일 리포트를 만드세요.
+      </p>
+    </div>
+  </template>
+
+  <div x-show="!loading && !empty" x-cloak>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+        <p class="text-xs text-slate-400 mb-1">누적 실현손익</p>
+        <p class="text-xl font-semibold" :class="kpi.cumulative_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'" x-text="formatPnl(kpi.cumulative_pnl)"></p>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+        <p class="text-xs text-slate-400 mb-1">승률 (청산 기준)</p>
+        <p class="text-xl font-semibold text-slate-100" x-text="kpi.win_rate"></p>
+        <p class="text-xs text-slate-500 mt-1" x-text="kpi.win_loss_label"></p>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+        <p class="text-xs text-slate-400 mb-1">매매 횟수</p>
+        <p class="text-xl font-semibold text-slate-100" x-text="kpi.total_trades"></p>
+        <p class="text-xs text-slate-500 mt-1">최근 7일</p>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+        <p class="text-xs text-slate-400 mb-1">에러</p>
+        <p class="text-xl font-semibold" :class="kpi.errors > 0 ? 'text-amber-400' : 'text-slate-300'" x-text="kpi.errors"></p>
+        <p class="text-xs text-slate-500 mt-1">최근 7일</p>
+      </div>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-lg p-4 mb-6">
+      <h3 class="font-semibold mb-3 text-sm text-slate-300">자산 곡선 · 일별 손익</h3>
+      <div class="relative h-72"><canvas id="equityChart"></canvas></div>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
+      <h3 class="font-semibold mb-3 text-sm text-slate-300">최근 일자 (클릭 시 상세)</h3>
+      <table class="w-full text-sm">
+        <thead class="text-left text-slate-400 border-b border-slate-800">
+          <tr>
+            <th class="py-2 font-medium">날짜</th>
+            <th class="py-2 font-medium text-right">매수</th>
+            <th class="py-2 font-medium text-right">청산</th>
+            <th class="py-2 font-medium text-right">실현손익</th>
+            <th class="py-2 font-medium text-right">에러</th>
+            <th class="py-2 font-medium">메모</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="row in recent" :key="row.date">
+            <tr class="border-b border-slate-800 hover:bg-slate-800/30">
+              <td class="py-2"><a class="text-indigo-400 hover:underline" :href="`/daily?date=${row.date}`" x-text="row.date"></a></td>
+              <td class="py-2 text-right" x-text="row.buys"></td>
+              <td class="py-2 text-right" x-text="row.liquidations"></td>
+              <td class="py-2 text-right" :class="row.pnl == null ? 'text-slate-500' : (row.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400')" x-text="formatPnl(row.pnl)"></td>
+              <td class="py-2 text-right" :class="row.errors > 0 ? 'text-amber-400' : 'text-slate-500'" x-text="row.errors"></td>
+              <td class="py-2 text-slate-400 truncate max-w-[24rem]" :title="row.note" x-text="row.note"></td>
+            </tr>
+          </template>
+          <template x-if="recent.length === 0">
+            <tr><td class="py-3 text-slate-500" colspan="6">데이터 없음.</td></tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
