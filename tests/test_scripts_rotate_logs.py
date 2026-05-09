@@ -12,12 +12,23 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "rotate-logs.sh"
+
+# rotate-logs.sh 는 macOS BSD `stat -f%z` + zsh `(N)` 글롭 의존이라 Linux/no-zsh 환경에선
+# 정상 동작 X. CI(우분투) 회피용 skip — 운영 타깃은 사용자 맥북 launchd.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "darwin" or shutil.which("zsh") is None,
+    reason="rotate-logs.sh requires macOS BSD stat + zsh (launchd target)",
+)
 
 
 def _set_mtime_days_ago(path: Path, days: int) -> None:
