@@ -34,6 +34,7 @@ from .daytrade.cli_helpers import (
 )
 from .daytrade.profile import DaytradeProfile
 from .kiwoom.rest import KiwoomRestClient
+from .market import calendar as krx_calendar
 from .market.chart import bars_to_dataframe, get_daily_bars
 from .market.index import IndexMomentumTracker
 from .market.quote import get_quote
@@ -100,6 +101,42 @@ def _root() -> None:
     s = get_settings()
     mode_color = "green" if s.is_mock else "red bold"
     console.print(f"[dim]키움 모드:[/dim] [{mode_color}]{s.kiwoom_mode.value}[/{mode_color}]")
+
+
+def _holiday_guard(*, force: bool, command_label: str) -> None:
+    """KRX 휴장일이면 텔레그램 1회 안내 후 정상 종료.
+
+    `--force` 면 우회 — 수동 dry-run·디버그용. paper / paper-day / weekly-proposal
+    셋이 공통 호출. launchd 가 평일에만 시동하지만 한국 법정공휴일·임시휴장에는
+    빈 universe 발굴 → 즉시 종료 → 텔레그램 노이즈가 발생해 진입 자체를 막는다.
+    """
+    if force:
+        return
+    today = krx_calendar.today_kst()
+    if krx_calendar.is_trading_day(today):
+        return
+
+    log = structlog.get_logger("auto_trading.cli")
+    log.info("runner.holiday_skip", command=command_label, date=today.isoformat())
+    console.print(
+        f"[yellow]📅 오늘({today.isoformat()})은 KRX 휴장일 — {command_label} 시동 생략.[/yellow]"
+    )
+    next_day = krx_calendar.next_trading_day(today)
+    notifier = build_notifier()
+
+    async def _push() -> None:
+        try:
+            await notifier.notify(
+                "runner.holiday_skip",
+                command=command_label,
+                date=today.isoformat(),
+                next_trading_day=next_day.isoformat(),
+            )
+        finally:
+            await notifier.aclose()
+
+    asyncio.run(_push())
+    raise typer.Exit(code=0)
 
 
 @app.command()
@@ -281,8 +318,14 @@ def paper(
     profile: Path | None = typer.Option(
         None, "--profile", help="전략 프로파일 YAML 경로. --strategy/--symbols 대체."
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="KRX 휴장일에도 강제 시동. 수동 dry-run·디버그용. 기본은 휴장일에 안내 후 종료.",
+    ),
 ) -> None:
     """실시간 틱을 받아 전략 실행. 모의투자 기본."""
+    _holiday_guard(force=force, command_label="paper")
     if profile is not None and (strategy or symbols):
         raise typer.BadParameter("--profile 과 --strategy/--symbols 은 동시에 줄 수 없습니다.")
     if profile is None and not (strategy and symbols):
@@ -406,6 +449,11 @@ def paper_day(
             " 잦은 운용에서 채터링 방지. 5 권장."
         ),
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="KRX 휴장일에도 강제 시동. 수동 dry-run·디버그용.",
+    ),
 ) -> None:
     """day-trade 모드: 매일 발굴 → 즉시 균등 매수 → 청산 시각에 일괄 매도 → 종료.
 
@@ -423,6 +471,7 @@ def paper_day(
       `daytrade.universe_chosen` → `runner.order_simulated` → 청산 시각에
       `runner.liquidate_simulated` → `runner.stopped` 순서로 찍히면 성공.
     """
+    _holiday_guard(force=force, command_label="paper-day")
     settings = get_settings()
     color = "green" if settings.is_mock else "red"
     console.print(f"[dim]키움 모드:[/dim] [{color}]{settings.kiwoom_mode.value}[/{color}]")
@@ -809,6 +858,11 @@ def weekly_proposal(
         "--dry-run",
         help="LLM 호출 없이 입력 요약만 출력 (디버그용).",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="KRX 휴장 주에도 LLM 호출. 기본은 토요일이 휴장일과 가까우면 안내 후 종료.",
+    ),
 ) -> None:
     """24단계 Phase B+C+D — 주간 LLM 으로 다음 주 day-trade 프로파일 자동 갱신.
 
@@ -820,7 +874,27 @@ def weekly_proposal(
     5. format_apply_message → 콘솔 + 옵션 텔레그램
 
     토요일 09:00 KST cron 또는 사용자 수동 호출용. LLM 호출은 주 1회 한정.
+    --force 미지정 시 토요일이 직접 휴장일이거나 다음 거래일까지 5일 이상 떨어져
+    있으면(긴 연휴) 시동 생략 — LLM 비용 절약.
     """
+    if not force:
+        _today = krx_calendar.today_kst()
+        _next = krx_calendar.next_trading_day(_today)
+        gap_days = (_next - _today).days
+        if not krx_calendar.is_trading_day(_today) and gap_days >= 5:
+            log = structlog.get_logger("auto_trading.cli")
+            log.info(
+                "runner.holiday_skip",
+                command="weekly-proposal",
+                date=_today.isoformat(),
+                gap_days=gap_days,
+            )
+            console.print(
+                f"[yellow]📅 오늘({_today.isoformat()}) 기준 다음 거래일까지 {gap_days}일 — "
+                f"weekly-proposal 시동 생략 (LLM 비용 절약).[/yellow]"
+            )
+            raise typer.Exit(code=0)
+
     from .news.collector import collect_recent_news
     from .news.profile_writer import apply_and_persist, format_apply_message
     from .news.proposal import _summarize_news, _summarize_reports, propose_daytrade_profile

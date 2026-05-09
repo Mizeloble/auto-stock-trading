@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
-from datetime import time
+from datetime import date, time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -32,6 +32,14 @@ def _restore_structlog_config() -> Iterator[None]:
     재구성. test_notify_telegram 등 다른 테스트로 누수 방지."""
     yield
     structlog.reset_defaults()
+
+
+@pytest.fixture(autouse=True)
+def _force_weekday(monkeypatch: pytest.MonkeyPatch) -> None:
+    """기존 paper/paper-day 테스트는 휴장일 가드 도입 전에 작성 — 토/일/공휴일에
+    돌리면 가드가 먼저 발화해 PaperRunner 가 안 만들어진다. 평일 고정으로 회귀 격리.
+    `test_cli_holiday_guard.py` 가 가드 로직 자체를 검증."""
+    monkeypatch.setattr(cli_module.krx_calendar, "today_kst", lambda: date(2026, 5, 8))
 
 
 def test_parse_hhmm_kst_valid() -> None:
