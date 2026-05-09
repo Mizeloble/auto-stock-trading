@@ -13,11 +13,14 @@
     <key>WorkingDirectory</key>
     <string>/Users/jjmize/Project/auto-stock-trading</string>
 
-    <!-- 매주 토요일(Weekday 7) 09:00 KST. 직전 평일 5일치 일일 리포트 누적 후 분석.
+    <!-- 매주 토요일 09:00 KST. launchd 의 Weekday 표기는 0/7=일요일, 6=토요일
+         (Apple `man launchd.plist`). 5/9 첫 발화 누락 회귀 — 7 로 잘못 적어
+         일요일에 등록돼 있던 걸 6 으로 수정.
+         직전 평일 5일치 일일 리포트 누적 후 분석.
          메모리 `feedback_llm_cost.md`: 사람 명시 트리거 또는 사전 합의된 주 1회 이하 cron 만 허용. -->
     <key>StartCalendarInterval</key>
     <dict>
-        <key>Weekday</key><integer>7</integer>
+        <key>Weekday</key><integer>6</integer>
         <key>Hour</key><integer>9</integer>
         <key>Minute</key><integer>0</integer>
     </dict>
