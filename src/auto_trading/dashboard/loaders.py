@@ -248,9 +248,7 @@ def _aggregate_symbol_pnl(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     opens[sym][0][2] = (
                         buy_fee * (buy_qty / (buy_qty + matched)) if (buy_qty + matched) else 0.0
                     )
-    out: list[dict[str, Any]] = [
-        {"symbol": s, "pnl": pnls[s], "trades": counts[s]} for s in pnls
-    ]
+    out: list[dict[str, Any]] = [{"symbol": s, "pnl": pnls[s], "trades": counts[s]} for s in pnls]
     out.sort(key=lambda r: float(r["pnl"]), reverse=True)
     return out
 
