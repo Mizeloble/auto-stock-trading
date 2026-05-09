@@ -556,9 +556,21 @@ PR #21~#23 머지 직후 사용자가 `scripts/probe_rank_index.py` 를 모의�
 - [x] **manual.md §11.25단계** · 자동 skip 동작 설명 + `--force` 우회 안내.
 - [ ] **검증** (사용자): 다음 휴장일(2026-05-25 부처님오신날) launchd 자동 시동 시 텔레그램에 "📅 KRX 휴장일(2026-05-25) — paper-day 시동 생략" 도착 확인. paper-day-mode.sh 코드 변경 없이 paper-day 자체가 즉시 종료 — `logs/paper-day-2026-05-25.log` 가 짧게 마감.
 
-### Phase B · 로그 회전·압축 — *예정*
+### Phase B · 로그 회전·압축 — **✅ 완료** (2026-05-09, PR #53)
 
-- 30일↑ `.log` → `.log.gz`, 90일↑ `.log.gz` 삭제, launchd-*.log 10MB↑ truncate. PR 분리.
+- [x] **`scripts/rotate-logs.sh`** 신규 · 30일↑ `*.log` → gzip -9 (`.log.gz`), 90일↑ `.log.gz` 삭제, launchd-*.log 10MB↑ truncate (launchd 가 같은 fd 유지하므로 회전 X — 비우고 timestamp 1줄). `LOGS_ROOT` env 로 대상 폴더 override (테스트용).
+- [x] **`scripts/launchd/com.mizeloble.auto-trade.log-rotate.plist`** 신규 · 매일 02:30 KST 트리거. paper-day(08:55)/insight-weekly(토 09:00) 와 충돌 X.
+- [x] **`launchd-install.sh` / `launchd-uninstall.sh`** · 새 라벨 등록·해제 + `chmod +x` 보장 + 안내 라인 추가. 세 잡(paper-day + insight-weekly + log-rotate) 사이클로 확장.
+- [x] **`launchd/README.md`** · 세 잡 표 갱신.
+- [x] **테스트** · `tests/test_scripts_rotate_logs.py` 8건 — recent kept / old gzipped / very-old gz 삭제 / launchd-* gzip 면역 / launchd-* 10MB+ truncate / 작은 launchd-* 그대로 / 빈 LOGS_ROOT silent exit / mixed pass. macOS BSD `stat -f%z` + zsh `(N)` 글롭 의존이라 `pytest.mark.skipif(sys.platform != "darwin" or shutil.which("zsh") is None)` 로 CI 분기.
+- [x] **manual.md §11 25단계 Phase B** · 동작·수동 검증·즉시 시동 안내.
+- [ ] **검증** (사용자): `./scripts/launchd-install.sh` 재실행 → `launchctl list | grep mizeloble.auto-trade.log-rotate` 출력 확인. `launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.log-rotate` 즉시 시동 후 `logs/launchd-log-rotate.out.log` 생성 확인. 1주 운영 후 30일 이상 된 `.log` 가 있다면 `.log.gz` 출현.
+
+### 25단계 검증 (전 Phase 완료 시)
+
+- [x] `uv run pytest` 432 PASS (Phase A 기준 424 + Phase B 8). ruff/format/mypy 클린.
+- [ ] 다음 휴장일(2026-05-25 부처님오신날): launchd 자동 시동 → 텔레그램 휴장 안내 + `logs/paper-day-2026-05-25.log` 짧게 마감.
+- [ ] 02:30 cron: 다음 날 새벽에 `logs/launchd-log-rotate.out.log` 빈 파일 생성 (실 회전 대상 없으면 출력 0). 30일 이상 된 로그 누적되면 `.log.gz` 출현.
 
 ---
 
