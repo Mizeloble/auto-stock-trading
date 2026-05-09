@@ -93,6 +93,13 @@ def _setup_logging() -> None:
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
     )
+    # httpx 의 INFO 레벨은 풀 URL 을 그대로 찍는다. 텔레그램 sendMessage 의
+    # 경로 `/bot{TOKEN}/sendMessage` 가 stdout/log 에 노출되는 회귀 원인
+    # (2026-05-09 발견 — paper-day 로그에 토큰 1,500+ 회 누적). 운영 시 항상
+    # WARNING 으로 강등 — 디버그 필요 시 LOG_LEVEL=DEBUG 면 그때만 풀어준다.
+    httpx_level = level if level <= logging.DEBUG else logging.WARNING
+    logging.getLogger("httpx").setLevel(httpx_level)
+    logging.getLogger("httpcore").setLevel(httpx_level)
 
 
 @app.callback()
