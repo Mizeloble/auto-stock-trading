@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mizeloble.auto-trade.log-rotate</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>/Users/jjmize/Project/auto-stock-trading/scripts/rotate-logs.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jjmize/Project/auto-stock-trading</string>
+
+    <!-- 매일 02:30 KST. paper-day(08:55)·insight-weekly(토 09:00) 와 충돌 X. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>2</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+
+    <!-- 등록 직후 자동 실행 X — 한밤중 cron 만 발화. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-log-rotate.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-log-rotate.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

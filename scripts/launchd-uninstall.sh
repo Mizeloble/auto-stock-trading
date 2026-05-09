@@ -12,6 +12,7 @@ PLIST_DST="$HOME/Library/LaunchAgents"
 LABELS=(
   "com.mizeloble.auto-trade.paper-day"
   "com.mizeloble.auto-trade.insight-weekly"
+  "com.mizeloble.auto-trade.log-rotate"
   "com.mizeloble.auto-trade.paper"
   "com.mizeloble.auto-trade.paper-stop"
 )
