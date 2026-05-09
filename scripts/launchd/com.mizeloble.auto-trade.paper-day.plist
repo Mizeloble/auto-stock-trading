@@ -13,7 +13,8 @@
     <key>WorkingDirectory</key>
     <string>/Users/jjmize/Project/auto-stock-trading</string>
 
-    <!-- 평일(월~금) 08:55 KST 트리거. 토(7)/일(1) 제외.
+    <!-- 평일(월~금) 08:55 KST 트리거. launchd Weekday 는 0/7=일, 1=월, ..., 6=토
+         (Apple `man launchd.plist`). 아래 1-5 가 월~금. 토(6)·일(0|7) 자동 제외.
          day-trade 모드는 15:15 청산 후 러너가 자기 종료 — 별도 stop plist 불필요. -->
     <key>StartCalendarInterval</key>
     <array>
