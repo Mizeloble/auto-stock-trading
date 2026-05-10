@@ -80,7 +80,12 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 한글 패턴 + 알려진 키움 코드(RC4010, 1902) 매칭. 'VI' 는 영문 단어 경계 lookaround (`(?<![a-z])vi(?![a-z])`) 로 'device' 같은 false positive 차단.
   - 단위 테스트 22건 (parametrize 17 + skip_seconds + code precedence + None 안전 + 영문 단어 경계 + 시스템 에러 false positive). 580 전체 통과.
   - **runner 통합은 PR6 으로 분리** — KiwoomError catch → classify → universe skip + 텔레그램 카테고리 알림.
-- [ ] **PR6 · `feat(runner): reject 분류 → universe skip + 알림 — #10 2차`** — PR5 의 분류 결과로 종목 일시 제외 + 텔레그램에 카테고리 표기.
+- [x] **PR6 · `feat(runner): reject 분류 → 종목 skip + 알림 카테고리 — #10 2차`**
+  - `PaperRunner._skipped_until: dict[str, datetime]` 필드 + `_is_symbol_skipped()` 헬퍼 (만료 항목 자동 청소).
+  - `_place_and_track` except 블록에서 `KiwoomError` 면 `classify_reject(message, code)` 호출 → skip_seconds > 0 이면 `_skipped_until[symbol] = now + delta` 등록. 일반 예외는 category=UNKNOWN, skip 0.
+  - `runner.order_failed` 알림에 `category` + `skip_seconds` 추가 — 텔레그램에서 "왜 거절됐는지" + "언제 재시도" 즉시 인지.
+  - `_evaluate_signal` 시작에 skip 검사 — skipped 종목은 risk 평가 전에 차단, `runner.signal_skipped_reject` 로그.
+  - 테스트 9건 (KiwoomError 카테고리별 등록/미등록 + 일반 예외 + skip 검사 자동 청소 + signal 차단). 589 전체 통과.
 - [ ] **PR7 · `test(integration): paper-day 풀 사이클 — #22`**
 - [ ] **PR8 · `feat(cli): preflight 명령 — #17`**
 
