@@ -45,6 +45,7 @@ uv run auto-trade insight --days 7 --push      # (LLM) 주간 인사이트
 uv run auto-trade weekly-proposal --push       # (LLM) 다음 주 day-trade 프로파일 자동 갱신
 uv run auto-trade strategy suggest …           # 추천 → YAML 프로파일 저장
 uv run auto-trade strategy advise  …           # (선택) LLM 으로 프로파일 조정
+uv run auto-trade dashboard                    # 결과 분석 웹 대시보드 (로컬 127.0.0.1:8000)
 ```
 
 ## 1) 가장 빠른 흐름 — 추천 받아서 그대로 돌려보기 (코드 X)

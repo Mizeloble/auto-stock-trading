@@ -947,5 +947,52 @@ def weekly_proposal(
         console.print("[green]텔레그램 푸시 완료[/green]")
 
 
+@app.command()
+def dashboard(
+    host: str = typer.Option("127.0.0.1", "--host", help="바인딩 주소. 기본 로컬 전용."),
+    port: int = typer.Option(8000, "--port", help="포트."),
+    reload: bool = typer.Option(False, "--reload", help="dev 자동 리로드 (기본 경로만 지원)."),
+    reports_root: Path = typer.Option(
+        Path("data/reports"),
+        "--reports-root",
+        help="`daily-*.json` 폴더.",
+    ),
+    backtests_root: Path = typer.Option(
+        Path("data/backtests"),
+        "--backtests-root",
+        help="백테스트 결과 폴더 루트.",
+    ),
+) -> None:
+    """투자 결과 분석 웹 대시보드 (FastAPI · 로컬 전용).
+
+    무엇/왜:
+    - `data/reports/daily-*.json`, `data/backtests/<run>/` 를 읽어 누적 자산곡선·일별 상세·
+      백테스트 결과를 브라우저에서 시각화. LLM 호출 0건, 외부 네트워크 호출 0건.
+    - 기본 host=127.0.0.1 (로컬 전용). 다른 기기에서 접속하려면 `--host 0.0.0.0` 명시.
+
+    어떻게 확인: 명령 실행 후 출력된 URL(`http://127.0.0.1:8000`) 을 브라우저로 열기.
+    """
+    import uvicorn
+
+    if reload:
+        uvicorn.run(
+            "auto_trading.dashboard.app:app",
+            host=host,
+            port=port,
+            reload=True,
+            reload_dirs=["src/auto_trading/dashboard"],
+        )
+        return
+
+    from .dashboard.app import create_app
+
+    instance = create_app(reports_root=reports_root, backtests_root=backtests_root)
+    console.print(f"[cyan]대시보드:[/cyan] http://{host}:{port}")
+    console.print(
+        f"[dim]reports={reports_root.resolve()} · backtests={backtests_root.resolve()}[/dim]"
+    )
+    uvicorn.run(instance, host=host, port=port, log_level="info")
+
+
 if __name__ == "__main__":
     app()
