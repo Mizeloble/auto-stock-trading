@@ -38,7 +38,7 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
 
 - [ ] **PR1 · `chore(tests): isolated_cwd 픽스처 conftest.py 통합`** — 4개 테스트 파일에서 동일 픽스처 정의 중복 제거. [tests/conftest.py](tests/conftest.py) 신규.
 - [ ] PR2 · `refactor(dashboard): CSV 로더 파싱 헬퍼 통합` — `_load_equity_csv` / `_load_trades_csv` 공통 try/open/parse/except 패턴을 `_safe_csv_rows` 1개로.
-- [ ] PR3 · `refactor(notify/state): _build_trade_lines 페어링·포맷터 분해` — 75줄 함수를 `_pair_buy_liq_records` + `_format_pair_line/_format_buy_line/_format_sell_line` 으로.
+- [x] PR3 · `refactor(notify/state): _build_trade_lines 페어링·포맷터 분해` — 75줄 함수를 `_pair_buy_liq_records` + `_format_pair_line/_format_buy_line/_format_sell_line` 으로. 단위 테스트 7건 추가.
 - [ ] PR4 · `refactor(cli): paper_day 단계별 분해` — 155줄 → ~30줄 (daytrade/cli_helpers 위임).
 - [ ] PR4b · `refactor(cli): weekly_proposal 단계별 분해` — 128줄 → ~30줄 (news/ 도메인 헬퍼).
 - [ ] PR5 · `refactor(llm): tool_use 추출 공통 헬퍼` — `news/proposal.py` + `notify/insight.py` + `strategy/llm_advisor.py` 3곳 동일 패턴 통합 (`src/auto_trading/llm/_tool_use.py`).
