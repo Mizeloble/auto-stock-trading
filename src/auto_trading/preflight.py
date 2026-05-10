@@ -33,11 +33,13 @@ import yaml
 from .account.order_journal import OrderJournal
 from .account.recovery import find_suspect_orders
 from .heartbeat import check_heartbeat
+from .llm.cost_tracker import CostTracker
 
 __all__ = [
     "GateResult",
     "check_heartbeat_recent",
     "check_latest_backtest_sharpe",
+    "check_llm_cost_within_budget",
     "check_no_pending_orders",
     "check_recent_paper_day_mdd",
     "check_risk_limits_active",
@@ -252,13 +254,56 @@ def check_latest_backtest_sharpe(backtests_root: Path, threshold: float = 0.0) -
     )
 
 
+def check_llm_cost_within_budget(
+    cost_path: Path | None,
+    monthly_budget_usd: float = 5.0,
+) -> GateResult:
+    """29단계 PR15 (#16) — LLM 월 한도 내 누적 검증.
+
+    `cost_path` None 이면 비활성 환경 — skipped 로 표시 (cost 추적 자체가
+    꺼져있는 상태). 활성이면 실 게이트로 동작.
+    """
+    name = "llm_cost_within_budget"
+    if cost_path is None:
+        return GateResult(
+            name=name,
+            ok=False,
+            detail="비활성 — `.env` 의 LLM_COST_PATH 설정 시 활성",
+            skipped=True,
+        )
+    tracker = CostTracker(path=cost_path, monthly_budget_usd=monthly_budget_usd)
+    status = tracker.budget_status()
+    if status.over:
+        return GateResult(
+            name=name,
+            ok=False,
+            detail=(
+                f"{status.year_month}: ${status.spent_usd:.2f} / ${status.budget_usd:.2f} "
+                f"({status.pct_used:.0%}) — 한도 초과"
+            ),
+        )
+    if status.alert:
+        return GateResult(
+            name=name,
+            ok=True,
+            detail=(
+                f"{status.year_month}: ${status.spent_usd:.2f} / ${status.budget_usd:.2f} "
+                f"({status.pct_used:.0%}) — 알림 임계 도달, 실거래 가능"
+            ),
+        )
+    return GateResult(
+        name=name,
+        ok=True,
+        detail=f"{status.year_month}: ${status.spent_usd:.2f} / ${status.budget_usd:.2f} ({status.pct_used:.0%})",
+    )
+
+
 # ---- 미구현 placeholder ------------------------------------------------------
 
 
 _SKIPPED_GATES: tuple[tuple[str, str], ...] = (
     ("kill_switch_simulation", "PR 미구현 — 강제 -3% 시나리오로 kill-switch 발화 검증"),
     ("multi_channel_alerts", "PR 미구현 (#12) — 텔레그램 외 fallback 채널 ack"),
-    ("llm_cost_within_budget", "PR 미구현 (#16) — 월 $5 한도 내 누적 검증"),
     ("corporate_action_cache_fresh", "PR 미구현 (#11) — KRX 액면분할/배당락 캐시 7일 이내"),
 )
 
@@ -280,6 +325,8 @@ def run_all_gates(
     heartbeat_path: Path,
     reports_root: Path,
     backtests_root: Path,
+    llm_cost_path: Path | None = None,
+    llm_monthly_budget_usd: float = 5.0,
 ) -> list[GateResult]:
     """모든 게이트 실행 → 결과 리스트 (선언 순서대로).
 
@@ -293,6 +340,7 @@ def run_all_gates(
         (check_heartbeat_recent, (heartbeat_path,)),
         (check_recent_paper_day_mdd, (reports_root,)),
         (check_latest_backtest_sharpe, (backtests_root,)),
+        (check_llm_cost_within_budget, (llm_cost_path, llm_monthly_budget_usd)),
     ):
         try:
             results.append(fn(*args))

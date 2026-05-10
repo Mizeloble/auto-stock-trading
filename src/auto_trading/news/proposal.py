@@ -20,6 +20,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 from ..llm import extract_tool_use_input
+from ..llm.cost import check_budget_or_raise, get_default_tracker, record_response
 from ..reports.daily import DailyReport
 from .collector import NewsItem
 
@@ -215,6 +216,9 @@ def propose_daytrade_profile(
         "news": _summarize_news(news, max_items=max_news_items),
         "current_profile": _summarize_current_profile(current_profile),
     }
+    # 29단계 PR15 — 호출 직전 한도 검사 + 호출 직후 record. 미활성(None) 시 no-op.
+    tracker = get_default_tracker()
+    check_budget_or_raise(tracker)
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -242,6 +246,7 @@ def propose_daytrade_profile(
             }
         ],
     )
+    record_response(tracker, response, model=model)
     tool_input = extract_tool_use_input(response, "propose_daytrade_profile")
     return DaytradeProposal.model_validate(tool_input)
 
