@@ -844,6 +844,19 @@ def insight(
 def weekly_proposal(
     days_reports: int = typer.Option(7, "--days-reports", help="직전 N일치 일일 리포트 (기본 7)."),
     days_news: int = typer.Option(7, "--days-news", help="직전 N일치 RSS 뉴스 (기본 7)."),
+    max_news_items: int = typer.Option(
+        80,
+        "--max-news-items",
+        help="LLM 입력으로 보낼 뉴스 최대 건수 (기본 80). 호출당 input 토큰을 좌우.",
+    ),
+    force_refresh: bool = typer.Option(
+        True,
+        "--force-refresh/--no-force-refresh",
+        help=(
+            "True (기본) 면 같은 날 캐시가 있어도 RSS 를 새로 받아 누적 병합. "
+            "토요일 06:00 prefetch cron 이 만든 캐시 + 09:00 사이 새 뉴스를 잃지 않게."
+        ),
+    ),
     current: Path = typer.Option(
         Path("strategies/profiles/daytrade-current.yaml"),
         "--current",
@@ -907,14 +920,22 @@ def weekly_proposal(
     from .news.proposal import _summarize_news, _summarize_reports, propose_daytrade_profile
 
     reports = insight_mod.collect_recent_reports(days=days_reports)
-    news = collect_recent_news(days=days_news)
+    news = collect_recent_news(days=days_news, force_refresh=force_refresh)
     if not reports and not news:
         console.print("[red]데이터 부족:[/red] reports + news 모두 비어있습니다.")
         raise typer.Exit(code=1)
-    console.print(f"[cyan]입력:[/cyan] reports {len(reports)}건 · news {len(news)}건")
+    console.print(
+        f"[cyan]입력:[/cyan] reports {len(reports)}건 · news {len(news)}건 "
+        f"(LLM 입력 최대 {max_news_items}건)"
+    )
 
     if dry_run:
-        console.print({"reports": _summarize_reports(reports), "news": _summarize_news(news)})
+        console.print(
+            {
+                "reports": _summarize_reports(reports),
+                "news": _summarize_news(news, max_items=max_news_items),
+            }
+        )
         return
 
     target_path = target or current
@@ -924,6 +945,7 @@ def weekly_proposal(
         news,
         client=client,  # type: ignore[arg-type]
         model=get_settings().anthropic_model,
+        max_news_items=max_news_items,
     )
     result = apply_and_persist(
         proposal,
@@ -945,6 +967,35 @@ def weekly_proposal(
 
         asyncio.run(_push())
         console.print("[green]텔레그램 푸시 완료[/green]")
+
+
+@app.command("fetch-news")
+def fetch_news(
+    days: int = typer.Option(7, "--days", help="직전 N일치 RSS 뉴스 (기본 7)."),
+    force_refresh: bool = typer.Option(
+        True,
+        "--force-refresh/--no-force-refresh",
+        help="True (기본) 면 캐시가 있어도 RSS 를 새로 받아 누적 병합.",
+    ),
+) -> None:
+    """RSS 뉴스만 미리 fetch → 캐시 갱신 (LLM 호출 없음 · 비용 0).
+
+    무엇/왜:
+    - 토요일 06:00 cron 이 호출 → 09:00 `weekly-proposal` 이 사용할 캐시 선반영.
+    - 06:00~09:00 사이 새 뉴스는 09:00 호출이 force_refresh=True 로 다시 fetch
+      해서 누적 병합. 즉 prefetch 가 실패해도 안전 fallback.
+
+    어떻게 확인: `data/news/news-v3-YYYY-MM-DD.json` 갱신 + 콘솔 건수 표시.
+    """
+    from .news.collector import collect_recent_news
+
+    news = collect_recent_news(days=days, force_refresh=force_refresh)
+    sources: dict[str, int] = {}
+    for it in news:
+        sources[it.source] = sources.get(it.source, 0) + 1
+    console.print(f"[cyan]뉴스 수집:[/cyan] {len(news)}건 (직전 {days}일)")
+    for src, cnt in sorted(sources.items(), key=lambda kv: -kv[1]):
+        console.print(f"  · {src}: {cnt}건")
 
 
 @app.command()

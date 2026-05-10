@@ -87,7 +87,7 @@ def test_parse_feed_truncates_long_summary() -> None:
     long = "a" * 500
     feed = _feed(_entry(title="t", summary=long))
     items = parse_feed(feed, source_label="?")
-    assert len(items[0].summary) == 240
+    assert len(items[0].summary) == 400
     assert items[0].summary.endswith("…")
 
 
@@ -209,3 +209,64 @@ def test_collect_recent_news_sorts_descending(tmp_path: Path) -> None:
     )
     titles = [it.title for it in items]
     assert titles == ["newest", "mid", "oldest"]
+
+
+def test_collect_recent_news_force_refresh_merges_with_existing_cache(tmp_path: Path) -> None:
+    """force_refresh=True 면 기존 캐시 + 신규 fetch 를 url 키로 dedupe 후 누적 병합.
+
+    토요일 06:00 prefetch 가 만든 캐시에 + 09:00 weekly-proposal 직전 fetch 가
+    덧붙는 시나리오. url 이 같으면 기존 항목이 유지된다.
+    """
+    now = datetime(2026, 5, 9, 6, 0, tzinfo=KST)  # 토요일 06:00
+
+    # 06:00 prefetch — 뉴스 2건 (A, B)
+    feed_06 = _feed(
+        _entry(title="A-old", link="https://h.com/A", published=now - timedelta(hours=1)),
+        _entry(title="B", link="https://h.com/B", published=now - timedelta(hours=2)),
+    )
+    out1 = collect_recent_news(
+        days=7,
+        feed_urls=("https://h.com",),
+        cache_root=tmp_path,
+        now=now,
+        fetcher=lambda _url: feed_06,
+        force_refresh=False,
+    )
+    assert {it.title for it in out1} == {"A-old", "B"}
+
+    # 09:00 weekly-proposal — 뉴스 2건 (A 같은 url 이지만 새 제목, C 신규)
+    later = now + timedelta(hours=3)
+    feed_09 = _feed(
+        _entry(title="A-new", link="https://h.com/A", published=later - timedelta(hours=1)),
+        _entry(title="C", link="https://h.com/C", published=later - timedelta(minutes=10)),
+    )
+    out2 = collect_recent_news(
+        days=7,
+        feed_urls=("https://h.com",),
+        cache_root=tmp_path,
+        now=later,
+        fetcher=lambda _url: feed_09,
+        force_refresh=True,
+    )
+    titles = {it.title for it in out2}
+    # A 는 기존 (A-old) 유지 — 같은 url 이면 처음 본 것을 유지하는 dedupe 정책
+    # (기존 캐시는 안정성·재현성 우선, 신규 url 만 추가)
+    assert "A-old" in titles
+    assert "B" in titles
+    assert "C" in titles
+    assert "A-new" not in titles
+
+
+def test_collect_recent_news_cache_schema_v3_filename(tmp_path: Path) -> None:
+    """캐시 파일명이 v3 schema 로 저장된다 — 기존 v2 캐시와 자동 분리."""
+    now = datetime(2026, 5, 9, 12, 0, tzinfo=KST)
+    feed = _feed(_entry(title="x", link="https://h.com/x", published=now - timedelta(hours=1)))
+    collect_recent_news(
+        days=7,
+        feed_urls=("https://h.com",),
+        cache_root=tmp_path,
+        now=now,
+        fetcher=lambda _url: feed,
+    )
+    files = sorted(p.name for p in tmp_path.iterdir())
+    assert files == ["news-v3-2026-05-09.json"]

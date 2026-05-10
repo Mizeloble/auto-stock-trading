@@ -11,6 +11,7 @@ PLIST_DST="$HOME/Library/LaunchAgents"
 # 위해 폭넓게 해제. 이미 해제됐으면 조용히 skip.
 LABELS=(
   "com.mizeloble.auto-trade.paper-day"
+  "com.mizeloble.auto-trade.news-prefetch"
   "com.mizeloble.auto-trade.insight-weekly"
   "com.mizeloble.auto-trade.log-rotate"
   "com.mizeloble.auto-trade.paper"

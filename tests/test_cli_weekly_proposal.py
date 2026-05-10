@@ -169,3 +169,70 @@ def test_weekly_proposal_uses_news_only_path(
     ):
         result = runner.invoke(app, ["weekly-proposal"])
     assert result.exit_code == 0, result.output
+
+
+def test_weekly_proposal_max_news_items_flag_flows_to_propose(
+    isolated_cwd: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--max-news-items` 가 propose_daytrade_profile 호출에 그대로 전달."""
+    _seed_default_profile(isolated_cwd)
+    _seed_reports(isolated_cwd / "data" / "reports", ["2026-05-06"])
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+
+    block = MagicMock()
+    block.type = "tool_use"
+    block.name = "propose_daytrade_profile"
+    block.input = {"summary_ko": "ok", "rationale_ko": "ok", "confidence": 0.5}
+    response = MagicMock()
+    response.content = [block]
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = response
+
+    runner = CliRunner()
+    with (
+        _patch_news(),
+        patch("auto_trading.cli._build_anthropic_client", return_value=fake_client),
+    ):
+        result = runner.invoke(app, ["weekly-proposal", "--max-news-items", "42"])
+
+    assert result.exit_code == 0, result.output
+    # CLI 출력에 "최대 42건" 표기 + LLM 호출이 한 번 발생.
+    assert "최대 42건" in result.output
+    assert fake_client.messages.create.call_count == 1
+
+
+def test_fetch_news_outputs_count_and_sources(isolated_cwd: Path) -> None:
+    """`auto-trade fetch-news` — collect_recent_news 결과를 콘솔에 표시 + 비용 0."""
+    fake = [
+        NewsItem(
+            title="t1",
+            summary="s",
+            url="https://h.com/1",
+            published_at=datetime.now(KST),
+            source="한국경제",
+            tickers=(),
+        ),
+        NewsItem(
+            title="t2",
+            summary="s",
+            url="https://y.com/1",
+            published_at=datetime.now(KST),
+            source="연합뉴스",
+            tickers=(),
+        ),
+        NewsItem(
+            title="t3",
+            summary="s",
+            url="https://h.com/2",
+            published_at=datetime.now(KST),
+            source="한국경제",
+            tickers=(),
+        ),
+    ]
+    runner = CliRunner()
+    with patch("auto_trading.news.collector.collect_recent_news", return_value=fake):
+        result = runner.invoke(app, ["fetch-news"])
+    assert result.exit_code == 0, result.output
+    assert "뉴스 수집: 3건" in result.output
+    assert "한국경제: 2건" in result.output
+    assert "연합뉴스: 1건" in result.output

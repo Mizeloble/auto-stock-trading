@@ -5,6 +5,7 @@
 # - ~/Library/LaunchAgents/ 에 plist 복사 후 bootstrap 으로 등록.
 # - 등록 후 자동 사이클:
 #   * 평일 08:55 KST: paper-day 시동 → 발굴·매수·15:15 자체 청산·종료
+#   * 토요일 06:00 KST: news-prefetch cron → RSS 뉴스 미리 fetch (LLM X)
 #   * 토요일 09:00 KST: insight-weekly cron → 인사이트 + weekly-proposal LLM 호출
 # - 21단계 시점의 swing(`paper`) + paper-stop 은 day-trade 모드와 동시 운영 X.
 #   필요하면 LABELS 에 추가하되 paper-day 와 충돌 없도록 plist 시각·계좌 점검.
@@ -21,6 +22,7 @@ PLIST_SRC="$PROJECT_DIR/scripts/launchd"
 PLIST_DST="$HOME/Library/LaunchAgents"
 LABELS=(
   "com.mizeloble.auto-trade.paper-day"
+  "com.mizeloble.auto-trade.news-prefetch"
   "com.mizeloble.auto-trade.insight-weekly"
   "com.mizeloble.auto-trade.log-rotate"
 )
@@ -31,6 +33,7 @@ mkdir -p "$PROJECT_DIR/logs"
 # 스크립트 실행권한 보장
 chmod +x \
   "$PROJECT_DIR/scripts/paper-day-mode.sh" \
+  "$PROJECT_DIR/scripts/news-prefetch.sh" \
   "$PROJECT_DIR/scripts/insight-weekly.sh" \
   "$PROJECT_DIR/scripts/rotate-logs.sh"
 
@@ -59,9 +62,11 @@ done
 echo
 echo "✅ 등록 완료. 자동 사이클:"
 echo "  - 평일 08:55 KST: paper-day 시동 → 15:15 자체 청산"
-echo "  - 토요일 09:00 KST: insight-weekly (인사이트 + weekly-proposal)"
+echo "  - 토요일 06:00 KST: news-prefetch (RSS 캐시 선반영, LLM X)"
+echo "  - 토요일 09:00 KST: insight-weekly (인사이트 + weekly-proposal, force_refresh 누적)"
 echo "  - 매일 02:30 KST: log-rotate (30일↑ 압축, 90일↑ 삭제, launchd-*.log truncate)"
 echo "  확인: launchctl list | grep mizeloble.auto-trade"
 echo "  강제 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.paper-day"
+echo "  뉴스 prefetch 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.news-prefetch"
 echo "  토요일 cron 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.insight-weekly"
 echo "  로그 회전 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.log-rotate"

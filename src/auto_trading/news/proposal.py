@@ -148,8 +148,13 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
     }
 
 
-def _summarize_news(news: Iterable[NewsItem], *, max_items: int = 30) -> list[dict[str, Any]]:
-    """헤드라인만 — 토큰 절약. 본문은 240자로 truncate(이미 collector 에서)."""
+def _summarize_news(news: Iterable[NewsItem], *, max_items: int = 80) -> list[dict[str, Any]]:
+    """헤드라인 + 본문 발췌 — 토큰 절약. 본문은 collector 에서 400자 truncate.
+
+    default 80 (이전 30) — 6개 RSS 소스 합산 ~200건 중 상위 80건을 LLM 입력으로.
+    호출자(`weekly-proposal --max-news-items`) 가 override 가능. 토큰/비용 영향은
+    proposal.py SYSTEM_PROMPT 와 README 참고 (호출당 ~$0.45 / 월 ~$2 추정).
+    """
     return [
         {
             "title": it.title,
@@ -197,11 +202,16 @@ def propose_daytrade_profile(
     current_profile: dict[str, Any] | None = None,
     model: str = "claude-opus-4-7",
     max_tokens: int = 1024,
+    max_news_items: int = 80,
 ) -> DaytradeProposal:
-    """LLM 호출 → DaytradeProposal. 검증 실패 시 ValidationError raise."""
+    """LLM 호출 → DaytradeProposal. 검증 실패 시 ValidationError raise.
+
+    `max_news_items` — 수집된 뉴스 중 LLM 입력으로 보낼 상한. default 80
+    (호출당 input ~25k tok ≈ $0.45, 주 1회 cron 기준 월 ~$2).
+    """
     payload = {
         "reports": _summarize_reports(reports),
-        "news": _summarize_news(news),
+        "news": _summarize_news(news, max_items=max_news_items),
         "current_profile": _summarize_current_profile(current_profile),
     }
     response = client.messages.create(
