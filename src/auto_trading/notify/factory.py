@@ -10,6 +10,7 @@ from .telegram_commands import (
     InsightAction,
     StateProvider,
     TelegramCommandHandler,
+    UnpauseAction,
 )
 
 
@@ -30,6 +31,7 @@ def build_command_handler(
     on_pause: ControlAction | None = None,
     on_resume: ControlAction | None = None,
     on_stop: ControlAction | None = None,
+    on_unpause: UnpauseAction | None = None,
     on_insight: InsightAction | None = None,
 ) -> TelegramCommandHandler | None:
     """텔레그램 인커밍 명령 핸들러. 화이트리스트 미설정이면 None 리턴.
@@ -37,6 +39,9 @@ def build_command_handler(
     on_pause/on_resume/on_stop 을 안 넘기면 텔레그램 v3 명령은 "비활성" 응답 — 기존 v2
     호환성 유지. CLI 에서는 runner.pause / runner.resume / runner.request_stop 을 그대로
     바인딩해 넘긴다.
+
+    on_unpause 는 29단계 PR11 — 연속 손절 자동 일시중지의 수동 해제.
+    `runner.unpause_loss_tracker` 를 그대로 바인딩한다 (bool 반환).
 
     on_insight 는 22단계 Phase B — Anthropic 키 + 일일 리포트 데이터가 있을 때만 주입.
     """
@@ -50,5 +55,6 @@ def build_command_handler(
         on_pause=on_pause,
         on_resume=on_resume,
         on_stop=on_stop,
+        on_unpause=on_unpause,
         on_insight=on_insight,
     )

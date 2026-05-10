@@ -30,6 +30,7 @@ from .commands import (
     InsightAction,
     InsightCooldown,
     StateProvider,
+    UnpauseAction,
     dispatch_sync,
 )
 from .telegram import TELEGRAM_API_BASE
@@ -60,6 +61,7 @@ class TelegramCommandHandler:
         on_pause: ControlAction | None = None,
         on_resume: ControlAction | None = None,
         on_stop: ControlAction | None = None,
+        on_unpause: UnpauseAction | None = None,
         on_insight: InsightAction | None = None,
         insight_cooldown_sec: int = 300,
     ) -> None:
@@ -80,6 +82,7 @@ class TelegramCommandHandler:
             on_pause=on_pause,
             on_resume=on_resume,
             on_stop=on_stop,
+            on_unpause=on_unpause,
         )
         self._insight = InsightCooldown(on_insight, cooldown_sec=insight_cooldown_sec)
 

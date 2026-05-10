@@ -105,7 +105,13 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - `_place_and_track` SELL 성공 분기에 라운드트립 PnL = (ref_price - avg_price) * quantity → `tracker.record_round_trip(pnl)`. 방금 paused 진입했으면 텔레그램 `risk.consecutive_loss_pause` 알림.
   - `unpause_loss_tracker()` 메서드 — 텔레그램 명령용 (PR11).
   - 테스트 12건 (auto-init 3 + SELL 갱신/알림 3 + BUY 차단·SELL 허용 3 + unpause 3). 636 전체 통과.
-- [ ] **PR11 · `feat(notify): /unpause 텔레그램 명령 — #14 마무리`** — \`/unpause\` 핸들러 + factory wiring.
+- [x] **PR11 · `feat(notify): /unpause 텔레그램 명령 — #14 마무리`**
+  - `notify/commands/control.py` 에 `handle_unpause` + `UnpauseAction = Callable[[], bool]` 추가. 콜백이 True 반환 시 ack 메시지, False 면 "이미 해제/비활성" 안내.
+  - `_dispatch.py` 의 `CommandContext` 에 `on_unpause` 필드 + `dispatch_sync` 에 `/unpause` 분기.
+  - `TelegramCommandHandler.__init__` 시그니처 + `factory.build_command_handler` 에 `on_unpause` 인자 추가.
+  - `cli.py` 의 paper / paper-day 두 경로에서 `runner.unpause_loss_tracker` 자동 바인딩.
+  - `HELP_TEXT` 갱신.
+  - 테스트 6건 추가 (handle_unpause 3 + dispatch_sync 3). 642 전체 통과.
 - [x] **PR8 · `feat(cli): preflight 명령 — #17`**
   - 새 모듈 `auto_trading/preflight.py` — `GateResult` + 5개 활성 게이트 순수/read-only 함수.
     - `check_risk_limits_active` — daytrade YAML 의 `stop_loss_pct > 0` AND `daily_loss_kill=True`.

@@ -373,6 +373,7 @@ def paper(
         on_pause=runner.pause,
         on_resume=runner.resume,
         on_stop=runner.request_stop,
+        on_unpause=runner.unpause_loss_tracker,
     )
     try:
         if handler is None:
@@ -524,6 +525,7 @@ def paper_day(
         on_pause=runner.pause,
         on_resume=runner.resume,
         on_stop=runner.request_stop,
+        on_unpause=runner.unpause_loss_tracker,
         on_insight=on_insight,
     )
 
