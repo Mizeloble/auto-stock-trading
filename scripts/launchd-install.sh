@@ -25,6 +25,7 @@ LABELS=(
   "com.mizeloble.auto-trade.news-prefetch"
   "com.mizeloble.auto-trade.insight-weekly"
   "com.mizeloble.auto-trade.log-rotate"
+  "com.mizeloble.auto-trade.heartbeat-check"
 )
 
 mkdir -p "$PLIST_DST"
@@ -35,7 +36,8 @@ chmod +x \
   "$PROJECT_DIR/scripts/paper-day-mode.sh" \
   "$PROJECT_DIR/scripts/news-prefetch.sh" \
   "$PROJECT_DIR/scripts/insight-weekly.sh" \
-  "$PROJECT_DIR/scripts/rotate-logs.sh"
+  "$PROJECT_DIR/scripts/rotate-logs.sh" \
+  "$PROJECT_DIR/scripts/heartbeat-check.sh"
 
 for label in $LABELS; do
   src="$PLIST_SRC/$label.plist"
@@ -65,8 +67,10 @@ echo "  - 평일 08:55 KST: paper-day 시동 → 15:15 자체 청산"
 echo "  - 토요일 06:00 KST: news-prefetch (RSS 캐시 선반영, LLM X)"
 echo "  - 토요일 09:00 KST: insight-weekly (인사이트 + weekly-proposal, force_refresh 누적)"
 echo "  - 매일 02:30 KST: log-rotate (30일↑ 압축, 90일↑ 삭제, launchd-*.log truncate)"
+echo "  - 5분마다 (평일 09-16 KST 만): heartbeat-check (봇 멈춤 감지 → 텔레그램 알림)"
 echo "  확인: launchctl list | grep mizeloble.auto-trade"
 echo "  강제 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.paper-day"
 echo "  뉴스 prefetch 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.news-prefetch"
 echo "  토요일 cron 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.insight-weekly"
 echo "  로그 회전 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.log-rotate"
+echo "  heartbeat-check 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.heartbeat-check"

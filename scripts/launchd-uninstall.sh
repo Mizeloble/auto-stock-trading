@@ -14,6 +14,7 @@ LABELS=(
   "com.mizeloble.auto-trade.news-prefetch"
   "com.mizeloble.auto-trade.insight-weekly"
   "com.mizeloble.auto-trade.log-rotate"
+  "com.mizeloble.auto-trade.heartbeat-check"
   "com.mizeloble.auto-trade.paper"
   "com.mizeloble.auto-trade.paper-stop"
 )
