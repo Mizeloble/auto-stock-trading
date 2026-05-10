@@ -38,6 +38,7 @@ from .kiwoom.ws import KiwoomWebSocket, Subscription
 from .market.feed import Tick, ticks
 from .notify.base import NoopNotifier, Notifier
 from .notify.state import RunnerStateSnapshot
+from .risk.consecutive_loss import ConsecutiveLossTracker
 from .risk.manager import AccountState, Decision, RiskManager
 from .risk.position_guard import GuardAction, PositionGuard
 from .strategy.base import Signal, Strategy
@@ -140,6 +141,9 @@ class PaperRunner:
     # 29단계 PR3 (#13) — 봇 살아있음 신호. 주입 시 background task 가
     # interval_sec 마다 파일 mtime 갱신. 외부 cron 이 누락 시 텔레그램 알림.
     heartbeat: Heartbeat | None = None
+    # 29단계 PR10 (#14 2차) — 연속 손절 자동 일시중지. None 이면 비활성.
+    # __post_init__ 에서 risk.limits.max_consecutive_losses > 0 면 자동 생성.
+    loss_tracker: ConsecutiveLossTracker | None = None
     _settings: Settings = field(default_factory=get_settings)
     _balance_failures: int = field(default=0, init=False)
     # 텔레그램 인커밍 명령 응답용 인메모리 상태 (runner 가 매 사이클 갱신)
@@ -163,6 +167,13 @@ class PaperRunner:
         # 23단계 Phase C — 명시 주입 안 했으면 risk.limits 를 그대로 따르는 PositionGuard 자동 생성.
         if self.position_guard is None:
             self.position_guard = PositionGuard(limits=self.risk.limits)
+
+        # 29단계 PR10 — 연속 손절 트래커 자동 생성 (limits 가 활성일 때만).
+        if self.loss_tracker is None and self.risk.limits.max_consecutive_losses > 0:
+            self.loss_tracker = ConsecutiveLossTracker(
+                threshold=self.risk.limits.max_consecutive_losses,
+                pause_seconds=self.risk.limits.consecutive_loss_pause_sec,
+            )
 
         # day-trade 모드(liquidate_at 설정)는 시작 시 universe 미정 허용.
         # set_universe() 호출 전까지 run() 이 대기.
@@ -483,6 +494,18 @@ class PaperRunner:
             return False
         return True
 
+    def unpause_loss_tracker(self) -> bool:
+        """29단계 PR10 — 텔레그램 `/unpause` (PR11) 등에서 수동 해제.
+
+        반환: 트래커가 활성 + paused 상태였을 때 True (실제로 풀었음).
+              비활성/이미 회복 상태면 False.
+        """
+        if self.loss_tracker is None or not self.loss_tracker.is_paused():
+            return False
+        self.loss_tracker.unpause()
+        log.info("runner.loss_tracker_unpaused")
+        return True
+
     async def _evaluate_signal(
         self, signal: Signal, bar: Bar, account: AccountState
     ) -> Order | None:
@@ -502,6 +525,22 @@ class PaperRunner:
                 symbol=signal.symbol,
                 side=signal.side.value,
                 until=until.isoformat(),
+            )
+            return None
+        # 29단계 PR10 — 연속 손절로 paused 면 신규 BUY 차단. SELL(청산) 은 허용 — 손절은 막지 않음.
+        if (
+            signal.side is Side.BUY
+            and self.loss_tracker is not None
+            and self.loss_tracker.is_paused()
+        ):
+            until_iso = (
+                self.loss_tracker.paused_until.isoformat() if self.loss_tracker.paused_until else ""
+            )
+            log.info(
+                "runner.signal_blocked_consecutive_loss",
+                symbol=signal.symbol,
+                streak=self.loss_tracker.streak,
+                paused_until=until_iso,
             )
             return None
         decision = self.risk.evaluate(signal, price=bar.close, account=account)
@@ -591,6 +630,27 @@ class PaperRunner:
                 account.avg_prices[order.symbol] = ref_price
                 # 23단계 Phase B — 일일 매수대금 누적. 실패 시(except 분기) 누적 X.
                 account.today_notional_used += ref_price * order.quantity
+            # 29단계 PR10 (#14 2차) — SELL 시 라운드트립 PnL 산출 → 트래커 갱신.
+            # 평균가는 BUY 시에만 갱신되므로 SELL 직전 avg_prices 가 매수가.
+            # 부분 매도 시점에도 평균가 그대로 유지 — 누적 라운드트립 측정에 적합.
+            if order.side is Side.SELL and self.loss_tracker is not None:
+                buy_price = account.avg_prices.get(order.symbol, 0.0)
+                if buy_price > 0:
+                    pnl = (ref_price - buy_price) * order.quantity
+                    was_paused = self.loss_tracker.is_paused()
+                    self.loss_tracker.record_round_trip(pnl)
+                    # paused 로 *방금* 전환됐으면 텔레그램에 알림.
+                    if not was_paused and self.loss_tracker.is_paused():
+                        await self.notifier.notify(
+                            "risk.consecutive_loss_pause",
+                            streak=self.loss_tracker.streak,
+                            paused_until=(
+                                self.loss_tracker.paused_until.isoformat()
+                                if self.loss_tracker.paused_until
+                                else ""
+                            ),
+                        )
+
             # 23단계 Phase D — SELL 로 잔량 0 이면 last_exit_ts 갱신 + guard reset.
             if order.side is Side.SELL and account.positions.get(order.symbol, 0) <= 0:
                 self._mark_exit(order.symbol, bar.ts)
