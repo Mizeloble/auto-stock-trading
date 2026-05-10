@@ -99,7 +99,13 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - `RiskLimits.max_consecutive_losses` (default 0 = 비활성) + `consecutive_loss_pause_sec` (default 86_400) 추가.
   - 단위 테스트 8건 (비활성 / 누적 / 트리거 / 양수 reset / 만료 / 수동 unpause / paused 중 연장 / breakeven). 624 전체 통과.
   - **runner 통합 + 텔레그램 `/unpause` 명령은 PR10 으로 분리** — SELL 후 라운드트립 PnL 산출 + `evaluate` 에서 paused 검사.
-- [ ] **PR10 · `feat(runner): 연속 손절 트래커 wiring + /unpause 텔레그램 — #14 2차`**
+- [x] **PR10 · `feat(runner): 연속 손절 트래커 wiring — #14 2차`**
+  - `PaperRunner.loss_tracker: ConsecutiveLossTracker | None` 필드 추가, `__post_init__` 에서 `risk.limits.max_consecutive_losses > 0` 면 자동 생성. 명시 주입은 보존.
+  - `_evaluate_signal` 시작에 BUY 차단 — paused 면 `runner.signal_blocked_consecutive_loss` 로그 + None 반환. SELL 은 통과 (청산은 허용).
+  - `_place_and_track` SELL 성공 분기에 라운드트립 PnL = (ref_price - avg_price) * quantity → `tracker.record_round_trip(pnl)`. 방금 paused 진입했으면 텔레그램 `risk.consecutive_loss_pause` 알림.
+  - `unpause_loss_tracker()` 메서드 — 텔레그램 명령용 (PR11).
+  - 테스트 12건 (auto-init 3 + SELL 갱신/알림 3 + BUY 차단·SELL 허용 3 + unpause 3). 636 전체 통과.
+- [ ] **PR11 · `feat(notify): /unpause 텔레그램 명령 — #14 마무리`** — \`/unpause\` 핸들러 + factory wiring.
 - [x] **PR8 · `feat(cli): preflight 명령 — #17`**
   - 새 모듈 `auto_trading/preflight.py` — `GateResult` + 5개 활성 게이트 순수/read-only 함수.
     - `check_risk_limits_active` — daytrade YAML 의 `stop_loss_pct > 0` AND `daily_loss_kill=True`.
