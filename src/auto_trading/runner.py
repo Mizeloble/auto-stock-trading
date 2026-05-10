@@ -29,9 +29,11 @@ from .account.balance import AccountSnapshot, get_balance
 from .account.order_journal import OrderJournal
 from .account.orders import Order, OrderType, place_order
 from .account.recovery import find_suspect_orders
+from .account.reject_classifier import RejectCategory, classify_reject
 from .config import Settings, get_settings
 from .heartbeat import Heartbeat
 from .kiwoom.rest import KiwoomRestClient
+from .kiwoom.schemas import KiwoomError
 from .kiwoom.ws import KiwoomWebSocket, Subscription
 from .market.feed import Tick, ticks
 from .notify.base import NoopNotifier, Notifier
@@ -153,6 +155,9 @@ class PaperRunner:
     _universe_ready: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     # 청산 1회 가드 — 장 마감 후 시계가 계속 도달 상태라도 두 번 호출되지 않게.
     _liquidation_done: bool = field(default=False, init=False)
+    # 29단계 PR6 (#10 2차) — reject 분류 결과로 일시 차단된 종목.
+    # symbol → skip 만료 시각 (KST). 만료 후 자연 회복.
+    _skipped_until: dict[str, datetime] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         # 23단계 Phase C — 명시 주입 안 했으면 risk.limits 를 그대로 따르는 PositionGuard 자동 생성.
@@ -465,17 +470,40 @@ class PaperRunner:
             dry_run=False,
         )
 
+    def _is_symbol_skipped(self, symbol: str) -> bool:
+        """29단계 PR6 — reject 분류로 등록된 종목이 아직 skip 기간이면 True.
+
+        만료된 항목은 즉시 청소 (다음 호출 비용 0). 동시성 X — runner 단일 task.
+        """
+        until = self._skipped_until.get(symbol)
+        if until is None:
+            return False
+        if datetime.now(KST) >= until:
+            self._skipped_until.pop(symbol, None)
+            return False
+        return True
+
     async def _evaluate_signal(
         self, signal: Signal, bar: Bar, account: AccountState
     ) -> Order | None:
         """리스크 평가 + PAUSED/dry-run 게이트.
 
         None 반환 케이스(각각 로그 한 줄):
+        - 종목 skip 중 (직전 reject 분류) → `runner.signal_skipped_reject`
         - 리스크 매니저 REJECT → `runner.signal_rejected`
         - PAUSED → `runner.order_skipped_paused` (텔레그램 /last_signal 정확도 위해 시그널·리스크는 그대로)
         - dry_run → `runner.order_simulated`
         Order 반환 시 호출자가 _place_and_track 으로 실제 송신.
         """
+        if self._is_symbol_skipped(signal.symbol):
+            until = self._skipped_until[signal.symbol]
+            log.info(
+                "runner.signal_skipped_reject",
+                symbol=signal.symbol,
+                side=signal.side.value,
+                until=until.isoformat(),
+            )
+            return None
         decision = self.risk.evaluate(signal, price=bar.close, account=account)
         if decision.decision is Decision.REJECT or decision.order is None:
             log.info(
@@ -567,10 +595,24 @@ class PaperRunner:
             if order.side is Side.SELL and account.positions.get(order.symbol, 0) <= 0:
                 self._mark_exit(order.symbol, bar.ts)
         except Exception as exc:
+            # 29단계 PR6 (#10 2차) — KiwoomError 면 카테고리 분류 + skip 등록.
+            # 그 외 예외(네트워크 등)는 카테고리 UNKNOWN, skip 0.
+            category = RejectCategory.UNKNOWN
+            skip_seconds = 0
+            if isinstance(exc, KiwoomError):
+                classification = classify_reject(exc.message, exc.code)
+                category = classification.category
+                skip_seconds = classification.skip_seconds
+                if skip_seconds > 0:
+                    self._skipped_until[order.symbol] = datetime.now(KST) + timedelta(
+                        seconds=skip_seconds
+                    )
             log.error(
                 "runner.order_failed",
                 error=str(exc),
                 symbol=order.symbol,
+                category=category.value,
+                skip_seconds=skip_seconds,
                 exc_info=exc,
             )
             await self.notifier.notify(
@@ -579,6 +621,8 @@ class PaperRunner:
                 symbol=order.symbol,
                 side=order.side.value,
                 qty=order.quantity,
+                category=category.value,
+                skip_seconds=skip_seconds,
             )
 
     def _mark_exit(self, symbol: str, ts: datetime) -> None:
