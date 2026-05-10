@@ -75,9 +75,14 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 테스트 16건 추가 (heartbeat write/swallow/check 7건 + runner background task 4건 + CLI 5건). 558 전체 통과.
   - **launchd plist 등록은 사용자 수동 작업** — 5분 간격으로 `heartbeat-check` 실행하는 cron 추가 시 운영 활성.
 - [ ] **PR4 · `feat(account): 키움 미체결 조회 + suspect 자동 매칭 — #9 3차`** — 봇 재시작 시 suspect 들을 키움에 재조회해 실제 체결 여부 확인 + 저널 보강 + 로컬 state 동기화. 키움 미체결 TR 코드 probe 후 진행.
-- [ ] **PR5 · `feat(account): 상하한가/VI/거래정지 reject 분류 — #10`**
-- [ ] **PR6 · `test(integration): paper-day 풀 사이클 — #22`**
-- [ ] **PR7 · `feat(cli): preflight 명령 — #17`**
+- [x] **PR5 · `feat(account): 거절 메시지 분류 — #10 1차`**
+  - 새 모듈 `account/reject_classifier.py` — `RejectCategory` (상한가/하한가/VI/거래정지/휴장/종목무효/잔고부족/UNKNOWN) + `classify_reject(message, code)` 순수 함수 + 카테고리별 권장 skip 시간.
+  - 한글 패턴 + 알려진 키움 코드(RC4010, 1902) 매칭. 'VI' 는 영문 단어 경계 lookaround (`(?<![a-z])vi(?![a-z])`) 로 'device' 같은 false positive 차단.
+  - 단위 테스트 22건 (parametrize 17 + skip_seconds + code precedence + None 안전 + 영문 단어 경계 + 시스템 에러 false positive). 580 전체 통과.
+  - **runner 통합은 PR6 으로 분리** — KiwoomError catch → classify → universe skip + 텔레그램 카테고리 알림.
+- [ ] **PR6 · `feat(runner): reject 분류 → universe skip + 알림 — #10 2차`** — PR5 의 분류 결과로 종목 일시 제외 + 텔레그램에 카테고리 표기.
+- [ ] **PR7 · `test(integration): paper-day 풀 사이클 — #22`**
+- [ ] **PR8 · `feat(cli): preflight 명령 — #17`**
 
 ---
 
