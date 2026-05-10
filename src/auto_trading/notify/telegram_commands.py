@@ -9,38 +9,32 @@
 실패 격리:
 - 어떤 예외도 트레이딩 핫패스(러너) 로 전파시키지 않는다 — 모두 swallow + log.
 - 화이트리스트 미통과 → 응답 없이 무시 (봇 존재 노출 방지).
+
+명령별 분기·LLM cooldown 은 `commands/` 패키지로 분리 — 본 모듈은 long-poll
+루프 + 화이트리스트 + dispatch 위임만 담당.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
-from datetime import datetime
 from typing import Any
 
 import httpx
 import structlog
 
 from .._common import mask_secret
-from .state import (
-    HELP_TEXT,
-    RunnerStateSnapshot,
-    format_balance,
-    format_last_signal,
-    format_pnl,
-    format_positions,
-    format_status,
+from .commands import (
+    CommandContext,
+    ControlAction,
+    InsightAction,
+    InsightCooldown,
+    StateProvider,
+    dispatch_sync,
 )
 from .telegram import TELEGRAM_API_BASE
 
 log = structlog.get_logger(__name__)
-
-
-StateProvider = Callable[[], RunnerStateSnapshot]
-ControlAction = Callable[[], None]
-# /insight 명령은 LLM 호출 → 응답 문자열 반환. 시간이 걸려 async 만 의미 있음.
-InsightAction = Callable[[], "Awaitable[str]"]
 
 
 def _describe_exc(exc: BaseException) -> str:
@@ -75,20 +69,19 @@ class TelegramCommandHandler:
             raise ValueError("TelegramCommandHandler 는 allowed_chat_ids 가 비어있을 수 없습니다")
         self._token = token
         self._allowed = {str(c) for c in allowed_chat_ids}
-        self._state_provider = state_provider
         # long-poll 은 timeout 보다 약간 길게 (네트워크 여유)
         http_timeout = poll_timeout + 5
         self._client = client or httpx.AsyncClient(base_url=TELEGRAM_API_BASE, timeout=http_timeout)
         self._owns_client = client is None
         self._poll_timeout = poll_timeout
         self._offset: int = 0
-        self._on_pause = on_pause
-        self._on_resume = on_resume
-        self._on_stop = on_stop
-        # /insight: LLM 호출 → 비용·rate-limit 가드용 cooldown.
-        self._on_insight = on_insight
-        self._insight_cooldown_sec = insight_cooldown_sec
-        self._insight_last_at: datetime | None = None
+        self._ctx = CommandContext(
+            state_provider=state_provider,
+            on_pause=on_pause,
+            on_resume=on_resume,
+            on_stop=on_stop,
+        )
+        self._insight = InsightCooldown(on_insight, cooldown_sec=insight_cooldown_sec)
 
     def __repr__(self) -> str:
         return f"TelegramCommandHandler(token={mask_secret(self._token)!r}, allowed={len(self._allowed)})"
@@ -180,9 +173,9 @@ class TelegramCommandHandler:
 
         try:
             if cmd == "/insight":
-                reply = await self._handle_insight()
+                reply = await self._insight.handle()
             else:
-                reply = self._handle_command(cmd)
+                reply = dispatch_sync(cmd, self._ctx)
         except Exception as exc:
             log.warning(
                 "notify.cmd_dispatch_failed",
@@ -193,60 +186,6 @@ class TelegramCommandHandler:
             reply = "처리 중 오류가 발생했습니다."
 
         await self._send(chat_id_str, reply)
-
-    async def _handle_insight(self) -> str:
-        if self._on_insight is None:
-            return "이 봇 인스턴스에선 /insight 가 비활성입니다."
-        # cooldown — 사용자가 빠르게 두 번 누르면 두 번째는 안내 메시지로.
-        now = datetime.now()
-        if self._insight_last_at is not None:
-            elapsed = (now - self._insight_last_at).total_seconds()
-            if elapsed < self._insight_cooldown_sec:
-                remaining = int(self._insight_cooldown_sec - elapsed)
-                return f"⏳ /insight 쿨다운 — {remaining}초 후 다시 시도하세요."
-        self._insight_last_at = now
-        try:
-            return await self._on_insight()
-        except Exception as exc:
-            log.warning(
-                "notify.insight_failed",
-                error_type=type(exc).__name__,
-                error=_describe_exc(exc),
-            )
-            return "🧭 인사이트 생성 실패 — 로그를 확인하세요."
-
-    def _handle_command(self, cmd: str) -> str:
-        if cmd in ("/start", "/help"):
-            return HELP_TEXT
-        if cmd == "/pause":
-            if self._on_pause is None:
-                return "이 봇 인스턴스에선 /pause 가 비활성입니다."
-            self._on_pause()
-            return (
-                "⏸ 일시정지 — 시그널은 계속 기록되지만 주문 송신은 보류됩니다.\n/resume 으로 복귀."
-            )
-        if cmd == "/resume":
-            if self._on_resume is None:
-                return "이 봇 인스턴스에선 /resume 이 비활성입니다."
-            self._on_resume()
-            return "▶ 재개 — 정상 매매 모드로 복귀."
-        if cmd == "/stop":
-            if self._on_stop is None:
-                return "이 봇 인스턴스에선 /stop 이 비활성입니다."
-            self._on_stop()
-            return "⏹ 종료 요청됨 — 다음 봉에서 graceful shutdown.\n되돌릴 수 없습니다."
-        state = self._state_provider()
-        if cmd == "/status":
-            return format_status(state, now=datetime.now())
-        if cmd == "/balance":
-            return format_balance(state)
-        if cmd == "/positions":
-            return format_positions(state)
-        if cmd == "/pnl":
-            return format_pnl(state)
-        if cmd == "/last_signal":
-            return format_last_signal(state)
-        return HELP_TEXT
 
     async def _send(self, chat_id: str, text: str) -> None:
         path = f"/bot{self._token}/sendMessage"

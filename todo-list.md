@@ -42,7 +42,7 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
 - [x] PR4 · `refactor(cli): paper_day 단계별 분해` — 프로파일 덮어쓰기(`apply_daytrade_profile_overrides` + `PaperDayOverrides`) + 러너 wiring(`build_paper_day_runner`) 헬퍼로 추출. paper_day 본체 ~30줄 축소, 단위 테스트 5건 추가.
 - [x] PR4b · `refactor(cli): weekly_proposal 단계별 분해` — `news/cli_helpers.py` 신규 (`should_skip_weekly_proposal_for_holiday` + `WeeklyInputs` + `run_weekly_proposal_cycle`). cli.py LOC 1028→1014, 단위 테스트 8건 추가.
 - [x] PR5 · `refactor(llm): tool_use 추출 공통 헬퍼` — `news/proposal.py` + `notify/insight.py` + `strategy/llm_advisor.py` 3곳 동일 패턴 통합 (`src/auto_trading/llm/_tool_use.py`). 단위 테스트 6건 추가, src 코드 -65줄.
-- [ ] PR6 · `refactor(notify): telegram 명령 핸들러 모듈 분리` — 269줄 단일 파일을 `notify/commands/{status,control,insight,help}.py` 패키지로.
+- [x] PR6 · `refactor(notify): telegram 명령 핸들러 모듈 분리` — `notify/commands/` 패키지(status/control/insight + _dispatch) 신설. `telegram_commands.py` 269→208줄 (-23%). 단위 테스트 21건 추가.
 - [ ] PR7 · `test(runner): 메인 루프 분기 단위 테스트 보강` — tick→bar / kill_switch / liquidation_task / balance_failure / paused 5개 시나리오. PR8 사전 안전망.
 - [ ] PR8 · `refactor(runner): run() 섹션 주석 + 인라인 헬퍼` — TaskGroup 전면 분해는 위험 高 → 다운그레이드. 가벼운 가독성 개선만.
 
