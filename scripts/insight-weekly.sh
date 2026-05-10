@@ -5,6 +5,8 @@
 # - 22단계 Phase B. 매일 LLM 호출은 비효율(동일 패턴 반복) — 주 1회로 비용/시그널 균형.
 # - 메모리 `feedback_llm_cost.md`: 사람 명시 트리거 또는 사전 합의된 주 1회 이하 cron 만 허용.
 # - 텔레그램에 한국어 인사이트 푸시 (--push) → 폰에서 다음 주 운영 결정.
+# - 27단계 (주말 뉴스 보강): 토요일 06:00 `news-prefetch` cron 이 RSS 캐시 선반영 →
+#   여기 09:00 `weekly-proposal` 은 `force_refresh` default 로 새 뉴스를 누적 병합.
 #
 # 어떻게 확인:
 # - 실행 직후 logs/insight-YYYY-MM-DD.log 생성, 텔레그램 "🧭 주간 인사이트" 푸시 도착.

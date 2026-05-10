@@ -178,3 +178,37 @@ def test_format_proposal_no_changes_omits_section() -> None:
     msg = format_proposal_message(p)
     assert "변경 파라미터" not in msg
     assert "📡 주목 테마" not in msg
+
+
+def test_propose_max_news_items_caps_payload() -> None:
+    """`max_news_items` 가 user payload 의 news 길이를 제한 — default 80, override 가능."""
+    client = _client_with_response({"summary_ko": "ok", "rationale_ko": "ok", "confidence": 0.5})
+    # 100건 뉴스 — 다양한 url 로 dedupe X
+    many = [
+        NewsItem(
+            title=f"t{i}",
+            summary="s",
+            url=f"https://h.com/{i}",
+            published_at=datetime(2026, 5, 6, 9, 0, tzinfo=KST),
+            source="한국경제",
+            tickers=(),
+        )
+        for i in range(100)
+    ]
+    # default: 80건만 들어가야 한다.
+    propose_daytrade_profile([_report()], many, client=client)
+    text_default = client.messages.create.call_args.kwargs["messages"][0]["content"][0]["text"]
+    # title 토큰 t0..t79 는 들어가고, t80 부터는 빠진다.
+    assert (
+        "'title': 't79'" in text_default
+        or '"title": "t79"' in text_default
+        or "t79" in text_default
+    )
+    assert "t80" not in text_default
+
+    # override: 5건만.
+    client2 = _client_with_response({"summary_ko": "ok", "rationale_ko": "ok", "confidence": 0.5})
+    propose_daytrade_profile([_report()], many, client=client2, max_news_items=5)
+    text_5 = client2.messages.create.call_args.kwargs["messages"][0]["content"][0]["text"]
+    assert "t4" in text_5
+    assert "t5" not in text_5

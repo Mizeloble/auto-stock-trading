@@ -33,17 +33,27 @@ log = structlog.get_logger(__name__)
 #: "전체 뉴스(all-news)" feed 는 사회·연예 노이즈가 너무 많아 LLM 입력으로 부적합.
 #: 사용자가 settings 또는 collect_recent_news(feed_urls=...) 로 override 가능.
 #:
-#: 매일경제 RSS(`file.mk.co.kr/news/rss/...`) 는 2026-05-07 실측 시 빈 응답이라 제외.
-#: 한경 finance + economy 두 카테고리만으로도 일평균 ~100건 — proposal.py 가 30건으로
-#: truncate 하니 LLM 입력 다양성에 충분. 다른 매체 추가는 settings/profile 에서.
+#: 2026-05-10 검증 (feedparser.parse → entries 수):
+#:   ✅ 한경 finance/economy (각각 ~50건)
+#:   ✅ 연합뉴스 economy (120) / market (120)  — 헤드라인·매크로 다양성
+#:   ✅ SBS Biz 경제 섹션 (29) — 방송사 시각
+#:   ✅ 파이낸셜뉴스 finance (9) — 금융 전문지
+#:   ❌ 매경(file.mk.co.kr) · 이데일리 · 머니투데이 · 서울경제 — 빈 응답/bozo
+#: 한 매체 편향 완화 + LLM 이 헤드라인 다양성으로 시장 무드 판단하도록 6개 소스로 확대.
+#: 입력 건수는 proposal.py `_summarize_news(max_items=80)` 가 캡.
 DEFAULT_FEED_URLS: tuple[str, ...] = (
     "https://www.hankyung.com/feed/finance",  # 한국경제 증권
     "https://www.hankyung.com/feed/economy",  # 한국경제 경제
+    "https://www.yna.co.kr/rss/economy.xml",  # 연합뉴스 경제
+    "https://www.yna.co.kr/rss/market.xml",  # 연합뉴스 시장
+    "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=02",  # SBS Biz 경제
+    "https://www.fnnews.com/rss/r20/fn_realnews_finance.xml",  # 파이낸셜뉴스 금융
 )
 
 #: 캐시 파일명에 포함되는 schema 버전 — feed URL 이나 NewsItem 구조 변경 시 bump
 #: 해서 기존 캐시를 자동 무효화. 같은 날 호출이라도 새 schema 면 새 RSS 호출.
-CACHE_SCHEMA_VERSION = "v2"
+#: v3 (2026-05-10): RSS 소스 4개 추가 + summary truncate 240→400 + force_refresh 누적 병합.
+CACHE_SCHEMA_VERSION = "v3"
 
 #: 한국 종목 코드 — 단어 경계 + 6자리 숫자.
 _TICKER_RE = re.compile(r"\b(\d{6})\b")
@@ -92,7 +102,7 @@ def parse_feed(raw: bytes | str | dict[str, Any], *, source_label: str) -> list[
         items.append(
             NewsItem(
                 title=title,
-                summary=_truncate(summary, 240),
+                summary=_truncate(summary, 400),
                 url=url,
                 published_at=published,
                 source=source_label,
@@ -136,6 +146,12 @@ def _truncate(text: str, limit: int) -> str:
 def _source_label_for(url: str) -> str:
     if "hankyung" in url:
         return "한국경제"
+    if "yna.co.kr" in url:
+        return "연합뉴스"
+    if "sbs.co.kr" in url:
+        return "SBS Biz"
+    if "fnnews.com" in url:
+        return "파이낸셜뉴스"
     if "mk.co.kr" in url:
         return "매일경제"
     if "naver" in url:
@@ -185,26 +201,36 @@ def collect_recent_news(
     cache_root: Path | str = "data/news",
     now: datetime | None = None,
     fetcher: Any = None,
+    force_refresh: bool = False,
 ) -> list[NewsItem]:
     """직전 `days` 일치 뉴스 → 캐시 로드/갱신 → published_at 내림차순 list.
 
     무엇/왜:
-    - 매일 호출 가능. 같은 날 재호출 시 캐시(`data/news/news-YYYY-MM-DD.json`)
+    - 매일 호출 가능. 같은 날 재호출 시 캐시(`data/news/news-{ver}-YYYY-MM-DD.json`)
       에서 로드 → RSS 호출 회피 + LLM 호출 시점에 안정적 입력.
+    - `force_refresh=True` 면 같은 날 캐시가 있어도 RSS 를 새로 받아 url 키로
+      dedupe 후 기존 캐시와 **누적 병합** 저장. 토요일 06:00 prefetch + 09:00
+      LLM cron 사이의 새 뉴스를 잃지 않기 위함 (`scripts/news-prefetch.sh`).
     - feed 가 비거나 fetch 실패해도 빈 리스트 반환 — 호출자가 안전 종료.
     - `fetcher` 인자는 단위 테스트에서 feedparser 회피 — None 이면 실제 호출.
 
-    어떻게 확인: tests/test_news_collector.py 의 cache hit/miss + 시간 필터 시나리오.
+    어떻게 확인: tests/test_news_collector.py 의 cache hit/miss + 누적 병합 시나리오.
     """
     today = (now or datetime.now(KST)).astimezone(KST)
     root = Path(cache_root)
     cache = _cache_path(root, today)
 
-    if cache.exists():
+    if cache.exists() and not force_refresh:
         log.info("news.cache_hit", path=str(cache))
         cached = _load_cache(cache)
     else:
-        log.info("news.fetch_start", feeds=list(feed_urls))
+        existing = _load_cache(cache) if cache.exists() else []
+        log.info(
+            "news.fetch_start",
+            feeds=list(feed_urls),
+            force_refresh=force_refresh,
+            existing=len(existing),
+        )
         fetched: list[NewsItem] = []
         for url in feed_urls:
             label = _source_label_for(url)
@@ -225,7 +251,20 @@ def collect_recent_news(
                 continue
             fetched.extend(items)
             log.info("news.fetched", url=url, count=len(items))
-        cached = fetched
+        # url 기준 dedupe — 기존 캐시 항목을 먼저 넣고 fetched 가 덮어쓰지 않도록
+        # dict 순서를 유지(기존 → 신규). 같은 url 이면 처음 본 것을 유지.
+        merged: dict[str, NewsItem] = {}
+        for it in existing:
+            merged.setdefault(it.url, it)
+        for it in fetched:
+            merged.setdefault(it.url, it)
+        cached = list(merged.values())
+        log.info(
+            "news.cache_save",
+            path=str(cache),
+            total=len(cached),
+            new=len(cached) - len(existing),
+        )
         _save_cache(cached, cache)
 
     cutoff = today - timedelta(days=days)

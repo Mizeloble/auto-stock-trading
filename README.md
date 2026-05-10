@@ -42,6 +42,7 @@ uv run auto-trade paper    …                   # 모의투자 실시간 루프
 uv run auto-trade paper-day --profile <yaml>   # day-trade 모드 (자동 발굴 + 15:15 청산)
 uv run auto-trade report --date YYYY-MM-DD     # 일일 리포트 JSON 재생성
 uv run auto-trade insight --days 7 --push      # (LLM) 주간 인사이트
+uv run auto-trade fetch-news --days 7         # RSS 캐시만 갱신 (LLM X · 비용 0)
 uv run auto-trade weekly-proposal --push       # (LLM) 다음 주 day-trade 프로파일 자동 갱신
 uv run auto-trade strategy suggest …           # 추천 → YAML 프로파일 저장
 uv run auto-trade strategy advise  …           # (선택) LLM 으로 프로파일 조정
@@ -178,14 +179,18 @@ uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml 
 |---|---|
 | 평일 08:55 | `paper-day-mode.sh` → `daytrade-current.yaml`(없으면 `daytrade-default.yaml`) 자동 로드 |
 | 평일 15:15 | 일괄 청산 + 일일 리포트 텔레그램 푸시 |
+| 토요일 06:00 | `auto-trade fetch-news` (RSS 캐시 선반영, LLM X) — 27단계 |
 | 토요일 09:00 | `auto-trade insight` (사람용 인사이트) → `auto-trade weekly-proposal` (다음 주 프로파일 자동 갱신) |
 
-**`weekly-proposal`** 는 직전 7일 일일 리포트 + 한국경제 시장/증권 RSS 100건을 입력으로 LLM 1회 호출 → `DaytradeProposal` (안전 캡 통과한 변경만 적용) → `daytrade-current.yaml` 작성 + `.bak.YYYY-MM-DD` 백업 + 텔레그램에 변경 요약 푸시. 호출당 약 $0.04~0.08 (Opus + 캐싱), 주 1회 = 월 $0.16~0.32.
+**`weekly-proposal`** 는 직전 7일 일일 리포트 + 6개 RSS(한경 finance·economy, 연합뉴스 economy·market, SBS Biz, 파이낸셜뉴스) 뉴스를 입력으로 LLM 1회 호출 → `DaytradeProposal` (안전 캡 통과한 변경만 적용) → `daytrade-current.yaml` 작성 + `.bak.YYYY-MM-DD` 백업 + 텔레그램에 변경 요약 푸시. LLM 입력은 상위 80건(`--max-news-items`) · 본문 400자 truncate. 호출당 약 $0.4~0.5 (Opus + 캐싱), 주 1회 = 월 약 $2 (상한 $5).
+
+토요일 06:00 `news-prefetch` cron 이 RSS 를 미리 fetch 해 캐시에 쌓고, 09:00 호출은 `--force-refresh` default 로 그 사이 새 뉴스를 url 키 dedupe 후 누적 병합 → 미국 시장 마감 직후의 한국어 보도까지 포함.
 
 수동 호출 / 디버그:
 ```bash
-uv run auto-trade weekly-proposal --dry-run   # LLM 호출 없이 입력 요약만
-uv run auto-trade weekly-proposal --push       # 풀 흐름 + 텔레그램 푸시
+uv run auto-trade fetch-news --days 7              # RSS 캐시만 갱신 (LLM X)
+uv run auto-trade weekly-proposal --dry-run        # LLM 호출 없이 입력 요약만
+uv run auto-trade weekly-proposal --max-news-items 100 --push  # 더 많은 뉴스로 풀 흐름
 ```
 
 자동화 설정은 [scripts/launchd/README.md](./scripts/launchd/README.md) 참고.
