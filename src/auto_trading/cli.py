@@ -1083,5 +1083,93 @@ def heartbeat_check(
     asyncio.run(_push())
 
 
+@app.command()
+def preflight(
+    profile: Path = typer.Option(
+        Path("strategies/profiles/daytrade-current.yaml"),
+        "--profile",
+        help="검사할 day-trade 프로파일. 없으면 default fallback.",
+    ),
+    journal: Path = typer.Option(
+        Path("data/orders/state.jsonl"),
+        "--journal",
+        help="주문 저널 경로.",
+    ),
+    heartbeat_path: Path = typer.Option(
+        Path("data/heartbeat/runner.txt"),
+        "--heartbeat",
+        help="러너 heartbeat 파일.",
+    ),
+    reports_root: Path = typer.Option(
+        Path("data/reports"),
+        "--reports-root",
+        help="paper-day 일일 리포트 폴더.",
+    ),
+    backtests_root: Path = typer.Option(
+        Path("data/backtests"),
+        "--backtests-root",
+        help="백테스트 결과 폴더 루트.",
+    ),
+) -> None:
+    """실거래 전환 전 자동 안전 체크리스트.
+
+    무엇/왜:
+    - 사용자가 "이제 실거래 켜도 되겠지?" 라고 의식하기 전에 기계가 안전망
+      게이트를 일관되게 검사. 사람이 잊을 위험을 줄인다.
+    - 모든 활성 게이트가 통과하면 ``--allow-real`` 안내. 하나라도 실패면 exit 1.
+
+    어떻게 확인: 실거래 전 매번 실행. 실패 항목의 detail 에 *다음 액션* 표시.
+    """
+    if not profile.exists():
+        fallback = Path("strategies/profiles/daytrade-default.yaml")
+        if fallback.exists():
+            console.print(f"[dim]{profile} 없음 → fallback {fallback}[/dim]")
+            profile = fallback
+
+    from .preflight import run_all_gates
+
+    results = run_all_gates(
+        profile_path=profile,
+        journal_path=journal,
+        heartbeat_path=heartbeat_path,
+        reports_root=reports_root,
+        backtests_root=backtests_root,
+    )
+
+    table = Table(title="실거래 전 안전 체크리스트")
+    table.add_column("게이트")
+    table.add_column("상태", justify="center")
+    table.add_column("상세")
+    for r in results:
+        if r.skipped:
+            status = "[dim]skip[/dim]"
+        elif r.ok:
+            status = "[green]✓[/green]"
+        else:
+            status = "[red]✗[/red]"
+        name_style = "[dim]" if r.skipped else ""
+        name_close = "[/dim]" if r.skipped else ""
+        table.add_row(f"{name_style}{r.name}{name_close}", status, r.detail)
+    console.print(table)
+
+    failed = [r for r in results if not r.ok and not r.skipped]
+    skipped_count = sum(1 for r in results if r.skipped)
+    if failed:
+        console.print(
+            f"[red]✗ {len(failed)}개 게이트 실패 — 위 detail 따라 정리 후 다시 실행.[/red]"
+        )
+        if skipped_count:
+            console.print(f"[dim]({skipped_count}개 게이트 미구현 — 향후 PR)[/dim]")
+        raise typer.Exit(code=1)
+
+    console.print(
+        "[green]✓ 모든 활성 게이트 통과.[/green]\n"
+        "[bold]실거래 전환:[/bold] `.env` 에 실계좌 키 + `KIWOOM_MODE=real` + "
+        "`auto-trade paper-day --profile … --allow-real` (사용자 명시 승인 후)."
+    )
+    if skipped_count:
+        console.print(f"[dim]({skipped_count}개 게이트 미구현 — 향후 PR)[/dim]")
+
+
 if __name__ == "__main__":
     app()
