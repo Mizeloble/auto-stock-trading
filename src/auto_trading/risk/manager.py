@@ -67,6 +67,11 @@ class RiskLimits:
     trailing_stop_pct: float = 0.0  # 고점 대비 -X% 도달 시 잔량 청산. 예: 0.005 = -0.5%
     partial_take_pct: float = 0.0  # 매수가 대비 +X% 도달 시 부분 익절. 예: 0.015 = +1.5%
     partial_take_qty_ratio: float = 0.5  # 부분 익절 비율 — 0.5 면 절반만 매도
+    # 29단계 PR9 (#14) — 연속 손절 자동 일시중지. 0 이면 비활성.
+    # 활성: max_consecutive_losses=3 → 3연속 손절 시 24h 신규 진입 차단.
+    # 운영자가 텔레그램에서 수동 unpause 가능 (PR10 — runner 통합).
+    max_consecutive_losses: int = 0
+    consecutive_loss_pause_sec: int = 86_400  # 24h
 
 
 @dataclass
