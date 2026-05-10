@@ -10,8 +10,10 @@ import csv
 import json
 import re
 from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -152,58 +154,70 @@ def _stat_iso(p: Path) -> str:
     return datetime.fromtimestamp(p.stat().st_mtime, tz=UTC).isoformat()
 
 
+def _safe_csv_load[T](parser: Callable[[Path], list[T]]) -> Callable[[Path], list[T]]:
+    """파일 존재 가드 + OSError swallow 의 보일러플레이트를 데코레이터로 통합.
+
+    데코레이트된 파서는 path 가 존재한다고 가정하고 파싱만 하면 된다 — 대시보드는
+    잘못된 백테스트 폴더에서도 죽지 않아야 하므로(read-only · loader CLAUDE 규칙)
+    가드를 함수마다 베끼는 대신 한 곳에 모은다.
+    """
+
+    @wraps(parser)
+    def wrapper(path: Path) -> list[T]:
+        if not path.exists():
+            return []
+        try:
+            return parser(path)
+        except OSError:
+            return []
+
+    return wrapper
+
+
+@_safe_csv_load
 def _load_equity_csv(path: Path) -> list[dict[str, Any]]:
     """equity.csv → [{date, equity}]. pandas to_csv 형식 (첫 컬럼=인덱스, 둘째=값)."""
-    if not path.exists():
-        return []
     points: list[dict[str, Any]] = []
-    try:
-        with path.open("r", encoding="utf-8", newline="") as fh:
-            reader = csv.reader(fh)
-            header = next(reader, None)
-            if header is None:
-                return []
-            for row in reader:
-                if len(row) < 2:
-                    continue
-                date_raw = row[0].strip()
-                try:
-                    equity = float(row[1])
-                except ValueError:
-                    continue
-                # ISO datetime 이면 날짜 부분만, 이미 date 면 그대로.
-                date_str = date_raw.split("T")[0].split(" ")[0]
-                points.append({"date": date_str, "equity": equity})
-    except OSError:
-        return []
+    with path.open("r", encoding="utf-8", newline="") as fh:
+        reader = csv.reader(fh)
+        header = next(reader, None)
+        if header is None:
+            return []
+        for row in reader:
+            if len(row) < 2:
+                continue
+            date_raw = row[0].strip()
+            try:
+                equity = float(row[1])
+            except ValueError:
+                continue
+            # ISO datetime 이면 날짜 부분만, 이미 date 면 그대로.
+            date_str = date_raw.split("T")[0].split(" ")[0]
+            points.append({"date": date_str, "equity": equity})
     return points
 
 
+@_safe_csv_load
 def _load_trades_csv(path: Path) -> list[dict[str, Any]]:
     """trades.csv → [{ts, symbol, side, price, quantity, fee, tax}]."""
-    if not path.exists():
-        return []
     rows: list[dict[str, Any]] = []
-    try:
-        with path.open("r", encoding="utf-8", newline="") as fh:
-            reader = csv.DictReader(fh)
-            for r in reader:
-                try:
-                    rows.append(
-                        {
-                            "ts": r["ts"],
-                            "symbol": r["symbol"],
-                            "side": r["side"],
-                            "price": float(r["price"]),
-                            "quantity": int(r["quantity"]),
-                            "fee": float(r.get("fee") or 0),
-                            "tax": float(r.get("tax") or 0),
-                        }
-                    )
-                except KeyError, TypeError, ValueError:
-                    continue
-    except OSError:
-        return []
+    with path.open("r", encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        for r in reader:
+            try:
+                rows.append(
+                    {
+                        "ts": r["ts"],
+                        "symbol": r["symbol"],
+                        "side": r["side"],
+                        "price": float(r["price"]),
+                        "quantity": int(r["quantity"]),
+                        "fee": float(r.get("fee") or 0),
+                        "tax": float(r.get("tax") or 0),
+                    }
+                )
+            except KeyError, TypeError, ValueError:
+                continue
     return rows
 
 
