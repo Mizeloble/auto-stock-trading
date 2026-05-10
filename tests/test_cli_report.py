@@ -24,17 +24,6 @@ def _reset_structlog() -> Generator[None]:
     structlog.reset_defaults()
 
 
-@pytest.fixture
-def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """report CLI 가 상대 경로로 logs/data 를 만들지 않게 cwd 를 임시 폴더로."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("KIWOOM_APP_KEY", "k")
-    monkeypatch.setenv("KIWOOM_APP_SECRET", "s")
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
-    return tmp_path
-
-
 def _write_log(path: Path, *records: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

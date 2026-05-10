@@ -29,17 +29,6 @@ def _reset_structlog() -> Generator[None]:
     structlog.reset_defaults()
 
 
-@pytest.fixture
-def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("KIWOOM_APP_KEY", "k")
-    monkeypatch.setenv("KIWOOM_APP_SECRET", "s")
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
-    return tmp_path
-
-
 def _seed_reports(root: Path, dates: list[str]) -> None:
     root.mkdir(parents=True, exist_ok=True)
     for d in dates:
