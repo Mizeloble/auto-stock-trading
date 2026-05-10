@@ -86,7 +86,13 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - `runner.order_failed` 알림에 `category` + `skip_seconds` 추가 — 텔레그램에서 "왜 거절됐는지" + "언제 재시도" 즉시 인지.
   - `_evaluate_signal` 시작에 skip 검사 — skipped 종목은 risk 평가 전에 차단, `runner.signal_skipped_reject` 로그.
   - 테스트 9건 (KiwoomError 카테고리별 등록/미등록 + 일반 예외 + skip 검사 자동 청소 + signal 차단). 589 전체 통과.
-- [ ] **PR7 · `test(integration): paper-day 풀 사이클 — #22`**
+- [x] **PR7 · `test: paper-day 풀 사이클 통합 테스트 — #22`**
+  - 새 파일 `tests/test_paper_day_full_cycle.py` — respx mock 키움 + PaperRunner / RiskManager / OrderJournal / classify_reject 가 함께 도는 시나리오 3건.
+  - **시나리오 1** (정상 매수): BUY 시그널 → mock 200 OK → 포지션 갱신 + 저널 submit/accepted + notifier `order_accepted`.
+  - **시나리오 2** (상한가 거절 → skip): 첫 봉 거절 → `_skipped_until` 등록 → 두 번째 봉 시그널은 차단 (place_order 1회만).
+  - **시나리오 3** (네트워크 5xx): 일반 예외라 skip 등록 X, 알림 category=unknown.
+  - 기존 `tests/integration/` 은 실 키움 API 의존 — 이 파일은 mock 만 → 매번 도는 테스트.
+  - 592 전체 통과.
 - [ ] **PR8 · `feat(cli): preflight 명령 — #17`**
 
 ---
