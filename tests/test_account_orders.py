@@ -15,12 +15,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import httpx
 import pytest
 import respx
 
 from auto_trading._common import Side
+from auto_trading.account.order_journal import OrderJournal
 from auto_trading.account.orders import (
     Order,
     OrderType,
@@ -203,3 +205,88 @@ async def test_place_order_strips_a_prefix_before_sending(settings: Settings) ->
     body = route.calls[0].request.read().decode()
     assert '"stk_cd":"005930"' in body
     assert "A005930" not in body
+
+
+# ---- 29단계 PR1 — client UUID + journal --------------------------------------
+
+
+async def test_place_order_assigns_client_id_when_unspecified(settings: Settings) -> None:
+    """journal 미사용 시에도 client_id 가 자동 부여되어 OrderResult 에 실린다."""
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_ORDER).mock(
+            return_value=httpx.Response(200, json={"return_code": 0, "ord_no": "OK1"})
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            res = await place_order(client, Order(symbol="005930", side=Side.BUY, quantity=1))
+
+    assert len(res.client_id) == 32
+    int(res.client_id, 16)  # hex 검증
+
+
+async def test_place_order_respects_caller_supplied_client_id(settings: Settings) -> None:
+    """호출자가 지정한 client_id 가 그대로 OrderResult 에 실린다 (재시도 시 동일 UUID)."""
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_ORDER).mock(
+            return_value=httpx.Response(200, json={"return_code": 0, "ord_no": "OK"})
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            res = await place_order(
+                client,
+                Order(symbol="005930", side=Side.BUY, quantity=1),
+                client_id="fixed-cid",
+            )
+
+    assert res.client_id == "fixed-cid"
+
+
+async def test_place_order_journal_records_submit_then_accepted(
+    settings: Settings, tmp_path: Path
+) -> None:
+    journal = OrderJournal(path=tmp_path / "state.jsonl")
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_ORDER).mock(
+            return_value=httpx.Response(200, json={"return_code": 0, "ord_no": "ORDX"})
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            res = await place_order(
+                client,
+                Order(symbol="005930", side=Side.BUY, quantity=3),
+                journal=journal,
+                client_id="cid-acc",
+            )
+
+    events = list(journal.replay())
+    assert [e["event"] for e in events] == ["submit", "accepted"]
+    assert all(e["client_id"] == "cid-acc" for e in events)
+    assert events[1]["order_no"] == "ORDX"
+    assert res.order_no == "ORDX"
+
+
+async def test_place_order_journal_records_failed_when_kiwoom_rejects(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """비즈니스 거절(KiwoomError) 시 submit + failed 기록 후 예외 전파."""
+    journal = OrderJournal(path=tmp_path / "state.jsonl")
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_ORDER).mock(
+            return_value=httpx.Response(
+                200, json={"return_code": 20, "return_msg": "RC4010 모의투자 영업일 아님"}
+            )
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            with pytest.raises(KiwoomError):
+                await place_order(
+                    client,
+                    Order(symbol="005930", side=Side.BUY, quantity=1),
+                    journal=journal,
+                    client_id="cid-fail",
+                )
+
+    events = list(journal.replay())
+    assert [e["event"] for e in events] == ["submit", "failed"]
+    assert all(e["client_id"] == "cid-fail" for e in events)
+    assert "RC4010" in events[1]["error"]
