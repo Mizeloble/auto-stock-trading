@@ -44,7 +44,7 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
 - [x] PR5 · `refactor(llm): tool_use 추출 공통 헬퍼` — `news/proposal.py` + `notify/insight.py` + `strategy/llm_advisor.py` 3곳 동일 패턴 통합 (`src/auto_trading/llm/_tool_use.py`). 단위 테스트 6건 추가, src 코드 -65줄.
 - [x] PR6 · `refactor(notify): telegram 명령 핸들러 모듈 분리` — `notify/commands/` 패키지(status/control/insight + _dispatch) 신설. `telegram_commands.py` 269→208줄 (-23%). 단위 테스트 21건 추가.
 - [x] PR7 · `test(runner): aggregator KST 경계 보강` — 5개 시나리오 중 4개(liquidation/balance/paused/kill_switch 일부)는 기존 테스트로 이미 커버 확인. 진짜 누락된 aggregator 경계 3건만 보강. kill_switch 통합은 PR8 의 인라인 헬퍼 추출과 같이.
-- [ ] PR8 · `refactor(runner): run() 섹션 주석 + 인라인 헬퍼` — TaskGroup 전면 분해는 위험 高 → 다운그레이드. 가벼운 가독성 개선만.
+- [x] PR8 · `refactor(runner): run() 섹션 주석 + _check_kill_switch 인라인 헬퍼` — 메인 루프에 4개 섹션 주석 + kill_switch 분기를 메서드로 추출. PR7 에서 미룬 kill_switch 단위 테스트 6건 동시 추가. 외부 동작·timing 보존.
 
 **머지 순서**: (PR1 + PR3 + PR5) 병렬 → PR2 → PR4 → PR4b → PR6 → PR7 → PR8.
 

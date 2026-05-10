@@ -241,37 +241,27 @@ class PaperRunner:
 
                 try:
                     async for tick in ticks(ws):
+                        # === STOPPING 체크 ===
                         # 외부 /stop 으로 STOPPING 진입 시 다음 tick 경계에서 graceful break.
                         if self._control_state is RunnerControlState.STOPPING:
                             log.info("runner.stop_requested", reason="control_state=stopping")
                             break
+
+                        # === tick → bar aggregation ===
                         bar = aggregator.ingest(tick)
                         if bar is None:
                             continue
+
+                        # === 봉 확정 시점 전략 평가 + 주문 ===
                         await self._on_bar(rest, bar, account)
 
+                        # === 주기적 잔고 갱신 + kill_switch ===
                         if (
                             datetime.now() - last_refresh
                         ).total_seconds() >= self.balance_refresh_sec:
                             account = await self._snapshot_account(rest, previous=account)
                             last_refresh = datetime.now()
-                            # 23단계 Phase B — 일일 손실 한도 도달 + kill switch 활성 시 강제 청산.
-                            if self.risk.should_force_liquidate(account):
-                                log.warning(
-                                    "runner.kill_switch_triggered",
-                                    today_change=(
-                                        account.total_equity / account.day_start_equity - 1.0
-                                        if account.day_start_equity
-                                        else 0.0
-                                    ),
-                                    daily_loss_limit=self.risk.limits.daily_loss_limit,
-                                )
-                                await self.notifier.notify(
-                                    "runner.kill_switch_triggered",
-                                    daily_loss_limit=self.risk.limits.daily_loss_limit,
-                                )
-                                await self.liquidate_all(rest, account, reason="daily_loss_kill")
-                                self.request_stop()
+                            await self._check_kill_switch(rest, account)
                 finally:
                     self._ws = None
                     await ws.stop()
@@ -288,6 +278,30 @@ class PaperRunner:
                     await liquidation_task
             await self.notifier.notify("runner.stopped", reason=stop_reason)
             await self.notifier.aclose()
+
+    async def _check_kill_switch(self, rest: KiwoomRestClient, account: AccountState) -> None:
+        """일일 손실 한도 도달 + `daily_loss_kill` 활성 시 강제 청산 + request_stop.
+
+        23단계 Phase B 의 kill switch. balance refresh 직후 메인 루프가 호출.
+        `liquidate_all` 은 `_liquidation_done` 가드로 idempotent — 두 번 호출돼도 안전.
+        """
+        if not self.risk.should_force_liquidate(account):
+            return
+        log.warning(
+            "runner.kill_switch_triggered",
+            today_change=(
+                account.total_equity / account.day_start_equity - 1.0
+                if account.day_start_equity
+                else 0.0
+            ),
+            daily_loss_limit=self.risk.limits.daily_loss_limit,
+        )
+        await self.notifier.notify(
+            "runner.kill_switch_triggered",
+            daily_loss_limit=self.risk.limits.daily_loss_limit,
+        )
+        await self.liquidate_all(rest, account, reason="daily_loss_kill")
+        self.request_stop()
 
     async def _snapshot_account(
         self,
