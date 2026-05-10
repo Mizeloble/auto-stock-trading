@@ -55,7 +55,7 @@ def _handler(**overrides: Any) -> TelegramCommandHandler:
 
 async def test_insight_returns_inactive_message_when_callback_missing() -> None:
     h = _handler()
-    msg = await h._handle_insight()
+    msg = await h._insight.handle()
     assert "비활성" in msg
 
 
@@ -64,7 +64,7 @@ async def test_insight_calls_callback_and_returns_text() -> None:
         return "🧭 주간 인사이트 stub"
 
     h = _handler(on_insight=_cb)
-    msg = await h._handle_insight()
+    msg = await h._insight.handle()
     assert msg == "🧭 주간 인사이트 stub"
 
 
@@ -77,8 +77,8 @@ async def test_insight_cooldown_blocks_second_call() -> None:
         return "ok"
 
     h = _handler(on_insight=_cb, insight_cooldown_sec=300)
-    first = await h._handle_insight()
-    second = await h._handle_insight()
+    first = await h._insight.handle()
+    second = await h._insight.handle()
     assert first == "ok"
     assert "쿨다운" in second
     assert calls == 1
@@ -91,10 +91,10 @@ async def test_insight_cooldown_resets_after_window() -> None:
         return "ok"
 
     h = _handler(on_insight=_cb, insight_cooldown_sec=60)
-    await h._handle_insight()
+    await h._insight.handle()
     # 인스턴스 시간만 과거로 옮김 — `datetime.now()` mock 없이 검증.
-    h._insight_last_at = datetime.now() - timedelta(seconds=120)
-    second = await h._handle_insight()
+    h._insight._last_at = datetime.now() - timedelta(seconds=120)
+    second = await h._insight.handle()
     assert second == "ok"
 
 
@@ -105,7 +105,7 @@ async def test_insight_swallows_exception_and_returns_safe_message() -> None:
         raise RuntimeError("boom")
 
     h = _handler(on_insight=_cb)
-    msg = await h._handle_insight()
+    msg = await h._insight.handle()
     assert "실패" in msg
 
 
@@ -114,7 +114,7 @@ async def test_help_text_lists_insight_command() -> None:
 
 
 async def test_dispatch_routes_insight_command_through_handler(monkeypatch: Any) -> None:
-    """봇이 받은 메시지의 /insight 가 _handle_insight 로 라우팅되는지."""
+    """봇이 받은 메시지의 /insight 가 InsightCooldown.handle 로 라우팅되는지."""
     sent: list[tuple[str, str]] = []
 
     async def _cb() -> str:
