@@ -20,6 +20,7 @@ from auto_trading.notify.commands.control import (
     handle_pause,
     handle_resume,
     handle_stop,
+    handle_unpause,
 )
 from auto_trading.notify.commands.status import (
     handle_balance,
@@ -138,6 +139,48 @@ def test_dispatch_pause_invokes_callback_through_ctx() -> None:
 def test_dispatch_pause_disabled_when_ctx_callback_none() -> None:
     msg = dispatch_sync("/pause", _ctx(on_pause=None))
     assert "비활성" in msg
+
+
+# -- handle_unpause + /unpause dispatch (29단계 PR11) --
+
+
+def test_handle_unpause_disabled_when_callback_none() -> None:
+    msg = handle_unpause(None)
+    assert "비활성" in msg
+
+
+def test_handle_unpause_returns_ack_when_callback_returns_true() -> None:
+    msg = handle_unpause(lambda: True)
+    assert "해제" in msg
+    assert "BUY" in msg
+
+
+def test_handle_unpause_returns_noop_message_when_callback_returns_false() -> None:
+    msg = handle_unpause(lambda: False)
+    assert "일시중지 상태가 아닙니다" in msg
+
+
+def test_dispatch_unpause_invokes_callback_through_ctx() -> None:
+    calls: list[bool] = []
+
+    def _on_unpause() -> bool:
+        calls.append(True)
+        return True
+
+    msg = dispatch_sync("/unpause", _ctx(on_unpause=_on_unpause))
+    assert calls == [True]
+    assert "해제" in msg
+
+
+def test_dispatch_unpause_disabled_when_ctx_callback_none() -> None:
+    msg = dispatch_sync("/unpause", _ctx(on_unpause=None))
+    assert "비활성" in msg
+
+
+def test_dispatch_unpause_returns_noop_when_callback_returns_false() -> None:
+    """이미 해제됐거나 비활성 트래커 — 콜백 False → 명확한 사용자 안내."""
+    msg = dispatch_sync("/unpause", _ctx(on_unpause=lambda: False))
+    assert "일시중지 상태가 아닙니다" in msg
 
 
 # -- InsightCooldown --

@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..state import HELP_TEXT, RunnerStateSnapshot
-from .control import handle_pause, handle_resume, handle_stop
+from .control import handle_pause, handle_resume, handle_stop, handle_unpause
 from .status import (
     handle_balance,
     handle_last_signal,
@@ -20,13 +20,14 @@ from .status import (
 
 StateProvider = Callable[[], RunnerStateSnapshot]
 ControlAction = Callable[[], None]
+UnpauseAction = Callable[[], bool]
 
 
 @dataclass(frozen=True)
 class CommandContext:
     """동기 명령 핸들러가 공유하는 의존성 묶음.
 
-    `state_provider` 는 read-only 명령 5종이 호출. control 콜백 3종은 None 이면
+    `state_provider` 는 read-only 명령 5종이 호출. control 콜백 4종은 None 이면
     해당 명령이 "비활성" 응답을 돌려준다.
     """
 
@@ -34,6 +35,8 @@ class CommandContext:
     on_pause: ControlAction | None = None
     on_resume: ControlAction | None = None
     on_stop: ControlAction | None = None
+    # 29단계 PR11 (#14 마무리) — 연속 손절 자동 일시중지 수동 해제.
+    on_unpause: UnpauseAction | None = None
 
 
 def dispatch_sync(cmd: str, ctx: CommandContext) -> str:
@@ -49,6 +52,8 @@ def dispatch_sync(cmd: str, ctx: CommandContext) -> str:
         return handle_resume(ctx.on_resume)
     if cmd == "/stop":
         return handle_stop(ctx.on_stop)
+    if cmd == "/unpause":
+        return handle_unpause(ctx.on_unpause)
     state = ctx.state_provider()
     if cmd == "/status":
         return handle_status(state)
