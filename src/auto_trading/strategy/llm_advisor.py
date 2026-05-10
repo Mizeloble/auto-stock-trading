@@ -15,6 +15,7 @@ from typing import Any, Protocol
 import pandas as pd
 from pydantic import BaseModel, Field
 
+from ..llm import extract_tool_use_input
 from .profile import StrategyName, StrategyProfile
 from .scanner import RegimeReport
 
@@ -150,7 +151,7 @@ def advise(
         ],
     )
 
-    tool_input = _extract_tool_input(response)
+    tool_input = extract_tool_use_input(response, "propose_change")
     return AdvisorResponse.model_validate(
         {
             "change": {
@@ -162,30 +163,6 @@ def advise(
             "confidence": tool_input["confidence"],
         }
     )
-
-
-def _extract_tool_input(response: Any) -> dict[str, Any]:
-    """Anthropic Messages 응답에서 propose_change 의 input dict 만 꺼낸다."""
-    blocks = getattr(response, "content", None) or []
-    for block in blocks:
-        # SDK 블록은 객체일 수도, dict 일 수도 있어 양쪽 모두 처리
-        block_type = getattr(block, "type", None) or (
-            block.get("type") if isinstance(block, dict) else None
-        )
-        if block_type != "tool_use":
-            continue
-        name = getattr(block, "name", None) or (
-            block.get("name") if isinstance(block, dict) else None
-        )
-        if name != "propose_change":
-            continue
-        tool_input = getattr(block, "input", None) or (
-            block.get("input") if isinstance(block, dict) else None
-        )
-        if not isinstance(tool_input, dict):
-            raise ValueError("propose_change tool_use 의 input 이 dict 가 아닙니다")
-        return tool_input
-    raise ValueError("응답에 propose_change tool_use 블록이 없습니다")
 
 
 __all__ = [
