@@ -93,7 +93,16 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - **시나리오 3** (네트워크 5xx): 일반 예외라 skip 등록 X, 알림 category=unknown.
   - 기존 `tests/integration/` 은 실 키움 API 의존 — 이 파일은 mock 만 → 매번 도는 테스트.
   - 592 전체 통과.
-- [ ] **PR8 · `feat(cli): preflight 명령 — #17`**
+- [x] **PR8 · `feat(cli): preflight 명령 — #17`**
+  - 새 모듈 `auto_trading/preflight.py` — `GateResult` + 5개 활성 게이트 순수/read-only 함수.
+    - `check_risk_limits_active` — daytrade YAML 의 `stop_loss_pct > 0` AND `daily_loss_kill=True`.
+    - `check_no_pending_orders` — 주문 저널의 결과 미확인(submit-only) 0건.
+    - `check_heartbeat_recent` — heartbeat 파일 mtime ≤ max_age (기본 1일).
+    - `check_recent_paper_day_mdd` — 최근 N일 일일 손익률 최저점 ≥ -5%.
+    - `check_latest_backtest_sharpe` — 가장 최근 백테스트 Sharpe ≥ 0.
+  - 4개 미구현 placeholder (skipped=True): kill-switch 시뮬 / 다채널 알림 ack / LLM 비용 누적 / corporate action 캐시. 향후 PR 에서 활성.
+  - 새 CLI `auto-trade preflight --profile … --journal … --heartbeat … --reports-root … --backtests-root …` — rich 표 출력, 모두 통과 시 exit 0 + `--allow-real` 가이드, 하나라도 실패 시 exit 1. `daytrade-current.yaml` 없으면 `daytrade-default.yaml` fallback.
+  - 테스트 24건 (preflight 게이트 20 + CLI 4). 616 전체 통과.
 
 ---
 
