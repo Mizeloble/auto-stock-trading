@@ -73,7 +73,7 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - `PaperRunner.heartbeat: Heartbeat | None` 필드 + `_heartbeat_loop()` background task. 시동 직후 1회 즉시 write, interval_sec(기본 1800s) 마다 갱신, STOPPING 진입 시 다음 사이클에 종료, cancel 깨끗이 처리.
   - 새 CLI `auto-trade heartbeat-check` — 누락 / stale / 정상 분류, cooldown(기본 1800s) 으로 spam 차단, 텔레그램 `runner.heartbeat_alert` 푸시.
   - 테스트 16건 추가 (heartbeat write/swallow/check 7건 + runner background task 4건 + CLI 5건). 558 전체 통과.
-  - **launchd plist 등록은 사용자 수동 작업** — 5분 간격으로 `heartbeat-check` 실행하는 cron 추가 시 운영 활성.
+  - ~~launchd plist 등록은 사용자 수동 작업~~ → **PR14 (#13 마무리)** 에서 plist + install/uninstall 라벨 자동 추가. 사용자는 `./scripts/launchd-install.sh` 한 번만 실행.
 - [ ] **PR4 · `feat(account): 키움 미체결 조회 + suspect 자동 매칭 — #9 3차`** — 봇 재시작 시 suspect 들을 키움에 재조회해 실제 체결 여부 확인 + 저널 보강 + 로컬 state 동기화. 키움 미체결 TR 코드 probe 후 진행.
 - [x] **PR13 · `feat(llm): 비용 누적 추적 모듈 — #16 1차`**
   - 새 모듈 `llm/cost_tracker.py` — `CostTracker` (JSONL append-only, account/order_journal 패턴 재사용) + `CostEntry` / `MonthlySummary` / `BudgetStatus` 데이터클래스.
@@ -83,7 +83,12 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 디스크 실패는 swallow + 로그 — LLM 호출 성공을 막지 않게.
   - 테스트 19건 (가격 5 + record/replay 5 + monthly_summary 3 + budget_status 5 + 손상 1). 669 전체 통과.
   - **호출 지점 wiring 은 PR14 로 분리** — `news/proposal.py` / `notify/insight.py` / `strategy/llm_advisor.py` 3곳에 record() 추가 + preflight `llm_cost_within_budget` 게이트 활성.
-- [ ] **PR14 · `feat(llm): 비용 추적 wiring + preflight 게이트 활성 — #16 2차`** — 3개 호출 지점에 cost_tracker.record + budget alert/over 시 텔레그램 + LLM 차단.
+- [x] **PR14 · `feat(scripts): heartbeat-check launchd cron — #13 마무리`**
+  - 새 셸 래퍼 `scripts/heartbeat-check.sh` — 평일(월-금) 09:00~16:00 KST 게이트 + `uv run auto-trade heartbeat-check`. 그 외 시간 즉시 exit (false positive 방지).
+  - 새 plist `scripts/launchd/com.mizeloble.auto-trade.heartbeat-check.plist` — 5분(StartInterval=300) 간격, RunAtLoad=false.
+  - `launchd-install.sh` / `launchd-uninstall.sh` 의 LABELS 에 라벨 추가, chmod +x 자동.
+  - 사용자 수동 작업: `./scripts/launchd-install.sh` 한 번만 실행하면 끝.
+- [ ] **PR15 · `feat(llm): 비용 추적 wiring + preflight 게이트 활성 — #16 2차`** — 3개 호출 지점에 cost_tracker.record + budget alert/over 시 텔레그램 + LLM 차단.
 - [x] **PR12 · `feat(kiwoom): OAuth 토큰 디스크 캐시 — #21`**
   - `TokenProvider.cache_path: Path | None` 추가 — 시동 시 자동 로드, 발급 후 자동 저장, invalidate 시 자동 삭제.
   - 만료 마진(REFRESH_MARGIN=10분) 안의 캐시는 무시하고 새로 발급. 손상된 JSON / 형식 오류는 swallow + 로그 → 정상 발급 fallback.
