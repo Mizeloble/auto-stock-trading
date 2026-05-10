@@ -93,6 +93,13 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - **시나리오 3** (네트워크 5xx): 일반 예외라 skip 등록 X, 알림 category=unknown.
   - 기존 `tests/integration/` 은 실 키움 API 의존 — 이 파일은 mock 만 → 매번 도는 테스트.
   - 592 전체 통과.
+- [x] **PR9 · `feat(risk): 연속 손절 자동 일시중지 트래커 — #14 1차`**
+  - 새 모듈 `risk/consecutive_loss.py` — `ConsecutiveLossTracker` 순수 상태 머신.
+  - `record_round_trip(pnl)` / `is_paused(now)` / `unpause()` 인터페이스. 만료 자동 청소.
+  - `RiskLimits.max_consecutive_losses` (default 0 = 비활성) + `consecutive_loss_pause_sec` (default 86_400) 추가.
+  - 단위 테스트 8건 (비활성 / 누적 / 트리거 / 양수 reset / 만료 / 수동 unpause / paused 중 연장 / breakeven). 624 전체 통과.
+  - **runner 통합 + 텔레그램 `/unpause` 명령은 PR10 으로 분리** — SELL 후 라운드트립 PnL 산출 + `evaluate` 에서 paused 검사.
+- [ ] **PR10 · `feat(runner): 연속 손절 트래커 wiring + /unpause 텔레그램 — #14 2차`**
 - [x] **PR8 · `feat(cli): preflight 명령 — #17`**
   - 새 모듈 `auto_trading/preflight.py` — `GateResult` + 5개 활성 게이트 순수/read-only 함수.
     - `check_risk_limits_active` — daytrade YAML 의 `stop_loss_pct > 0` AND `daily_loss_kill=True`.
