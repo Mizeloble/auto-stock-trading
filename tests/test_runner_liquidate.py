@@ -58,7 +58,7 @@ async def test_liquidate_all_real_sends_market_sell_per_position() -> None:
 
     placed_orders: list[object] = []
 
-    async def _fake_place(rest, order):  # type: ignore[no-untyped-def]
+    async def _fake_place(rest, order, **_):  # type: ignore[no-untyped-def]
         placed_orders.append(order)
         return OrderResult(order_no=f"ORD-{order.symbol}", raw={})
 
@@ -80,7 +80,7 @@ async def test_liquidate_all_one_failure_does_not_block_others() -> None:
     r = _day_trade_runner(dry_run=False)
     account = _account({"005930": 10, "000660": 5})
 
-    async def _flaky(rest, order):  # type: ignore[no-untyped-def]
+    async def _flaky(rest, order, **_):  # type: ignore[no-untyped-def]
         if order.symbol == "005930":
             raise RuntimeError("kiwoom rejected")
         return OrderResult(order_no="ORD-2", raw={})

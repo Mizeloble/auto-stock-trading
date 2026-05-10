@@ -26,7 +26,9 @@ import structlog
 
 from ._common import KST, Bar, Side
 from .account.balance import AccountSnapshot, get_balance
+from .account.order_journal import OrderJournal
 from .account.orders import Order, OrderType, place_order
+from .account.recovery import find_suspect_orders
 from .config import Settings, get_settings
 from .kiwoom.rest import KiwoomRestClient
 from .kiwoom.ws import KiwoomWebSocket, Subscription
@@ -129,6 +131,9 @@ class PaperRunner:
     # 시계 task 가 도달 시 liquidate_all → request_stop 으로 자기 종료.
     liquidate_at: time | None = None
     liquidate_grace_sec: int = 30
+    # 29단계 PR2 (#9 2차) — 주문 영속 저널. 미지정이면 저널링 비활성 (테스트·기존 호환).
+    # 주입 시 매 place_order 호출에 자동 전달, 시동 시 replay 로 손실 의심 주문 알림.
+    journal: OrderJournal | None = None
     _settings: Settings = field(default_factory=get_settings)
     _balance_failures: int = field(default=0, init=False)
     # 텔레그램 인커밍 명령 응답용 인메모리 상태 (runner 가 매 사이클 갱신)
@@ -196,6 +201,9 @@ class PaperRunner:
 
         self._install_signal_handlers()
         self._started_at = datetime.now()
+
+        # 29단계 PR2 — 시동 시 손실 의심 주문 검사. 자동 복구는 X (다음 PR), 알림만.
+        await self._warn_recovery_pending()
 
         # day-trade 모드: orchestrator 가 발굴 후 set_universe() 를 부를 때까지 대기.
         # 그동안 STOPPING 진입(텔레그램 /stop, SIGTERM)은 즉시 빠져나가야 함.
@@ -488,12 +496,36 @@ class PaperRunner:
             return None
         return order
 
+    async def _warn_recovery_pending(self) -> None:
+        """저널을 replay 해서 결과 미확인 주문이 있으면 텔레그램에 경고.
+
+        29단계 PR2 — 자동 매칭/복구는 다음 PR. 이번 단계는 *발견*만 하고
+        사용자가 수동 확인할 수 있게 알림. journal 미주입이면 스킵.
+        """
+        if self.journal is None:
+            return
+        suspects = find_suspect_orders(self.journal.replay())
+        if not suspects:
+            return
+        # 시크릿이 새지 않게 client_id 는 앞 8자만, 나머지 표시 정보는 도메인 데이터.
+        samples = [f"{s.client_id[:8]} {s.side} {s.symbol} x{s.quantity}" for s in suspects[:5]]
+        log.error(
+            "runner.recovery_pending",
+            count=len(suspects),
+            samples=samples,
+        )
+        await self.notifier.notify(
+            "runner.recovery_pending",
+            count=len(suspects),
+            samples=samples,
+        )
+
     async def _place_and_track(
         self, rest: KiwoomRestClient, order: Order, bar: Bar, account: AccountState
     ) -> None:
         """REST 송신 + 성공·실패 분기. 성공 시 로컬 포지션·평단 즉시 갱신, notifier 양방향."""
         try:
-            result = await place_order(rest, order)
+            result = await place_order(rest, order, journal=self.journal)
             # 시장가는 order.price=None. 봉 종가로 근사 — 정확한 체결가는 사후 잔고 갱신 시점에.
             ref_price = float(order.price or Decimal(str(bar.close)))
             log.info(
@@ -700,7 +732,7 @@ class PaperRunner:
                 success += 1
                 continue
             try:
-                result = await place_order(rest, order)
+                result = await place_order(rest, order, journal=self.journal)
                 log.info(
                     "runner.liquidate_accepted",
                     order_no=result.order_no,
