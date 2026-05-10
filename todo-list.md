@@ -41,7 +41,7 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
 - [x] PR3 · `refactor(notify/state): _build_trade_lines 페어링·포맷터 분해` — 75줄 함수를 `_pair_buy_liq_records` + `_format_pair_line/_format_buy_line/_format_sell_line` 으로. 단위 테스트 7건 추가.
 - [ ] PR4 · `refactor(cli): paper_day 단계별 분해` — 155줄 → ~30줄 (daytrade/cli_helpers 위임).
 - [ ] PR4b · `refactor(cli): weekly_proposal 단계별 분해` — 128줄 → ~30줄 (news/ 도메인 헬퍼).
-- [ ] PR5 · `refactor(llm): tool_use 추출 공통 헬퍼` — `news/proposal.py` + `notify/insight.py` + `strategy/llm_advisor.py` 3곳 동일 패턴 통합 (`src/auto_trading/llm/_tool_use.py`).
+- [x] PR5 · `refactor(llm): tool_use 추출 공통 헬퍼` — `news/proposal.py` + `notify/insight.py` + `strategy/llm_advisor.py` 3곳 동일 패턴 통합 (`src/auto_trading/llm/_tool_use.py`). 단위 테스트 6건 추가, src 코드 -65줄.
 - [ ] PR6 · `refactor(notify): telegram 명령 핸들러 모듈 분리` — 269줄 단일 파일을 `notify/commands/{status,control,insight,help}.py` 패키지로.
 - [ ] PR7 · `test(runner): 메인 루프 분기 단위 테스트 보강` — tick→bar / kill_switch / liquidation_task / balance_failure / paused 5개 시나리오. PR8 사전 안전망.
 - [ ] PR8 · `refactor(runner): run() 섹션 주석 + 인라인 헬퍼` — TaskGroup 전면 분해는 위험 高 → 다운그레이드. 가벼운 가독성 개선만.

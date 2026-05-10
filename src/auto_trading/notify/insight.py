@@ -20,6 +20,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from ..llm import extract_tool_use_input
 from ..reports.daily import DailyReport, load_daily_report
 
 
@@ -200,30 +201,8 @@ def insight(
             }
         ],
     )
-    tool_input = _extract_tool_input(response)
+    tool_input = extract_tool_use_input(response, "propose_insight")
     return InsightResponse.model_validate(tool_input)
-
-
-def _extract_tool_input(response: Any) -> dict[str, Any]:
-    blocks = getattr(response, "content", None) or []
-    for block in blocks:
-        block_type = getattr(block, "type", None) or (
-            block.get("type") if isinstance(block, dict) else None
-        )
-        if block_type != "tool_use":
-            continue
-        name = getattr(block, "name", None) or (
-            block.get("name") if isinstance(block, dict) else None
-        )
-        if name != "propose_insight":
-            continue
-        tool_input = getattr(block, "input", None) or (
-            block.get("input") if isinstance(block, dict) else None
-        )
-        if not isinstance(tool_input, dict):
-            raise ValueError("propose_insight tool_use 의 input 이 dict 가 아닙니다")
-        return tool_input
-    raise ValueError("응답에 propose_insight tool_use 블록이 없습니다")
 
 
 # ---- 포맷터 -------------------------------------------------------------
