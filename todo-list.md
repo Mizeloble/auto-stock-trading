@@ -40,7 +40,7 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
 - [x] PR2 · `refactor(dashboard): CSV 로더 파싱 헬퍼 통합` — `_load_equity_csv` / `_load_trades_csv` 의 파일 존재 + OSError swallow 가드를 `_safe_csv_load` 데코레이터로 통합. PEP 695 제네릭(`def _safe_csv_load[T]`) 사용.
 - [x] PR3 · `refactor(notify/state): _build_trade_lines 페어링·포맷터 분해` — 75줄 함수를 `_pair_buy_liq_records` + `_format_pair_line/_format_buy_line/_format_sell_line` 으로. 단위 테스트 7건 추가.
 - [x] PR4 · `refactor(cli): paper_day 단계별 분해` — 프로파일 덮어쓰기(`apply_daytrade_profile_overrides` + `PaperDayOverrides`) + 러너 wiring(`build_paper_day_runner`) 헬퍼로 추출. paper_day 본체 ~30줄 축소, 단위 테스트 5건 추가.
-- [ ] PR4b · `refactor(cli): weekly_proposal 단계별 분해` — 128줄 → ~30줄 (news/ 도메인 헬퍼).
+- [x] PR4b · `refactor(cli): weekly_proposal 단계별 분해` — `news/cli_helpers.py` 신규 (`should_skip_weekly_proposal_for_holiday` + `WeeklyInputs` + `run_weekly_proposal_cycle`). cli.py LOC 1028→1014, 단위 테스트 8건 추가.
 - [x] PR5 · `refactor(llm): tool_use 추출 공통 헬퍼` — `news/proposal.py` + `notify/insight.py` + `strategy/llm_advisor.py` 3곳 동일 패턴 통합 (`src/auto_trading/llm/_tool_use.py`). 단위 테스트 6건 추가, src 코드 -65줄.
 - [ ] PR6 · `refactor(notify): telegram 명령 핸들러 모듈 분리` — 269줄 단일 파일을 `notify/commands/{status,control,insight,help}.py` 패키지로.
 - [ ] PR7 · `test(runner): 메인 루프 분기 단위 테스트 보강` — tick→bar / kill_switch / liquidation_task / balance_failure / paused 5개 시나리오. PR8 사전 안전망.

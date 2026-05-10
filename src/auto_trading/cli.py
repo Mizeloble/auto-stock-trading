@@ -37,6 +37,11 @@ from .kiwoom.rest import KiwoomRestClient
 from .market import calendar as krx_calendar
 from .market.chart import bars_to_dataframe, get_daily_bars
 from .market.quote import get_quote
+from .news.cli_helpers import (
+    WeeklyInputs,
+    run_weekly_proposal_cycle,
+    should_skip_weekly_proposal_for_holiday,
+)
 from .notify import insight as insight_mod
 from .notify.factory import build_command_handler, build_notifier
 from .notify.state import format_daily_report
@@ -876,63 +881,44 @@ def weekly_proposal(
     --force 미지정 시 토요일이 직접 휴장일이거나 다음 거래일까지 5일 이상 떨어져
     있으면(긴 연휴) 시동 생략 — LLM 비용 절약.
     """
-    if not force:
-        _today = krx_calendar.today_kst()
-        _next = krx_calendar.next_trading_day(_today)
-        gap_days = (_next - _today).days
-        if not krx_calendar.is_trading_day(_today) and gap_days >= 5:
-            log = structlog.get_logger("auto_trading.cli")
-            log.info(
-                "runner.holiday_skip",
-                command="weekly-proposal",
-                date=_today.isoformat(),
-                gap_days=gap_days,
-            )
-            console.print(
-                f"[yellow]📅 오늘({_today.isoformat()}) 기준 다음 거래일까지 {gap_days}일 — "
-                f"weekly-proposal 시동 생략 (LLM 비용 절약).[/yellow]"
-            )
-            raise typer.Exit(code=0)
+    skip_msg = should_skip_weekly_proposal_for_holiday(force=force, today=krx_calendar.today_kst())
+    if skip_msg is not None:
+        console.print(f"[yellow]📅 {skip_msg}[/yellow]")
+        raise typer.Exit(code=0)
 
     from .news.collector import collect_recent_news
-    from .news.profile_writer import apply_and_persist, format_apply_message
-    from .news.proposal import _summarize_news, _summarize_reports, propose_daytrade_profile
+    from .news.proposal import _summarize_news, _summarize_reports
 
-    reports = insight_mod.collect_recent_reports(days=days_reports)
-    news = collect_recent_news(days=days_news, force_refresh=force_refresh)
-    if not reports and not news:
+    inputs = WeeklyInputs(
+        reports=list(insight_mod.collect_recent_reports(days=days_reports)),
+        news=list(collect_recent_news(days=days_news, force_refresh=force_refresh)),
+    )
+    if inputs.is_empty:
         console.print("[red]데이터 부족:[/red] reports + news 모두 비어있습니다.")
         raise typer.Exit(code=1)
     console.print(
-        f"[cyan]입력:[/cyan] reports {len(reports)}건 · news {len(news)}건 "
+        f"[cyan]입력:[/cyan] reports {len(inputs.reports)}건 · news {len(inputs.news)}건 "
         f"(LLM 입력 최대 {max_news_items}건)"
     )
 
     if dry_run:
         console.print(
             {
-                "reports": _summarize_reports(reports),
-                "news": _summarize_news(news, max_items=max_news_items),
+                "reports": _summarize_reports(inputs.reports),
+                "news": _summarize_news(inputs.news, max_items=max_news_items),
             }
         )
         return
 
-    target_path = target or current
-    client = _build_anthropic_client()
-    proposal = propose_daytrade_profile(
-        reports,
-        news,
-        client=client,  # type: ignore[arg-type]
+    _, _, msg = run_weekly_proposal_cycle(
+        inputs,
+        current_path=current,
+        fallback_path=fallback,
+        target_path=target,
+        client=_build_anthropic_client(),
         model=get_settings().anthropic_model,
         max_news_items=max_news_items,
     )
-    result = apply_and_persist(
-        proposal,
-        current_path=current,
-        target_path=target_path,
-        fallback_path=fallback,
-    )
-    msg = format_apply_message(result, proposal)
     console.print(msg)
 
     if push:
