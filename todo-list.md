@@ -32,6 +32,26 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
 
 ---
 
+## 🧹 28단계 · 코드베이스 리팩토링 — 9개 PR 분해
+
+직전 정리(`9c3d024 chore: swing/probe 분리 + _mask 통합`) 이후 누적된 부채를 작은 PR 단위로 풀어낸다. 한 PR = 한 후보 = 단독 머지/롤백 가능. 외부 동작·공개 API 보존 (순수 리팩토링).
+
+- [ ] **PR1 · `chore(tests): isolated_cwd 픽스처 conftest.py 통합`** — 4개 테스트 파일에서 동일 픽스처 정의 중복 제거. [tests/conftest.py](tests/conftest.py) 신규.
+- [ ] PR2 · `refactor(dashboard): CSV 로더 파싱 헬퍼 통합` — `_load_equity_csv` / `_load_trades_csv` 공통 try/open/parse/except 패턴을 `_safe_csv_rows` 1개로.
+- [ ] PR3 · `refactor(notify/state): _build_trade_lines 페어링·포맷터 분해` — 75줄 함수를 `_pair_buy_liq_records` + `_format_pair_line/_format_buy_line/_format_sell_line` 으로.
+- [ ] PR4 · `refactor(cli): paper_day 단계별 분해` — 155줄 → ~30줄 (daytrade/cli_helpers 위임).
+- [ ] PR4b · `refactor(cli): weekly_proposal 단계별 분해` — 128줄 → ~30줄 (news/ 도메인 헬퍼).
+- [ ] PR5 · `refactor(llm): tool_use 추출 공통 헬퍼` — `news/proposal.py` + `notify/insight.py` + `strategy/llm_advisor.py` 3곳 동일 패턴 통합 (`src/auto_trading/llm/_tool_use.py`).
+- [ ] PR6 · `refactor(notify): telegram 명령 핸들러 모듈 분리` — 269줄 단일 파일을 `notify/commands/{status,control,insight,help}.py` 패키지로.
+- [ ] PR7 · `test(runner): 메인 루프 분기 단위 테스트 보강` — tick→bar / kill_switch / liquidation_task / balance_failure / paused 5개 시나리오. PR8 사전 안전망.
+- [ ] PR8 · `refactor(runner): run() 섹션 주석 + 인라인 헬퍼` — TaskGroup 전면 분해는 위험 高 → 다운그레이드. 가벼운 가독성 개선만.
+
+**머지 순서**: (PR1 + PR3 + PR5) 병렬 → PR2 → PR4 → PR4b → PR6 → PR7 → PR8.
+
+**검증 (전체 머지 후)**: `uv run pytest` + `uv run ruff check .` + 핵심 명령 dry-run + 1주일 paper-day 운영 모니터.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
 - **23~24단계 사용자 검증** · 다음 평일 paper-day 시동 후 콘솔 "프로파일 로드:" + 일일 리포트 비용 차감 PnL 라인 확인. 토요일 cron 후 텔레그램에 "🗞 다음 주 day-trade 프로파일 갱신" 도착 확인. 다음 월요일 paper-day 가 `daytrade-current.yaml` 자동 사용 확인.
