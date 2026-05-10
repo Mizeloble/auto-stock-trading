@@ -13,13 +13,11 @@ from typing import Any
 import httpx
 import structlog
 
+from auto_trading._common import mask_secret
+
 log = structlog.get_logger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
-
-
-def _mask(token: str) -> str:
-    return token[:4] + "…" if token else ""
 
 
 def _format_message(event: str, fields: dict[str, Any]) -> str:
@@ -180,7 +178,7 @@ class TelegramNotifier:
         self._owns_client = client is None
 
     def __repr__(self) -> str:
-        return f"TelegramNotifier(token={_mask(self._token)!r}, chat_id={self._chat_id!r})"
+        return f"TelegramNotifier(token={mask_secret(self._token)!r}, chat_id={self._chat_id!r})"
 
     async def notify(self, event: str, **fields: object) -> None:
         text = _format_message(event, fields)

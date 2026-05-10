@@ -7,7 +7,7 @@
 raw 본문 자체를 보려면 토큰만 받아 httpx 로 직접 POST 한다.
 
 사용:
-    uv run python scripts/probe_orders.py
+    uv run python scripts/diagnostics/probe_orders.py
 
 KIWOOM_APP_KEY / KIWOOM_APP_SECRET 가 환경 또는 ../.env 에 있어야 함.
 """

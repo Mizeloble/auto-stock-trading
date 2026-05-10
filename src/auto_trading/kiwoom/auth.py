@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import structlog
 
+from .._common import mask_secret
 from ..config import Settings, get_settings
 from .endpoints import PATH_TOKEN
 from .schemas import KiwoomError, TokenResponse
@@ -96,15 +97,8 @@ class TokenProvider:
 
         log.info(
             "kiwoom.token_issued",
-            token_preview=_mask(parsed.token),
+            token_preview=mask_secret(parsed.token, with_length=True),
             expires_at=self._expires_at.isoformat() if self._expires_at else None,
             mode=self._settings.kiwoom_mode.value,
         )
         return self._token
-
-
-def _mask(token: str) -> str:
-    """로그에 찍을 안전한 프리뷰."""
-    if not token:
-        return "<empty>"
-    return token[:4] + "…" + str(len(token))
