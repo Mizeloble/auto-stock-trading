@@ -75,6 +75,15 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 테스트 16건 추가 (heartbeat write/swallow/check 7건 + runner background task 4건 + CLI 5건). 558 전체 통과.
   - **launchd plist 등록은 사용자 수동 작업** — 5분 간격으로 `heartbeat-check` 실행하는 cron 추가 시 운영 활성.
 - [ ] **PR4 · `feat(account): 키움 미체결 조회 + suspect 자동 매칭 — #9 3차`** — 봇 재시작 시 suspect 들을 키움에 재조회해 실제 체결 여부 확인 + 저널 보강 + 로컬 state 동기화. 키움 미체결 TR 코드 probe 후 진행.
+- [x] **PR13 · `feat(llm): 비용 누적 추적 모듈 — #16 1차`**
+  - 새 모듈 `llm/cost_tracker.py` — `CostTracker` (JSONL append-only, account/order_journal 패턴 재사용) + `CostEntry` / `MonthlySummary` / `BudgetStatus` 데이터클래스.
+  - 모델별 가격표 `MODEL_PRICES_USD_PER_M` (Opus/Sonnet/Haiku 4.x 계열). 알 수 없는 모델은 가장 비싼 default(Opus) 가격 — 한도 보호.
+  - `record(model, input_tokens, output_tokens)` / `monthly_summary(year_month)` / `budget_status()` 인터페이스. 월 경계는 KST 기준.
+  - default 한도 $5/월 (memory cost discipline) + alert 80% / over 100% 분기.
+  - 디스크 실패는 swallow + 로그 — LLM 호출 성공을 막지 않게.
+  - 테스트 19건 (가격 5 + record/replay 5 + monthly_summary 3 + budget_status 5 + 손상 1). 669 전체 통과.
+  - **호출 지점 wiring 은 PR14 로 분리** — `news/proposal.py` / `notify/insight.py` / `strategy/llm_advisor.py` 3곳에 record() 추가 + preflight `llm_cost_within_budget` 게이트 활성.
+- [ ] **PR14 · `feat(llm): 비용 추적 wiring + preflight 게이트 활성 — #16 2차`** — 3개 호출 지점에 cost_tracker.record + budget alert/over 시 텔레그램 + LLM 차단.
 - [x] **PR12 · `feat(kiwoom): OAuth 토큰 디스크 캐시 — #21`**
   - `TokenProvider.cache_path: Path | None` 추가 — 시동 시 자동 로드, 발급 후 자동 저장, invalidate 시 자동 삭제.
   - 만료 마진(REFRESH_MARGIN=10분) 안의 캐시는 무시하고 새로 발급. 손상된 JSON / 형식 오류는 swallow + 로그 → 정상 발급 fallback.
