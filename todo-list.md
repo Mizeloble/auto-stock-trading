@@ -56,16 +56,23 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
 
 자세한 설계: `~/.claude/plans/calm-cooking-pelican.md` (23개 후보 + 검증 + 28단계와의 관계).
 
-- [ ] **PR1 · `feat(account): 주문 저널 + client UUID — #9 1차`** ← 진행 중
+- [x] **PR1 · `feat(account): 주문 저널 + client UUID — #9 1차`**
   - 새 모듈 `account/order_journal.py` (JSONL append-only, replay).
   - `place_order(...)` 에 `journal: OrderJournal | None`, `client_id: str | None` keyword-only 인자 추가. 미지정 시 자동 UUID. journal 미지정이면 기존 동작 그대로 (회귀 0).
   - `OrderResult.client_id` 필드 추가 (default `""`).
   - 테스트 13건 추가 (저널 append/replay/concurrency + client_id 자동/수동 부여 + journal 통합 + 실패 경로).
-- [ ] **PR2 · `feat(account): 저널 주입 + 재시작 시 미체결 주문 복구 — #9 2차`** — runner 가 journal 주입 + 시동 시 키움 미체결 조회로 일관성 복구.
-- [ ] **PR3 · `feat(notify): heartbeat dead-man switch — #13`** — 28단계 PR8 머지 후 시작.
-- [ ] **PR4 · `feat(account): 상하한가/VI/거래정지 reject 분류 — #10`**
-- [ ] **PR5 · `test(integration): paper-day 풀 사이클 — #22`** — 28단계 PR7 머지 후 시작.
-- [ ] **PR6 · `feat(cli): preflight 명령 — #17`** — 28단계 PR4b 머지 후 시작.
+- [x] **PR2 · `feat(runner): 저널 주입 + 시동 시 손실 의심 주문 알림 — #9 2차`**
+  - 새 모듈 `account/recovery.py` (`SuspectOrder` + `find_suspect_orders` 순수 함수).
+  - `PaperRunner.journal: OrderJournal | None` 필드 추가 (default None — 기존 호출 호환).
+  - 시동 시 `_warn_recovery_pending()` — replay → suspect → 텔레그램 `runner.recovery_pending` 푸시 (client_id 앞 8자만 노출).
+  - `_place_and_track` + `liquidate_all` 의 place_order 호출에 `journal=self.journal` 전달.
+  - 테스트 15건 추가 (recovery 순수 함수 9건 + runner 통합 6건). 542 전체 통과.
+  - **자동 키움 미체결 조회 + 매칭 + 로컬 state 동기화는 PR3 로 분리** — 이번 PR 은 *발견* 까지.
+- [ ] **PR3 · `feat(account): 키움 미체결 조회 + suspect 자동 매칭 — #9 3차`** — 봇 재시작 시 suspect 들을 키움에 재조회해 실제 체결 여부 확인 + 저널 보강 + 로컬 state 동기화.
+- [ ] **PR4 · `feat(notify): heartbeat dead-man switch — #13`**
+- [ ] **PR5 · `feat(account): 상하한가/VI/거래정지 reject 분류 — #10`**
+- [ ] **PR6 · `test(integration): paper-day 풀 사이클 — #22`**
+- [ ] **PR7 · `feat(cli): preflight 명령 — #17`**
 
 ---
 
