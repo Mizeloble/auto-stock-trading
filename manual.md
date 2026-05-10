@@ -87,88 +87,66 @@ uv run auto-trade quote 005930
 
 ## 3. 명령 한 줄짜리 사용법
 
+day-trade(`paper-day`) 가 메인 운영, swing(`paper`) 은 학습·단일 종목 검증용으로 남아 있습니다.
+
 | 명령 | 무엇을 하나 |
 |---|---|
 | `uv run auto-trade --help` | 전체 명령어 목록 |
 | `uv run auto-trade quote 005930` | 한 종목 현재가 보기 |
 | `uv run auto-trade balance` | 모의 계좌 잔고/평가금액 |
-| `uv run auto-trade strategy suggest --symbol 005930` | 봇이 그 종목에 어울리는 전략을 **추천**하고 YAML 저장 |
-| `uv run auto-trade backtest --profile <yaml> --from 2024-01-01` | 과거 데이터로 시뮬레이션 |
-| `uv run auto-trade paper --profile <yaml> --dry-run` | 실시간으로 동작은 하되 **주문은 안 보냄** (안전 시운전) |
-| `uv run auto-trade paper --profile <yaml>` | 실시간 모의투자 매매 (주문 전송 ON, 단 모의계좌이므로 가상 돈) |
-| `uv run auto-trade paper-day --top-n 3 --dry-run` | **day-trade 모드**: 매일 거래량 상위 3종목 자동 선정 → 즉시 매수 → 15:15 일괄 청산. 자세히는 §11. |
-| `uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run` | **23단계 정통 데이트레이딩**: PositionGuard / 다회 진입 / 모멘텀 게이트 / kill switch / 비용 차감 PnL. 자세히는 §11. |
-| `uv run auto-trade report --date YYYY-MM-DD --push` | 그날 paper-day 로그 → 일일 리포트 JSON + 텔레그램 푸시 (수동 재생성). |
+| **day-trade (메인)** | |
+| `uv run auto-trade paper-day --top-n 3 --dry-run` | 매일 거래량 상위 3종목 자동 선정 → 즉시 매수 → 15:15 일괄 청산. §11. |
+| `uv run auto-trade paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run` | 정통 데이트레이딩 풀 패키지 (PositionGuard / 다회 진입 / 모멘텀 게이트 / kill switch / 비용 차감 PnL). §11. |
+| `uv run auto-trade report --date YYYY-MM-DD --push` | 그날 paper-day 로그 → 일일 리포트 JSON + 텔레그램 푸시. |
 | `uv run auto-trade insight --days 7 --push` | (선택) 직전 7일 일일 리포트를 LLM 분석 → 한국어 인사이트 푸시. ANTHROPIC_API_KEY 필요. |
-| `uv run auto-trade weekly-proposal --dry-run` | (선택) 24단계 — 다음 주 day-trade 프로파일 자동 갱신 시뮬. 토요일 cron 이 자동 호출. |
-| `uv run auto-trade strategy advise --profile <yaml>` | (선택) Claude 가 YAML 의 숫자를 조언으로 갱신 |
+| `uv run auto-trade weekly-proposal --dry-run` | (선택) 다음 주 day-trade 프로파일 자동 갱신 시뮬. 토요일 cron 이 자동 호출. |
+| **swing (선택)** | |
+| `uv run auto-trade strategy suggest --symbol 005930` | 그 종목에 어울리는 전략을 추천하고 YAML 저장 |
+| `uv run auto-trade backtest --profile <yaml> --from 2024-01-01` | 과거 데이터 시뮬레이션 |
+| `uv run auto-trade paper --profile <yaml> --dry-run` | 단일 종목 실시간 시운전 (주문 미전송) |
+| `uv run auto-trade strategy advise --profile <yaml>` | Claude 가 YAML 숫자를 조언으로 갱신 |
 
 > 윈도우 PowerShell 에서 줄을 `\` 로 이어 적을 땐 `` ` `` 백틱을 쓰세요.
 
 ---
 
-## 4. "코드 한 줄 안 짜고" 새 전략 굴리는 흐름 (가장 권장)
+## 4. (선택) Swing 흐름 — 단일 종목 학습·검증
+
+day-trade 가 메인이지만, **새 전략을 감 잡거나 특정 종목을 며칠 보유하면서 시험**하고 싶을 때는 swing 흐름이 짧고 직관적입니다. 정기 운영(launchd) 에서는 빠진 모드라 수동으로만 실행합니다.
 
 ```
-①  추천 받기   → ②  YAML 살짝 손보기   → ③  백테스트   → ④  paper --dry-run   → ⑤  paper 실전(모의)
+①  추천 받기   → ②  YAML 숫자 조정 (선택)   → ③  백테스트   → ④  paper --dry-run   → ⑤  paper 실전(모의)
 ```
-
-### ① 추천 받기
 
 ```bash
+# ① 시장국면 분석 → 어울리는 전략·파라미터 추천 → strategies/profiles/auto_005930.yaml
 uv run auto-trade strategy suggest --symbol 005930
+
+# ③ 과거 일봉 백테스트 (수익률·승률·MDD 표 + data/backtests 저장)
+uv run auto-trade backtest --profile strategies/profiles/auto_005930.yaml --from 2024-01-01
+
+# ④ 실시간 시세 + 전략·리스크 로직 검증 (주문 미전송, [DRY] 로그만)
+uv run auto-trade paper --profile strategies/profiles/auto_005930.yaml --dry-run
+
+# ⑤ 모의투자 계좌에 실제 매수·매도 (가상 돈). Ctrl+C 로 중단, 15:30 자동 종료
+uv run auto-trade paper --profile strategies/profiles/auto_005930.yaml
 ```
 
-**무엇** — 최근 60봉(약 3개월)의 가격 패턴을 분석해 "추세 상승 / 하락 / 박스권 / 고변동" 중 어디인지 분류하고 그에 맞는 전략·파라미터를 골라 줍니다.
-**왜** — 초보자는 "어떤 전략을 써야 하지?" 가 가장 어렵기 때문입니다. 시장 국면에 어울리는 기본값을 자동으로 잡아 줍니다.
-**확인** — 터미널에 표가 뜨고, `strategies/profiles/auto_005930.yaml` 이 만들어집니다.
+② YAML 숫자 조정은 메모장에서 `period: 14` → `12` 같이 숫자만 바꾸세요. **들여쓰기(빈칸)는 절대 건드리지 말 것** — YAML 은 들여쓰기로 의미를 구분합니다. 망가지면 `strategy suggest` 를 다시 돌려 새로 만드는 게 빠릅니다. 백테스트 결과 수익률 마이너스 or MDD > 20% 면 다른 전략을 시도하세요.
 
-생성된 YAML 예시:
+생성되는 YAML 형태:
 ```yaml
 name: auto_005930
 symbol: "005930"
 strategy: rsi_reversion        # sma_crossover 또는 rsi_reversion
 params:
-  period: 14                   # RSI 기간 (보통 7~21)
-  oversold: 30                 # 이 값보다 낮으면 매수
-  overbought: 70               # 이 값보다 높으면 매도
-weight: 1.0                    # 신호 강도 (0.0~1.0)
-notes: "박스권(±3% 변동, ATR 1.8%) → RSI 역추세"
+  period: 14
+  oversold: 30
+  overbought: 70
+weight: 1.0
 ```
 
-### ② YAML 살짝 손보기 (선택)
-
-메모장으로 열어 `period: 14` → `12` 같이 **숫자만** 바꿉니다.
-**주의**: 들여쓰기(빈칸 두 개)는 절대 건드리면 안 됩니다. YAML 은 들여쓰기로 의미를 구분합니다.
-
-### ③ 백테스트 (과거 데이터 시뮬)
-
-```bash
-uv run auto-trade backtest --profile strategies/profiles/auto_005930.yaml --from 2024-01-01
-```
-
-**무엇** — "이 전략을 작년 1월 1일부터 오늘까지 돌렸으면 얼마 벌었을까?" 를 계산.
-**왜** — 실시간 돈을 쓰기 전, 숫자로 검증하기 위함.
-**확인** — 종합 수익률·승률·최대낙폭(MDD) 표가 뜨고 `data/backtests/...` 에 결과가 저장됩니다. **수익률이 마이너스이거나 MDD가 너무 크면(>20%) 다른 전략을 시도**.
-
-### ④ paper --dry-run (안전 시운전)
-
-```bash
-uv run auto-trade paper --profile strategies/profiles/auto_005930.yaml --dry-run
-```
-
-**무엇** — 실시간 시세를 받으면서 전략·리스크 로직을 모두 돌리지만, **주문 전송만 건너뜁니다**.
-**왜** — 진짜 모의투자 계좌에 주문을 쏘기 전, "신호가 너무 자주 나오는지", "원하지 않는 시점에 사고팔려 하는지" 를 로그로 점검.
-**확인** — 터미널 로그에 `[DRY] would place BUY ...` 같은 가짜 주문이 보이면 OK. 실제 잔고는 변하지 않습니다.
-
-### ⑤ 실전(모의) 매매
-
-```bash
-uv run auto-trade paper --profile strategies/profiles/auto_005930.yaml
-```
-
-이제 모의투자 계좌에 진짜로 매수·매도가 들어갑니다 (가상 돈이지만).
-장 마감(15:30) 까지 알아서 돌고, `Ctrl+C` 로 멈출 수 있습니다.
+> 정기 운영을 원하면 §11 의 day-trade(`paper-day`) 흐름을 따라가세요. 토요일 LLM cron 이 다음 주 프로파일을 자동 갱신해 사람 손이 거의 안 들어갑니다.
 
 ---
 
@@ -349,15 +327,18 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 
 ### swing vs day-trade 결정
 
-| 항목 | swing (`paper`) | day-trade (`paper-day`) |
+day-trade 가 메인 운영입니다. swing 은 학습·단일 종목 검증용으로만 남겨 둡니다.
+
+| 항목 | swing (`paper`) — 학습용 | day-trade (`paper-day`) — **메인** |
 |---|---|---|
 | 종목 결정 | YAML 에 미리 명시 | 매일 09:00 자동 발굴 |
 | 매수 시점 | 전략 신호 발생 시 | 발굴 직후 즉시 균등 매수 |
 | 청산 | 외부 stop 시각 (다음날도 보유 가능) | 15:15 자동 일괄 매도 |
 | 다음날 갭 리스크 | 있음 | **없음** (당일 청산) |
-| 적합한 사람 | 종목 분석 좋아함, 며칠 보유 OK | 종목 고르기 귀찮음, 갭 리스크 싫음 |
+| 자동화 | launchd 미등록 (수동 실행) | launchd 평일 08:55 / 토요일 LLM cron |
+| LLM 갱신 | `strategy advise` 사람 트리거 | `weekly-proposal` 토요일 cron 자동 |
 
-> 처음엔 둘 다 dry-run 으로 일주일씩 돌려보고 어느 쪽이 본인 성향에 맞는지 보세요. 동시 운영은 권장 X (launchd plist 충돌).
+> 정기 운영은 day-trade 만 권장. swing 은 새 종목·새 전략 감 잡고 싶을 때 dry-run 으로만 사용하세요.
 
 ### 23단계 — 정통 데이트레이딩 옵션 + YAML 프로파일
 
@@ -462,14 +443,12 @@ auto-stock-trading/
 ## 15. 다음에 할 일 — 단계별 추천
 
 1. **이번 주**: `quote` / `balance` 명령으로 인증 확인.
-2. **다음 주**: `strategy suggest` → `backtest` 로 전략 두세 개 비교.
-3. **그 다음 주**: 둘 중 하나 골라 dry-run 종일 운영:
-   - swing: `paper --profile <yaml> --dry-run` — 본인이 정한 종목으로 며칠
-   - day-trade: `paper-day --top-n 3 --dry-run` — 매일 자동 발굴, 그날 청산
-4. **launchd 자동 운영 등록** — 평일 09:00 자동 시동 (§10).
-5. **그 다음**: dry-run 만족스러우면 `--dry-run` 빼고 실 모의투자 매매.
-6. **만족스러우면**: 텔레그램 연결 → 외출 중에도 모니터링·제어.
-7. **수개월 검증 후**: 실거래 전환은 사용자가 직접 결정. (절대 봇이 임의로 바꾸지 않음.)
+2. **다음 주**: `paper-day --top-n 3 --dry-run` 으로 day-trade 종일 dry-run (§11). 발굴/게이트/청산 로그 흐름 익히기.
+3. **그 다음 주**: `paper-day --profile strategies/profiles/daytrade-default.yaml --dry-run` — 위험 통제 4종 활성 풀 패키지로 며칠 dry-run.
+4. **launchd 자동 운영 등록** — 평일 08:55 자동 시동 + 토요일 weekly-proposal cron (§10).
+5. **dry-run 만족스러우면**: `--dry-run` 빼고 실 모의투자 매매. 텔레그램 연결로 외출 중에도 모니터링·제어.
+6. **(선택) 새 종목·새 전략 감 잡고 싶을 때**: §4 의 swing 흐름으로 `strategy suggest` → `backtest` → `paper --dry-run` 으로 단일 종목 검증.
+7. **수개월 검증 후**: 실거래 전환은 사용자가 직접 결정 (절대 봇이 임의로 바꾸지 않음).
 
 ---
 
