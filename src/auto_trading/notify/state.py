@@ -87,14 +87,15 @@ def _with_name(symbol: str, name: str | None) -> str:
     return symbol
 
 
-def _build_trade_lines(
+def _pair_buy_liq_records(
     buys: list[dict],
     liqs: list[dict],
-) -> tuple[list[str], list[str], list[str]]:
-    """매수·청산 records → (페어 라인, 매수만 라인, 청산만 라인) 세 묶음.
+) -> tuple[list[tuple[dict, dict]], list[dict], list[dict]]:
+    """매수·청산 records → 페어/단방향 분류 (포맷 X, 데이터만).
 
-    같은 종목이 buys 와 liqs 양쪽에 있으면 페어로, 한쪽만 있으면 별 묶음으로.
-    여러 건 매수가 한 종목에 누적되면 첫 매수만 페어 베이스로 본다 — day-trade 1:1 가정.
+    같은 종목이 buys 와 liqs 양쪽에 있으면 페어로 묶고, 한쪽만 있으면 single 로.
+    한 종목에 매수가 여러 건이면 첫 매수만 페어 베이스 — day-trade 1:1 가정.
+    매수 입력 순서대로 페어 결과를 반환해 호출자가 안정적인 출력 순서를 가짐.
     """
     buy_by_sym: dict[str, dict] = {}
     for t in buys:
@@ -107,60 +108,81 @@ def _build_trade_lines(
         if sym and sym not in liq_by_sym:
             liq_by_sym[sym] = li
 
-    paired_syms = [s for s in buy_by_sym if s in liq_by_sym]
-    only_buy_syms = [s for s in buy_by_sym if s not in liq_by_sym]
-    only_sell_syms = [s for s in liq_by_sym if s not in buy_by_sym]
+    paired = [(buy_by_sym[s], liq_by_sym[s]) for s in buy_by_sym if s in liq_by_sym]
+    only_buys = [buy_by_sym[s] for s in buy_by_sym if s not in liq_by_sym]
+    only_sells = [liq_by_sym[s] for s in liq_by_sym if s not in buy_by_sym]
+    return paired, only_buys, only_sells
 
-    pair_lines: list[str] = []
-    for sym in paired_syms:
-        b = buy_by_sym[sym]
-        li = liq_by_sym[sym]
-        name = b.get("name") or li.get("name")
-        head = _with_name(sym, name if isinstance(name, str) else None)
-        qty = int(b.get("quantity") or 0)
-        sim = " (시뮬)" if b.get("simulated") or li.get("simulated") else ""
-        buy_p = b.get("price")
-        sell_p = li.get("sell_price")
-        if buy_p is None:
-            buy_p = li.get("buy_price")
-        buy_part = f"@{_won(buy_p)}" if buy_p is not None else "@시장가"
-        sell_part = f"@{_won(sell_p)}" if sell_p is not None else "@시장가"
-        pnl_part = ""
-        if buy_p is not None and sell_p is not None and float(buy_p) > 0:
-            delta = (float(sell_p) - float(buy_p)) * qty
-            pct = (float(sell_p) / float(buy_p) - 1.0) * 100.0
-            pnl_part = f"  {_signed_won(delta)}/{_signed_pct(pct)}"
-        pair_lines.append(f"- {head}  {qty}주 {buy_part} → {sell_part}{pnl_part}{sim}")
 
-    only_buy_lines: list[str] = []
-    for sym in only_buy_syms[:6]:
-        t = buy_by_sym[sym]
-        name = t.get("name") if isinstance(t.get("name"), str) else None
-        sim = " (시뮬)" if t.get("simulated") else ""
-        qty = int(t.get("quantity") or 0)
-        price = t.get("price")
-        price_part = f" @{_won(price)}" if price is not None else " @시장가"
-        only_buy_lines.append(f"- {_with_name(sym, name)} BUY {qty}주{price_part}{sim}")
-    if len(only_buy_syms) > 6:
-        only_buy_lines.append(f"  외 {len(only_buy_syms) - 6}건")
+def _format_pair_line(buy: dict, liq: dict) -> str:
+    """`- 005930 삼성전자  10주 @5,000원 → @5,500원  +5,000원/+10.00% (시뮬)`."""
+    sym = str(buy.get("symbol") or liq.get("symbol") or "")
+    name_raw = buy.get("name") or liq.get("name")
+    head = _with_name(sym, name_raw if isinstance(name_raw, str) else None)
+    qty = int(buy.get("quantity") or 0)
+    sim = " (시뮬)" if buy.get("simulated") or liq.get("simulated") else ""
+    buy_p = buy.get("price")
+    sell_p = liq.get("sell_price")
+    if buy_p is None:
+        buy_p = liq.get("buy_price")
+    buy_part = f"@{_won(buy_p)}" if buy_p is not None else "@시장가"
+    sell_part = f"@{_won(sell_p)}" if sell_p is not None else "@시장가"
+    pnl_part = ""
+    if buy_p is not None and sell_p is not None and float(buy_p) > 0:
+        delta = (float(sell_p) - float(buy_p)) * qty
+        pct = (float(sell_p) / float(buy_p) - 1.0) * 100.0
+        pnl_part = f"  {_signed_won(delta)}/{_signed_pct(pct)}"
+    return f"- {head}  {qty}주 {buy_part} → {sell_part}{pnl_part}{sim}"
 
-    only_sell_lines: list[str] = []
-    for sym in only_sell_syms[:6]:
-        li = liq_by_sym[sym]
-        name = li.get("name") if isinstance(li.get("name"), str) else None
-        sim = " (시뮬)" if li.get("simulated") else ""
-        qty = int(li.get("quantity") or 0)
-        sell = li.get("sell_price")
-        buy = li.get("buy_price")
-        price_part = f" @{_won(sell)}" if sell is not None else " @시장가"
-        pnl_part = ""
-        if sell is not None and buy is not None and float(buy) > 0:
-            delta = (float(sell) - float(buy)) * qty
-            pct = (float(sell) / float(buy) - 1.0) * 100.0
-            pnl_part = f" ({_signed_won(delta)}/{_signed_pct(pct)})"
-        only_sell_lines.append(f"- {_with_name(sym, name)} SELL {qty}주{price_part}{pnl_part}{sim}")
-    if len(only_sell_syms) > 6:
-        only_sell_lines.append(f"  외 {len(only_sell_syms) - 6}건")
+
+def _format_buy_line(buy: dict) -> str:
+    """매수만 발생 (당일 청산 미진행) — `- 005930 BUY 10주 @5,000원 (시뮬)`."""
+    sym = str(buy.get("symbol") or "")
+    name = buy.get("name") if isinstance(buy.get("name"), str) else None
+    sim = " (시뮬)" if buy.get("simulated") else ""
+    qty = int(buy.get("quantity") or 0)
+    price = buy.get("price")
+    price_part = f" @{_won(price)}" if price is not None else " @시장가"
+    return f"- {_with_name(sym, name)} BUY {qty}주{price_part}{sim}"
+
+
+def _format_sell_line(liq: dict) -> str:
+    """청산만 발생 (전일 보유 처분 등) — `- 005930 SELL 10주 @5,500원 (+5,000원/+10.00%) (시뮬)`."""
+    sym = str(liq.get("symbol") or "")
+    name = liq.get("name") if isinstance(liq.get("name"), str) else None
+    sim = " (시뮬)" if liq.get("simulated") else ""
+    qty = int(liq.get("quantity") or 0)
+    sell = liq.get("sell_price")
+    buy = liq.get("buy_price")
+    price_part = f" @{_won(sell)}" if sell is not None else " @시장가"
+    pnl_part = ""
+    if sell is not None and buy is not None and float(buy) > 0:
+        delta = (float(sell) - float(buy)) * qty
+        pct = (float(sell) / float(buy) - 1.0) * 100.0
+        pnl_part = f" ({_signed_won(delta)}/{_signed_pct(pct)})"
+    return f"- {_with_name(sym, name)} SELL {qty}주{price_part}{pnl_part}{sim}"
+
+
+def _build_trade_lines(
+    buys: list[dict],
+    liqs: list[dict],
+) -> tuple[list[str], list[str], list[str]]:
+    """매수·청산 records → (페어 라인, 매수만 라인, 청산만 라인) 세 묶음.
+
+    페어링은 `_pair_buy_liq_records`, 라인 포맷은 `_format_*_line` 위임.
+    only-buy / only-sell 은 6건까지만 표기 + 초과는 `외 N건` 한 줄.
+    """
+    paired, only_buys, only_sells = _pair_buy_liq_records(buys, liqs)
+
+    pair_lines = [_format_pair_line(b, li) for b, li in paired]
+
+    only_buy_lines = [_format_buy_line(b) for b in only_buys[:6]]
+    if len(only_buys) > 6:
+        only_buy_lines.append(f"  외 {len(only_buys) - 6}건")
+
+    only_sell_lines = [_format_sell_line(li) for li in only_sells[:6]]
+    if len(only_sells) > 6:
+        only_sell_lines.append(f"  외 {len(only_sells) - 6}건")
 
     return pair_lines, only_buy_lines, only_sell_lines
 
