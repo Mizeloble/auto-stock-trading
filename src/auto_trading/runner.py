@@ -30,6 +30,7 @@ from .account.order_journal import OrderJournal
 from .account.orders import Order, OrderType, place_order
 from .account.recovery import find_suspect_orders
 from .config import Settings, get_settings
+from .heartbeat import Heartbeat
 from .kiwoom.rest import KiwoomRestClient
 from .kiwoom.ws import KiwoomWebSocket, Subscription
 from .market.feed import Tick, ticks
@@ -134,6 +135,9 @@ class PaperRunner:
     # 29단계 PR2 (#9 2차) — 주문 영속 저널. 미지정이면 저널링 비활성 (테스트·기존 호환).
     # 주입 시 매 place_order 호출에 자동 전달, 시동 시 replay 로 손실 의심 주문 알림.
     journal: OrderJournal | None = None
+    # 29단계 PR3 (#13) — 봇 살아있음 신호. 주입 시 background task 가
+    # interval_sec 마다 파일 mtime 갱신. 외부 cron 이 누락 시 텔레그램 알림.
+    heartbeat: Heartbeat | None = None
     _settings: Settings = field(default_factory=get_settings)
     _balance_failures: int = field(default=0, init=False)
     # 텔레그램 인커밍 명령 응답용 인메모리 상태 (runner 가 매 사이클 갱신)
@@ -226,6 +230,7 @@ class PaperRunner:
 
         stop_reason = "정상 종료"
         liquidation_task: asyncio.Task[None] | None = None
+        heartbeat_task: asyncio.Task[None] | None = None
         try:
             async with KiwoomRestClient(settings=self._settings) as rest:
                 ws = KiwoomWebSocket(
@@ -246,6 +251,10 @@ class PaperRunner:
                 # day-trade 모드면 청산 시계 task 백그라운드로. tick 이 안 와도 청산이 도는 게 핵심.
                 if self.liquidate_at is not None:
                     liquidation_task = asyncio.create_task(self._liquidation_loop(rest))
+
+                # 29단계 PR3 (#13) — heartbeat 갱신 task. tick 이 끊겨도 봇 살아있다는 증거.
+                if self.heartbeat is not None:
+                    heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
                 try:
                     async for tick in ticks(ws):
@@ -284,6 +293,10 @@ class PaperRunner:
                 liquidation_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await liquidation_task
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
             await self.notifier.notify("runner.stopped", reason=stop_reason)
             await self.notifier.aclose()
 
@@ -768,6 +781,23 @@ class PaperRunner:
             attempted=len(positions),
             dry_run=self.dry_run,
         )
+
+    async def _heartbeat_loop(self) -> None:
+        """heartbeat 파일 mtime 을 interval_sec 간격으로 갱신.
+
+        29단계 PR3 (#13) — run() 의 메인 tick 루프와 분리된 background task 라
+        시세가 끊겨도 갱신이 도는 게 핵심. STOPPING 진입 시 즉시 종료.
+        시작 직후 1회 즉시 write — 봇 시동 사실 자체를 cron 이 즉시 인지.
+        """
+        if self.heartbeat is None:
+            return
+        self.heartbeat.write()
+        while self._control_state is not RunnerControlState.STOPPING:
+            try:
+                await asyncio.sleep(self.heartbeat.interval_sec)
+            except asyncio.CancelledError:
+                return
+            self.heartbeat.write()
 
     async def _liquidation_loop(self, rest: KiwoomRestClient) -> None:
         """KST 시계 폴링 → liquidate_at 도달 시 청산 + request_stop. 1초 간격.

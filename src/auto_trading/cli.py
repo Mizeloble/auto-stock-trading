@@ -1010,5 +1010,78 @@ def dashboard(
     uvicorn.run(instance, host=host, port=port, log_level="info")
 
 
+@app.command("heartbeat-check")
+def heartbeat_check(
+    path: Path = typer.Option(
+        Path("data/heartbeat/runner.txt"),
+        "--path",
+        help="러너가 갱신하는 heartbeat 파일.",
+    ),
+    max_age_sec: int = typer.Option(
+        3600,
+        "--max-age-sec",
+        help="이 초 이상 갱신 누락이면 'stale' 로 판정.",
+    ),
+    cooldown_sec: int = typer.Option(
+        1800,
+        "--cooldown-sec",
+        help="같은 누락 상황에서 텔레그램 알림 최소 간격 (spam 방지).",
+    ),
+    cooldown_path: Path = typer.Option(
+        Path("data/heartbeat/last_alert.txt"),
+        "--cooldown-path",
+        help="cooldown 추적용 빈 파일 경로 (mtime 만 사용).",
+    ),
+) -> None:
+    """봇 heartbeat 누락 검사 — cron 5분 간격 호출 가정.
+
+    무엇/왜:
+    - 러너가 background task 로 ``--path`` 를 주기 갱신. 봇이 조용히 멈추면
+      mtime 이 멈춤 → 이 명령이 그걸 잡아 텔레그램 경고.
+    - 외부 API 의존 0 (디스크 mtime 만). cron 실패와 봇 침묵을 구분 가능.
+    - 같은 침묵 상황에서 5분마다 알림 도착하지 않게 ``cooldown_sec`` 1회.
+
+    어떻게 확인: 봇을 SIGSTOP 후 1시간 대기 → 이 명령 실행 → 텔레그램에
+    "🚨 heartbeat stale" 도착. 정상 운영 중에는 침묵.
+    """
+    from .heartbeat import check_heartbeat
+
+    status = check_heartbeat(path, max_age_sec)
+    if status.ok:
+        console.print(f"[green]heartbeat OK[/green] · age={status.age_sec:.0f}s (path={path})")
+        raise typer.Exit(code=0)
+
+    # cooldown — 직전 알림이 cooldown_sec 안이면 침묵.
+    now_ts = datetime.now().timestamp()
+    if cooldown_path.exists():
+        since_alert = now_ts - cooldown_path.stat().st_mtime
+        if since_alert < cooldown_sec:
+            console.print(
+                f"[yellow]heartbeat {status.reason}[/yellow] — cooldown 중 "
+                f"({since_alert:.0f}s/{cooldown_sec}s, 알림 생략)"
+            )
+            raise typer.Exit(code=0)
+
+    cooldown_path.parent.mkdir(parents=True, exist_ok=True)
+    cooldown_path.touch()
+
+    console.print(f"[red]heartbeat {status.reason}[/red] (path={path})")
+    notifier = build_notifier()
+
+    async def _push() -> None:
+        try:
+            await notifier.notify(
+                "runner.heartbeat_alert",
+                reason=status.reason,
+                age_sec=status.age_sec,
+                path=str(path),
+                max_age_sec=max_age_sec,
+            )
+        finally:
+            await notifier.aclose()
+
+    asyncio.run(_push())
+
+
 if __name__ == "__main__":
     app()

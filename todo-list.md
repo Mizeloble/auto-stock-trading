@@ -67,9 +67,14 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 시동 시 `_warn_recovery_pending()` — replay → suspect → 텔레그램 `runner.recovery_pending` 푸시 (client_id 앞 8자만 노출).
   - `_place_and_track` + `liquidate_all` 의 place_order 호출에 `journal=self.journal` 전달.
   - 테스트 15건 추가 (recovery 순수 함수 9건 + runner 통합 6건). 542 전체 통과.
-  - **자동 키움 미체결 조회 + 매칭 + 로컬 state 동기화는 PR3 로 분리** — 이번 PR 은 *발견* 까지.
-- [ ] **PR3 · `feat(account): 키움 미체결 조회 + suspect 자동 매칭 — #9 3차`** — 봇 재시작 시 suspect 들을 키움에 재조회해 실제 체결 여부 확인 + 저널 보강 + 로컬 state 동기화.
-- [ ] **PR4 · `feat(notify): heartbeat dead-man switch — #13`**
+  - **자동 키움 미체결 조회 + 매칭 + 로컬 state 동기화는 PR4 로 분리** — 이번 PR 은 *발견* 까지.
+- [x] **PR3 · `feat(runner): heartbeat dead-man switch — #13`**
+  - 새 모듈 `auto_trading/heartbeat.py` — `Heartbeat.write()` (atomic mtime 갱신) + `check_heartbeat()` 순수 함수.
+  - `PaperRunner.heartbeat: Heartbeat | None` 필드 + `_heartbeat_loop()` background task. 시동 직후 1회 즉시 write, interval_sec(기본 1800s) 마다 갱신, STOPPING 진입 시 다음 사이클에 종료, cancel 깨끗이 처리.
+  - 새 CLI `auto-trade heartbeat-check` — 누락 / stale / 정상 분류, cooldown(기본 1800s) 으로 spam 차단, 텔레그램 `runner.heartbeat_alert` 푸시.
+  - 테스트 16건 추가 (heartbeat write/swallow/check 7건 + runner background task 4건 + CLI 5건). 558 전체 통과.
+  - **launchd plist 등록은 사용자 수동 작업** — 5분 간격으로 `heartbeat-check` 실행하는 cron 추가 시 운영 활성.
+- [ ] **PR4 · `feat(account): 키움 미체결 조회 + suspect 자동 매칭 — #9 3차`** — 봇 재시작 시 suspect 들을 키움에 재조회해 실제 체결 여부 확인 + 저널 보강 + 로컬 state 동기화. 키움 미체결 TR 코드 probe 후 진행.
 - [ ] **PR5 · `feat(account): 상하한가/VI/거래정지 reject 분류 — #10`**
 - [ ] **PR6 · `test(integration): paper-day 풀 사이클 — #22`**
 - [ ] **PR7 · `feat(cli): preflight 명령 — #17`**
