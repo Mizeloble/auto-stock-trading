@@ -9,12 +9,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 import structlog
 
 from .._common import Side, normalize_symbol
 from ..kiwoom.endpoints import PATH_ORDER, TR
 from ..kiwoom.rest import KiwoomRestClient
+
+if TYPE_CHECKING:
+    from .order_journal import OrderJournal
 
 log = structlog.get_logger(__name__)
 
@@ -40,9 +44,18 @@ class Order:
 class OrderResult:
     order_no: str
     raw: dict
+    # 29단계 PR1 — 호출자가 부여하거나 자동 생성된 client UUID. 봇 재시작 후
+    # 키움 OrderID(order_no) 와 매칭하기 위한 키. 빈 문자열은 journal 미사용.
+    client_id: str = ""
 
 
-async def place_order(client: KiwoomRestClient, order: Order) -> OrderResult:
+async def place_order(
+    client: KiwoomRestClient,
+    order: Order,
+    *,
+    journal: OrderJournal | None = None,
+    client_id: str | None = None,
+) -> OrderResult:
     """매수/매도 주문 전송.
 
     키움 주문 파라미터명:
@@ -51,6 +64,11 @@ async def place_order(client: KiwoomRestClient, order: Order) -> OrderResult:
     - `ord_qty`: 주문수량
     - `ord_uv`: 주문단가 (시장가는 "")
     - `trde_tp`: 매매구분 (0 지정가, 3 시장가 등)
+
+    29단계 PR1 — `journal` 이 주어지면 송신 직전 ``submit`` 이벤트를, 응답
+    수신 직후 ``accepted`` 이벤트를 기록한다. 송신 중 예외가 나면 ``failed``
+    를 기록한 뒤 예외를 그대로 전파 (호출자 동작 보존). `client_id` 미지정
+    시 자동 UUID. 명시 지정은 *재시도* 시 동일 UUID 로 묶기 위함.
     """
     trde_tp = "3" if order.order_type is OrderType.MARKET else "0"
     price_str = "" if order.order_type is OrderType.MARKET else str(order.price or "")
@@ -58,6 +76,13 @@ async def place_order(client: KiwoomRestClient, order: Order) -> OrderResult:
     # 방어선: 잔고/feed normalize 가 빠진 경로에서 'A005930' 같은 변종이 흘러들어와도
     # 송신 직전에 6자리 숫자로. 2026-05-08 청산 거절 회귀.
     symbol = normalize_symbol(order.symbol)
+
+    if client_id is None:
+        from .order_journal import new_client_id
+
+        client_id = new_client_id()
+    if journal is not None:
+        journal.submit(client_id=client_id, order=order)
 
     body = {
         "dmst_stex_tp": order.exchange,
@@ -68,8 +93,16 @@ async def place_order(client: KiwoomRestClient, order: Order) -> OrderResult:
         "cond_uv": "",
     }
     tr_id = TR.ORDER_BUY if order.side is Side.BUY else TR.ORDER_SELL
-    data = await client.request(tr_id, PATH_ORDER, body)
+    try:
+        data = await client.request(tr_id, PATH_ORDER, body)
+    except Exception as exc:
+        if journal is not None:
+            journal.failed(client_id=client_id, error=str(exc))
+        raise
+
     order_no = str(data.get("ord_no") or data.get("odno") or "")
+    if journal is not None:
+        journal.accepted(client_id=client_id, order_no=order_no)
 
     log.info(
         "order.placed",
@@ -78,8 +111,9 @@ async def place_order(client: KiwoomRestClient, order: Order) -> OrderResult:
         qty=order.quantity,
         type=order.order_type.value,
         order_no=order_no,
+        client_id=client_id,
     )
-    return OrderResult(order_no=order_no, raw=data)
+    return OrderResult(order_no=order_no, raw=data, client_id=client_id)
 
 
 async def cancel_order(

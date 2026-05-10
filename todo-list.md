@@ -52,6 +52,23 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
 
 ---
 
+## 🛡 29단계 · 실거래 전환 안전망 — Top 5 PR
+
+자세한 설계: `~/.claude/plans/calm-cooking-pelican.md` (23개 후보 + 검증 + 28단계와의 관계).
+
+- [ ] **PR1 · `feat(account): 주문 저널 + client UUID — #9 1차`** ← 진행 중
+  - 새 모듈 `account/order_journal.py` (JSONL append-only, replay).
+  - `place_order(...)` 에 `journal: OrderJournal | None`, `client_id: str | None` keyword-only 인자 추가. 미지정 시 자동 UUID. journal 미지정이면 기존 동작 그대로 (회귀 0).
+  - `OrderResult.client_id` 필드 추가 (default `""`).
+  - 테스트 13건 추가 (저널 append/replay/concurrency + client_id 자동/수동 부여 + journal 통합 + 실패 경로).
+- [ ] **PR2 · `feat(account): 저널 주입 + 재시작 시 미체결 주문 복구 — #9 2차`** — runner 가 journal 주입 + 시동 시 키움 미체결 조회로 일관성 복구.
+- [ ] **PR3 · `feat(notify): heartbeat dead-man switch — #13`** — 28단계 PR8 머지 후 시작.
+- [ ] **PR4 · `feat(account): 상하한가/VI/거래정지 reject 분류 — #10`**
+- [ ] **PR5 · `test(integration): paper-day 풀 사이클 — #22`** — 28단계 PR7 머지 후 시작.
+- [ ] **PR6 · `feat(cli): preflight 명령 — #17`** — 28단계 PR4b 머지 후 시작.
+
+---
+
 ## 🚀 남은 과제 (선택)
 
 - **23~24단계 사용자 검증** · 다음 평일 paper-day 시동 후 콘솔 "프로파일 로드:" + 일일 리포트 비용 차감 PnL 라인 확인. 토요일 cron 후 텔레그램에 "🗞 다음 주 day-trade 프로파일 갱신" 도착 확인. 다음 월요일 paper-day 가 `daytrade-current.yaml` 자동 사용 확인.
