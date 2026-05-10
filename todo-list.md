@@ -75,6 +75,13 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 테스트 16건 추가 (heartbeat write/swallow/check 7건 + runner background task 4건 + CLI 5건). 558 전체 통과.
   - **launchd plist 등록은 사용자 수동 작업** — 5분 간격으로 `heartbeat-check` 실행하는 cron 추가 시 운영 활성.
 - [ ] **PR4 · `feat(account): 키움 미체결 조회 + suspect 자동 매칭 — #9 3차`** — 봇 재시작 시 suspect 들을 키움에 재조회해 실제 체결 여부 확인 + 저널 보강 + 로컬 state 동기화. 키움 미체결 TR 코드 probe 후 진행.
+- [x] **PR12 · `feat(kiwoom): OAuth 토큰 디스크 캐시 — #21`**
+  - `TokenProvider.cache_path: Path | None` 추가 — 시동 시 자동 로드, 발급 후 자동 저장, invalidate 시 자동 삭제.
+  - 만료 마진(REFRESH_MARGIN=10분) 안의 캐시는 무시하고 새로 발급. 손상된 JSON / 형식 오류는 swallow + 로그 → 정상 발급 fallback.
+  - 시크릿 파일 권한 0o600 (POSIX 만, Windows 는 무시).
+  - `Settings.kiwoom_token_cache_path: Path | None = None` 추가 (default 비활성). `.env` 의 `KIWOOM_TOKEN_CACHE_PATH=data/auth/token.json` 으로 활성. `data/` 는 .gitignore 자동 제외.
+  - 명시 인자 > Settings default 우선순위.
+  - 테스트 8건 추가 (저장/로드/만료/손상/invalidate 삭제/POSIX 권한 0o600/Settings default None/명시 우선). 650 전체 통과.
 - [x] **PR5 · `feat(account): 거절 메시지 분류 — #10 1차`**
   - 새 모듈 `account/reject_classifier.py` — `RejectCategory` (상한가/하한가/VI/거래정지/휴장/종목무효/잔고부족/UNKNOWN) + `classify_reject(message, code)` 순수 함수 + 카테고리별 권장 skip 시간.
   - 한글 패턴 + 알려진 키움 코드(RC4010, 1902) 매칭. 'VI' 는 영문 단어 경계 lookaround (`(?<![a-z])vi(?![a-z])`) 로 'device' 같은 false positive 차단.

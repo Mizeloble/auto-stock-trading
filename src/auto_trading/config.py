@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,6 +35,10 @@ class Settings(BaseSettings):
     kiwoom_app_key: SecretStr = SecretStr("")
     kiwoom_app_secret: SecretStr = SecretStr("")
     kiwoom_account_no: str = ""
+    # 29단계 PR12 (#21) — OAuth 토큰 디스크 캐시 경로. None 이면 메모리 only.
+    # 운영에선 .env 의 `KIWOOM_TOKEN_CACHE_PATH=data/auth/token.json` 으로 활성.
+    # 시크릿이라 파일 권한 0o600 (POSIX). data/ 는 .gitignore 자동 제외.
+    kiwoom_token_cache_path: Path | None = None
 
     log_level: str = Field(default="INFO")
 
