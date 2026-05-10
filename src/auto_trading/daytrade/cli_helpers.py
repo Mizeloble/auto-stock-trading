@@ -16,13 +16,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import date, time
+from pathlib import Path
 
 import structlog
 from rich.console import Console
 
 from ..kiwoom.rest import KiwoomRestClient
 from ..market.index import IndexMomentumTracker, Market
+from ..notify.factory import build_notifier
+from ..notify.reporting import ReportingNotifier
 from ..notify.telegram_commands import TelegramCommandHandler
+from ..notify.throttle import ThrottledNotifier
 from ..runner import PaperRunner
 from ..strategy.base import Strategy
 from ..strategy.index_daytrade import IndexMomentumDayTrade
@@ -31,6 +37,108 @@ from .orchestrator import discover_and_arm, start_momentum_loop
 from .profile import DaytradeProfile
 
 console = Console()
+
+
+@dataclass(frozen=True)
+class PaperDayOverrides:
+    """프로파일 적용 후 정착된 paper-day 설정값.
+
+    프로파일 미지정 시 CLI 인자가 그대로 통과. 프로파일 있으면 해당 필드만 덮어씀.
+    `summary_msg` 는 콘솔 출력용 (없으면 None).
+    """
+
+    profile: DaytradeProfile | None
+    top_n: int
+    liquidate: str
+    discover_delay_sec: int
+    include_etf: bool
+    summary_msg: str | None
+
+
+def apply_daytrade_profile_overrides(
+    profile_path: Path | None,
+    *,
+    top_n: int,
+    liquidate: str,
+    discover_delay_sec: int,
+    include_etf: bool,
+) -> PaperDayOverrides:
+    """프로파일 경로가 있으면 YAML 로드해 strategy/top_n/liquidate/discover_delay/exclude_etf
+    를 덮어쓴 결과를 반환. 없으면 CLI 인자 그대로 통과.
+
+    side-effect 없음 — 호출자가 `summary_msg` 를 console 에 출력할지 결정.
+    """
+    if profile_path is None:
+        return PaperDayOverrides(
+            profile=None,
+            top_n=top_n,
+            liquidate=liquidate,
+            discover_delay_sec=discover_delay_sec,
+            include_etf=include_etf,
+            summary_msg=None,
+        )
+    profile = DaytradeProfile.load_yaml(profile_path)
+    return PaperDayOverrides(
+        profile=profile,
+        top_n=profile.top_n,
+        liquidate=profile.liquidate,
+        discover_delay_sec=profile.discover_delay_sec,
+        include_etf=not profile.exclude_etf,
+        summary_msg=(
+            f"프로파일 로드: {profile_path.name} "
+            f"({profile.strategy} · top_n={profile.top_n} · 청산 {profile.liquidate})"
+        ),
+    )
+
+
+def build_paper_day_runner(
+    overrides: PaperDayOverrides,
+    *,
+    liquidate_at: time,
+    bar_minutes: int,
+    allow_real: bool,
+    dry_run: bool,
+    telegram_throttle_min: int,
+    today_kst: date,
+    log_dir: Path = Path("logs"),
+    report_root: Path = Path("data/reports"),
+) -> tuple[PaperRunner, IndexMomentumTracker | None]:
+    """notifier 체인 + PaperRunner + ReportingNotifier wrap + (옵션) momentum tracker 까지 한 번에.
+
+    반환:
+    - runner — `runner.notifier` 가 ReportingNotifier 로 감싸진 상태.
+    - momentum_tracker — `index_momentum_daytrade` 프로파일에서만 비-None.
+
+    호출자는 (필요 시) command handler 만 별도 wiring 후 paper_day_main / paper_day_with_commands
+    중 하나를 await 하면 된다.
+    """
+    inner = build_notifier()
+    if telegram_throttle_min > 0:
+        inner = ThrottledNotifier(inner, window_min=telegram_throttle_min)
+
+    runner = PaperRunner(
+        liquidate_at=liquidate_at,
+        bar_minutes=bar_minutes,
+        allow_real=allow_real,
+        dry_run=dry_run,
+        notifier=inner,
+    )
+
+    momentum_tracker: IndexMomentumTracker | None = None
+    if overrides.profile is not None:
+        apply_profile_to_runner(overrides.profile, runner)
+        if overrides.profile.strategy == "index_momentum_daytrade":
+            momentum_tracker = IndexMomentumTracker()
+
+    runner.notifier = ReportingNotifier(
+        inner,
+        state_provider=runner.state_snapshot,
+        log_path=log_dir / f"paper-day-{today_kst.isoformat()}.log",
+        report_root=report_root,
+        report_date=today_kst,
+    )
+
+    return runner, momentum_tracker
 
 
 def apply_profile_to_runner(profile: DaytradeProfile, runner: PaperRunner) -> None:
@@ -252,7 +360,10 @@ async def delayed_discover(
 
 
 __all__ = [
+    "PaperDayOverrides",
+    "apply_daytrade_profile_overrides",
     "apply_profile_to_runner",
+    "build_paper_day_runner",
     "build_profile_factory",
     "delayed_discover",
     "paper_day_main",

@@ -28,22 +28,19 @@ from .account.balance import get_balance
 from .backtest.engine import Backtester, save_result
 from .config import get_settings
 from .daytrade.cli_helpers import (
-    apply_profile_to_runner,
+    apply_daytrade_profile_overrides,
+    build_paper_day_runner,
     paper_day_main,
     paper_day_with_commands,
 )
-from .daytrade.profile import DaytradeProfile
 from .kiwoom.rest import KiwoomRestClient
 from .market import calendar as krx_calendar
 from .market.chart import bars_to_dataframe, get_daily_bars
-from .market.index import IndexMomentumTracker
 from .market.quote import get_quote
 from .notify import insight as insight_mod
 from .notify.factory import build_command_handler, build_notifier
-from .notify.reporting import ReportingNotifier
 from .notify.state import format_daily_report
 from .notify.telegram_commands import TelegramCommandHandler
-from .notify.throttle import ThrottledNotifier
 from .reports.daily import build_daily_report, save_daily_report
 from .reports.log_parser import parse_log
 from .runner import PaperRunner
@@ -483,57 +480,39 @@ def paper_day(
     color = "green" if settings.is_mock else "red"
     console.print(f"[dim]키움 모드:[/dim] [{color}]{settings.kiwoom_mode.value}[/{color}]")
 
-    # 23단계 Phase G — 프로파일 로드 시 strategy/top_n/liquidate/risk 우선 적용.
-    profile: DaytradeProfile | None = None
-    if profile_path is not None:
-        profile = DaytradeProfile.load_yaml(profile_path)
-        top_n = profile.top_n
-        liquidate = profile.liquidate
-        discover_delay_sec = profile.discover_delay_sec
-        include_etf = not profile.exclude_etf
-        console.print(
-            f"[cyan]프로파일 로드:[/cyan] {profile_path.name} "
-            f"({profile.strategy} · top_n={profile.top_n} · 청산 {profile.liquidate})"
-        )
-
-    liquidate_at = _parse_hhmm_kst(liquidate)
-    inner_notifier = build_notifier()
-    # 23단계 Phase H — 옵션 활성 시 매매 이벤트 N분 요약. 중요 이벤트는 즉시 통과.
+    # 23단계 Phase G — 프로파일 있으면 strategy/top_n/liquidate/discover_delay/exclude_etf 덮어쓰기.
+    cfg = apply_daytrade_profile_overrides(
+        profile_path,
+        top_n=top_n,
+        liquidate=liquidate,
+        discover_delay_sec=discover_delay_sec,
+        include_etf=include_etf,
+    )
+    if cfg.summary_msg:
+        console.print(f"[cyan]{cfg.summary_msg}[/cyan]")
     if telegram_throttle_min > 0:
-        inner_notifier = ThrottledNotifier(inner_notifier, window_min=telegram_throttle_min)
         console.print(f"[cyan]텔레그램 throttle:[/cyan] {telegram_throttle_min}분 윈도우")
-    runner = PaperRunner(
+
+    liquidate_at = _parse_hhmm_kst(cfg.liquidate)
+    runner, momentum_tracker = build_paper_day_runner(
+        cfg,
         liquidate_at=liquidate_at,
         bar_minutes=minutes,
         allow_real=allow_real,
         dry_run=dry_run,
-        notifier=inner_notifier,
-    )
-    # 프로파일이 있으면 RiskLimits 즉시 반영. PositionGuard 도 자동 갱신(같은 limits 객체 참조).
-    momentum_tracker: IndexMomentumTracker | None = None
-    if profile is not None:
-        apply_profile_to_runner(profile, runner)
-        if profile.strategy == "index_momentum_daytrade":
-            momentum_tracker = IndexMomentumTracker()
-    # 22단계 Phase A — 청산·종료 후 자동 일일 리포트 푸시 + JSON 저장.
-    today_kst = datetime.now(KST).date()
-    runner.notifier = ReportingNotifier(
-        inner_notifier,
-        state_provider=runner.state_snapshot,
-        log_path=Path(f"logs/paper-day-{today_kst.isoformat()}.log"),
-        report_root=Path("data/reports"),
-        report_date=today_kst,
+        telegram_throttle_min=telegram_throttle_min,
+        today_kst=datetime.now(KST).date(),
     )
     console.print(
-        f"[cyan]day-trade 모드[/cyan] · 청산 {liquidate}"
-        f" · top_n={top_n} · {'dry-run' if dry_run else '실주문'}"
+        f"[cyan]day-trade 모드[/cyan] · 청산 {cfg.liquidate}"
+        f" · top_n={cfg.top_n} · {'dry-run' if dry_run else '실주문'}"
     )
 
     on_insight = None
-    if get_settings().has_anthropic:
+    if settings.has_anthropic:
         on_insight = insight_mod.build_insight_callback(
             _build_anthropic_client(),  # type: ignore[arg-type]
-            model=get_settings().anthropic_model,
+            model=settings.anthropic_model,
         )
     handler = build_command_handler(
         runner.state_snapshot,
@@ -543,16 +522,16 @@ def paper_day(
         on_insight=on_insight,
     )
 
-    exclude_etf = not include_etf
+    exclude_etf = not cfg.include_etf
     try:
         if handler is None:
             asyncio.run(
                 paper_day_main(
                     runner,
-                    top_n=top_n,
-                    discover_delay=discover_delay_sec,
+                    top_n=cfg.top_n,
+                    discover_delay=cfg.discover_delay_sec,
                     exclude_etf=exclude_etf,
-                    profile=profile,
+                    profile=cfg.profile,
                     momentum_tracker=momentum_tracker,
                 )
             )
@@ -562,10 +541,10 @@ def paper_day(
                 paper_day_with_commands(
                     runner,
                     handler,
-                    top_n=top_n,
-                    discover_delay=discover_delay_sec,
+                    top_n=cfg.top_n,
+                    discover_delay=cfg.discover_delay_sec,
                     exclude_etf=exclude_etf,
-                    profile=profile,
+                    profile=cfg.profile,
                     momentum_tracker=momentum_tracker,
                 )
             )
