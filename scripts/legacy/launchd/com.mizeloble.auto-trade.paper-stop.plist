@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/paper-stop.sh</string>
+        <string>/Users/jjmize/Project/auto-stock-trading/scripts/legacy/paper-stop.sh</string>
     </array>
 
     <key>WorkingDirectory</key>

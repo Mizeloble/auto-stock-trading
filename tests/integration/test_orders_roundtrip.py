@@ -4,7 +4,7 @@
 이 파일은 평일/주말 어느 때나 일관되게 거절 응답을 받는 호출 (가짜 원주문번호로
 취소 요청) 을 사용해, 키움이 비즈니스 에러를 `KiwoomError` 로 surface 하는지만 검증.
 
-성공 응답의 ord_no/odno 매핑은 평일 장중에 `scripts/probe_orders.py` 로 재검증한 후
+성공 응답의 ord_no/odno 매핑은 평일 장중에 `scripts/diagnostics/probe_orders.py` 로 재검증한 후
 별도 테스트를 추가한다.
 """
 

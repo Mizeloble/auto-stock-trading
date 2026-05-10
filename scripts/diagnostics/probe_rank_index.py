@@ -8,7 +8,7 @@
 실측에 맞춰 보정한다.
 
 사용:
-    uv run python scripts/probe_rank_index.py
+    uv run python scripts/diagnostics/probe_rank_index.py
 
 KIWOOM_APP_KEY / KIWOOM_APP_SECRET 가 환경 또는 ../.env 에 있어야 함.
 KIWOOM_MODE=mock 에서만 동작 (실거래 모드에서 진단 호출 차단).

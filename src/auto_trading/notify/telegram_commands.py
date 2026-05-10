@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 import structlog
 
+from .._common import mask_secret
 from .state import (
     HELP_TEXT,
     RunnerStateSnapshot,
@@ -31,7 +32,7 @@ from .state import (
     format_positions,
     format_status,
 )
-from .telegram import TELEGRAM_API_BASE, _mask
+from .telegram import TELEGRAM_API_BASE
 
 log = structlog.get_logger(__name__)
 
@@ -90,7 +91,7 @@ class TelegramCommandHandler:
         self._insight_last_at: datetime | None = None
 
     def __repr__(self) -> str:
-        return f"TelegramCommandHandler(token={_mask(self._token)!r}, allowed={len(self._allowed)})"
+        return f"TelegramCommandHandler(token={mask_secret(self._token)!r}, allowed={len(self._allowed)})"
 
     async def run(self) -> None:
         """무한 폴링 루프. CancelledError 가 오면 정상 종료."""

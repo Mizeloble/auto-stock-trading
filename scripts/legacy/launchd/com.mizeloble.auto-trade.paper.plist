@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/paper-day.sh</string>
+        <string>/Users/jjmize/Project/auto-stock-trading/scripts/legacy/paper-day.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -52,7 +52,7 @@
     <key>KeepAlive</key>
     <false/>
 
-    <!-- 표준 출력/에러는 paper-day.sh 안에서 logs/paper-YYYY-MM-DD.log 로 리다이렉트.
+    <!-- 표준 출력/에러는 legacy/paper-day.sh 안에서 logs/paper-YYYY-MM-DD.log 로 리다이렉트.
          launchd 자체 로그는 트리거 실패 등 메타 이벤트만 남김. -->
     <key>StandardOutPath</key>
     <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper.out.log</string>

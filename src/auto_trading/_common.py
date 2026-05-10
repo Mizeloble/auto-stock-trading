@@ -82,6 +82,22 @@ def extract_rows(payload: dict) -> list[dict]:
     return []
 
 
+def mask_secret(value: str | None, *, with_length: bool = False) -> str:
+    """시크릿(토큰·키) → 로그용 프리뷰. CLAUDE.md 의 "앞 4자 + …" 정책 단일 구현.
+
+    - 빈 값: ``with_length=True`` 면 ``"<empty>"``, 아니면 ``""``.
+    - 일반: ``f"{value[:4]}…"``. ``with_length=True`` 면 길이 덧붙여 ``f"{value[:4]}…{len(value)}"``.
+
+    호출 도메인:
+    - kiwoom AppKey/Secret/토큰
+    - Telegram 봇 토큰
+    """
+    if not value:
+        return "<empty>" if with_length else ""
+    preview = f"{value[:4]}…"
+    return f"{preview}{len(value)}" if with_length else preview
+
+
 def normalize_symbol(raw: object) -> str:
     """키움 응답의 종목코드 정규화 — 6자리 코드 추출.
 
@@ -106,6 +122,7 @@ __all__ = [
     "Bar",
     "Side",
     "extract_rows",
+    "mask_secret",
     "normalize_symbol",
     "parse_kiwoom_ts",
     "to_decimal",

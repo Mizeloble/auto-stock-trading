@@ -62,55 +62,19 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.insight-weekly
   launchctl bootout gui/$UID/com.mizeloble.auto-trade.paper
   ```
 - **plist 수정 후 반영 안 됨**: bootout 후 다시 install 스크립트.
-- **paper 프로세스가 launchd 자식이 아니라 파이프 후속으로 분리됨**: `paper-day.sh` 가
-  `exec` 로 caffeinate 를 띄우므로 정상은 launchd 의 직접 자식. 그래도 stop 이 안
-  잡으면 `pgrep -fa "auto-trade paper"` 로 PID 직접 확인.
+- **paper 프로세스가 launchd 자식이 아니라 파이프 후속으로 분리됨**: `paper-day-mode.sh` 가
+  `exec` 로 caffeinate 를 띄우므로 정상은 launchd 의 직접 자식. 그래도 종료가 안
+  잡히면 `pgrep -fa "auto-trade paper"` 로 PID 직접 확인.
 
-## YAML 프로파일 변경 시
-
-`strategies/profiles/auto_005930.yaml` 의 숫자만 바꿔서 다음 평일 시동 때 자동 반영.
-스크립트·plist 재등록 X. 다른 종목 추가하려면 새 profile 만든 뒤 paper-day.sh 의
-`--profile` 인자 수정.
-
----
-
-## 21단계 · day-trade 모드 (`paper-day` plist) — 별도 운영
-
-기존 swing 모드(위) 와 별도로 day-trade 운영을 원할 때 사용. 둘 중 **하나만** 활성화하세요.
-
-### 차이점 한눈에
-
-| 항목 | swing (`paper.plist`) | day-trade (`paper-day.plist`) |
-|---|---|---|
-| 종목 | YAML 프로파일에 미리 명시 | 매일 09:00 거래량 상위 N 자동 발굴 |
-| 매수 | 전략 신호 발생 시 | 발굴 직후 즉시 균등 매수 (weight=1/N) |
-| 청산 | 외부 stop 시각 (15:35 SIGTERM) | 러너 자체 시계 (15:15 시장가 일괄 매도 → 자기 종료) |
-| stop plist | 별도 필요 | **불필요** (자기 종료) |
-| 다음날 갭 리스크 | 있음 (포지션 보유) | 없음 (당일 청산) |
-
-### 등록·전환
-
-```bash
-# swing → day-trade 전환
-./scripts/launchd-uninstall.sh                # swing plist 두 개 제거
-launchctl bootstrap gui/$UID scripts/launchd/com.mizeloble.auto-trade.paper-day.plist
-
-# 확인
-launchctl list | grep mizeloble.auto-trade
-# com.mizeloble.auto-trade.paper-day  한 줄 보이면 등록 완료
-
-# 강제 즉시 시동 (장 외 시간 동작 검증)
-launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.paper-day
-
-# day-trade → swing 복귀
-launchctl bootout gui/$UID/com.mizeloble.auto-trade.paper-day
-./scripts/launchd-install.sh
-```
-
-### 운영 사양 변경
+## 운영 사양 변경
 
 `scripts/paper-day-mode.sh` 의 `--top-n` / `--liquidate` 인자 한 줄만 수정. plist 재등록 X.
 실주문 전환은 며칠 dry-run 검증 후 사용자 명시 승인이 있을 때만 `--no-dry-run` 으로.
+
+종목 풀(거래량 상위 N) 외에 특정 종목으로 swing 운영(미리 정한 종목 보유)이 필요하면
+`uv run auto-trade paper --profile strategies/profiles/auto_005930.yaml --dry-run` 수동 실행.
+swing 자동화 (`paper.plist` / `paper-stop.plist`) 는 deprecated 처리되어 `scripts/legacy/`
+로 이동했다 — 자세한 복귀 절차는 [`scripts/legacy/README.md`](../legacy/README.md).
 
 ---
 

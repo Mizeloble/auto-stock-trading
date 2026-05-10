@@ -275,12 +275,14 @@ uv run auto-trade strategy advise --profile strategies/profiles/auto_005930.yaml
 
 ## 10. (선택) 매일 자동으로 켜고 끄기 — macOS launchd
 
-회사 가 있을 때도 **08:55 자동 시작 / 15:35 자동 종료** 로 돌릴 수 있습니다. 두 가지 운영 모드 중 하나만 활성화하세요:
+회사 가 있을 때도 **08:55 자동 시작 / 15:15 자동 청산 → 종료** 로 돌릴 수 있습니다. 권장 모드는 **day-trade** (§11) — `./scripts/launchd-install.sh` 한 줄로 paper-day · insight-weekly · log-rotate 세 잡이 함께 등록됩니다.
 
-| 모드 | 등록 명령 | 종료 |
-|---|---|---|
-| **swing** (`paper`, 기존) — 종목 미리 정함, 다음날도 보유 | `./scripts/launchd-install.sh` | 15:35 SIGTERM (별도 stop plist) |
-| **day-trade** (`paper-day`, §11) — 매일 자동 발굴, 그날 청산 | `launchctl bootstrap gui/$UID scripts/launchd/com.mizeloble.auto-trade.paper-day.plist` | 15:15 러너 자체 청산 후 종료 |
+```bash
+./scripts/launchd-install.sh
+launchctl list | grep mizeloble.auto-trade   # paper-day / insight-weekly / log-rotate 3종 보이면 OK
+```
+
+> swing 모드(미리 정한 종목으로 며칠 보유)는 자동화 plist 가 deprecated 처리되어 `scripts/legacy/` 로 이동했습니다. 수동으로는 여전히 `uv run auto-trade paper --profile <yaml> --dry-run` 가능. 복귀 절차는 [scripts/legacy/README.md](scripts/legacy/README.md).
 
 자세한 내용·해제 방법은 [scripts/launchd/README.md](scripts/launchd/README.md) 참고.
 

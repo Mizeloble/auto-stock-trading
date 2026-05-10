@@ -173,13 +173,14 @@ class PaperRunner:
         """SIGTERM/SIGINT 을 graceful stop (`request_stop`) 으로 라우팅.
 
         무엇/왜:
-        - launchd `paper-stop.sh` 의 SIGTERM 또는 사용자 Ctrl+C 가 와도 텔레그램 `/stop`
-          과 같은 경로로 들어가 finally 블록 (`runner.stopped` 푸시 + notifier aclose)
-          이 정상 동작. 핸들러 없으면 Python 이 즉시 죽어 종료 푸시·로그 flush 실패.
+        - launchd SIGTERM (day-trade 자체 청산 후 종료, 또는 legacy `paper-stop.sh`)
+          이나 사용자 Ctrl+C 가 와도 텔레그램 `/stop` 과 같은 경로로 들어가 finally
+          블록 (`runner.stopped` 푸시 + notifier aclose) 이 정상 동작. 핸들러 없으면
+          Python 이 즉시 죽어 종료 푸시·로그 flush 실패.
         - Windows 또는 별도 스레드 환경에서 `add_signal_handler` 가 NotImplementedError /
           RuntimeError 를 내면 조용히 무시 — 운영 환경(macOS launchd) 은 영향 없음.
 
-        어떻게 확인: paper-stop.sh SIGTERM 후 logs/paper-*.log 끝줄에 `runner.stop_requested`
+        어떻게 확인: 종료 신호 후 logs/paper-*.log 끝줄에 `runner.stop_requested`
         + `runner.stopped` 이 모두 찍히고 텔레그램에 "⏹ paper 종료" 푸시 도착.
         """
         loop = asyncio.get_running_loop()
