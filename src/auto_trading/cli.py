@@ -212,6 +212,21 @@ def balance() -> None:
     asyncio.run(_run())
 
 
+def _parse_walk_forward_spec(spec: str) -> tuple[int, int]:
+    """\"90/30\" 또는 \"90d/30d\" → (window_days=90, step_days=30)."""
+    parts = spec.replace("d", "").split("/")
+    if len(parts) != 2:
+        raise typer.BadParameter("--walk-forward 는 '90/30' 또는 '90d/30d' 형식이어야 합니다.")
+    try:
+        window = int(parts[0])
+        step = int(parts[1])
+    except ValueError as exc:
+        raise typer.BadParameter(f"숫자 파싱 실패: {spec}") from exc
+    if window <= 0 or step <= 0:
+        raise typer.BadParameter("window/step 둘 다 양수여야 합니다.")
+    return window, step
+
+
 @app.command()
 def backtest(
     strategy: str | None = typer.Option(
@@ -225,18 +240,29 @@ def backtest(
     profile: Path | None = typer.Option(
         None, "--profile", help="전략 프로파일 YAML 경로. --strategy/--symbol 대체."
     ),
+    walk_forward_spec: str | None = typer.Option(
+        None,
+        "--walk-forward",
+        help="walk-forward 모드. 'window/step' 일 단위 (예: '90/30' = 90일 윈도우, 30일 간격).",
+    ),
 ) -> None:
-    """과거 일봉으로 전략 시뮬레이션."""
+    """과거 일봉으로 전략 시뮬레이션.
+
+    \\--walk-forward 활성 시 단일 백테스트 대신 슬라이딩 윈도우로 분할 평가 —
+    윈도우별 metric 분포로 전략의 시간 일관성 확인.
+    """
     if profile is not None and (strategy or symbol):
         raise typer.BadParameter("--profile 과 --strategy/--symbol 은 동시에 줄 수 없습니다.")
     if profile is None and not (strategy and symbol):
         raise typer.BadParameter("--profile 또는 (--strategy + --symbol) 둘 중 하나가 필요합니다.")
 
     strategy_name: str
+    strategy_params: dict[str, object]
     if profile is not None:
         prof = StrategyProfile.load_yaml(profile)
         strategy_name = prof.strategy
         symbol = prof.symbol
+        strategy_params = dict(prof.params)
         strat = registry.get(prof.strategy, **prof.params)
         console.print(
             f"[cyan]프로파일 로드:[/cyan] {profile.name} "
@@ -245,6 +271,7 @@ def backtest(
     else:
         assert strategy is not None and symbol is not None  # 위 검증 통과 후 보장
         strategy_name = strategy
+        strategy_params = {}
         strat = registry.get(strategy)
 
     base = date.fromisoformat(end) if end else date.today()
@@ -257,6 +284,21 @@ def backtest(
 
     df = bars_to_dataframe(bars)
     console.print(f"[dim]Bars:[/dim] {len(df)} 개 ({df.index[0].date()} → {df.index[-1].date()})")
+
+    # 29단계 PR24 — walk-forward 분기
+    if walk_forward_spec is not None:
+        window_days, step_days = _parse_walk_forward_spec(walk_forward_spec)
+        _run_walk_forward(
+            strategy_name=strategy_name,
+            strategy_params=strategy_params,
+            symbol=symbol,
+            df=df,
+            window_days=window_days,
+            step_days=step_days,
+            cash=cash,
+            out_dir=out_dir,
+        )
+        return
 
     bt = Backtester(strategy=strat, initial_cash=cash)
     result = bt.run(symbol, df)
@@ -275,6 +317,140 @@ def backtest(
     )
     saved = save_result(result, out)
     console.print(f"[green]결과 저장:[/green] {saved}")
+
+
+def _run_walk_forward(
+    *,
+    strategy_name: str,
+    strategy_params: dict[str, object],
+    symbol: str,
+    df,  # pd.DataFrame
+    window_days: int,
+    step_days: int,
+    cash: float,
+    out_dir: Path | None,
+) -> None:
+    """walk-forward 백테스트 실행 + 표 출력 + 결과 저장.
+
+    각 윈도우마다 새 strategy 인스턴스 (state 누설 방지). 저장 형식:
+    - windows.csv: 윈도우별 메트릭 행.
+    - summary.json: WalkForwardSummary as_dict.
+    """
+    import csv as _csv
+    import json as _json
+
+    from .backtest.walk_forward import walk_forward
+
+    def _factory():
+        return registry.get(strategy_name, **strategy_params)
+
+    result = walk_forward(
+        _factory,
+        symbol,
+        df,
+        window_days=window_days,
+        step_days=step_days,
+        initial_cash=cash,
+    )
+
+    if result.summary.n_windows == 0:
+        console.print(
+            f"[yellow]Walk-forward 윈도우 0건 — 데이터 부족 (window_days={window_days}).[/yellow]"
+        )
+        raise typer.Exit(code=1)
+
+    # 윈도우 표.
+    table = Table(
+        title=f"Walk-Forward · {strategy_name} · {symbol} "
+        f"(window={window_days}d / step={step_days}d)"
+    )
+    table.add_column("#", justify="right")
+    table.add_column("기간")
+    table.add_column("Sharpe", justify="right")
+    table.add_column("CAGR%", justify="right")
+    table.add_column("MDD%", justify="right")
+    table.add_column("WinRate%", justify="right")
+    table.add_column("거래", justify="right")
+    for i, w in enumerate(result.windows, start=1):
+        rep = w.report
+        s_color = "green" if rep.sharpe > 0 else "red"
+        table.add_row(
+            str(i),
+            f"{w.start.date()} → {w.end.date()}",
+            f"[{s_color}]{rep.sharpe:.3f}[/{s_color}]",
+            f"{rep.cagr * 100:+.2f}",
+            f"{rep.max_drawdown * 100:.2f}",
+            f"{rep.win_rate * 100:.1f}",
+            str(rep.num_trades),
+        )
+    console.print(table)
+
+    # Summary.
+    s = result.summary
+    summary_table = Table(title="Summary")
+    summary_table.add_column("지표")
+    summary_table.add_column("값", justify="right")
+    summary_table.add_row("윈도우 개수", str(s.n_windows))
+    summary_table.add_row("Sharpe 평균", f"{s.sharpe_mean:.3f}")
+    summary_table.add_row("Sharpe 표준편차", f"{s.sharpe_std:.3f}")
+    summary_table.add_row("Sharpe min/max", f"{s.sharpe_min:.3f} / {s.sharpe_max:.3f}")
+    summary_table.add_row("양수 Sharpe 비율", f"{s.positive_sharpe_ratio:.1%}")
+    summary_table.add_row("CAGR 평균%", f"{s.cagr_mean_pct:+.2f}")
+    summary_table.add_row("CAGR 표준편차%", f"{s.cagr_std_pct:.2f}")
+    summary_table.add_row("최악 MDD%", f"{s.mdd_worst_pct:.2f}")
+    summary_table.add_row("승률 평균%", f"{s.win_rate_mean_pct:.2f}")
+    console.print(summary_table)
+
+    # 저장.
+    out = (
+        out_dir
+        or Path("data/backtests") / f"{strategy_name}_{symbol}_wf_{datetime.now():%Y%m%d_%H%M%S}"
+    )
+    out.mkdir(parents=True, exist_ok=True)
+
+    windows_path = out / "windows.csv"
+    with windows_path.open("w", newline="") as f:
+        writer = _csv.writer(f)
+        writer.writerow(
+            ["start", "end", "sharpe", "cagr", "max_drawdown", "win_rate", "num_trades"]
+        )
+        for w in result.windows:
+            r = w.report
+            writer.writerow(
+                [
+                    w.start.isoformat(),
+                    w.end.isoformat(),
+                    f"{r.sharpe:.6f}",
+                    f"{r.cagr:.6f}",
+                    f"{r.max_drawdown:.6f}",
+                    f"{r.win_rate:.6f}",
+                    r.num_trades,
+                ]
+            )
+
+    summary_path = out / "summary.json"
+    summary_path.write_text(
+        _json.dumps(
+            {
+                "n_windows": s.n_windows,
+                "sharpe_mean": s.sharpe_mean,
+                "sharpe_std": s.sharpe_std,
+                "sharpe_min": s.sharpe_min,
+                "sharpe_max": s.sharpe_max,
+                "cagr_mean_pct": s.cagr_mean_pct,
+                "cagr_std_pct": s.cagr_std_pct,
+                "mdd_worst_pct": s.mdd_worst_pct,
+                "win_rate_mean_pct": s.win_rate_mean_pct,
+                "positive_sharpe_ratio": s.positive_sharpe_ratio,
+                "window_days": window_days,
+                "step_days": step_days,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    console.print(f"[green]결과 저장:[/green] {out}")
 
 
 def _coerce_param(value: str) -> object:
