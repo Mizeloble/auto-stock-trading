@@ -1259,6 +1259,83 @@ def detect_regime(
     console.print(f"[bold]권장:[/bold] {hint}")
 
 
+@app.command("backtest-compare")
+def backtest_compare(
+    run1: Path = typer.Argument(..., help="기준 백테스트 결과 폴더 (report.json 포함)."),
+    run2: Path = typer.Argument(..., help="비교 대상 폴더 (보통 새로 돌린 결과)."),
+) -> None:
+    """두 백테스트 결과 비교 — Sharpe/CAGR/MDD/win-rate 차이 표.
+
+    무엇/왜:
+    - 전략·파라미터 변경 후 회귀 즉시 감지 (이 PR 후 Sharpe 0.1 떨어졌나?).
+    - 각 폴더의 `report.json` (engine.save_result 가 저장) 만 읽음. 외부 호출 X.
+
+    어떻게 확인:
+    - `auto-trade backtest --strategy sma_crossover --symbol 005930 --from 2024-01-01 --out data/backtests/baseline`
+    - 코드 변경 후: `--out data/backtests/new`
+    - `auto-trade backtest-compare data/backtests/baseline data/backtests/new`
+    """
+    import json as _json
+
+    def _load(path: Path) -> dict:
+        report = path / "report.json"
+        if not report.exists():
+            console.print(f"[red]report.json 없음:[/red] {report}")
+            raise typer.Exit(code=1)
+        try:
+            return _json.loads(report.read_text(encoding="utf-8"))
+        except (OSError, _json.JSONDecodeError) as exc:
+            console.print(f"[red]파싱 실패:[/red] {report} — {exc}")
+            raise typer.Exit(code=1) from exc
+
+    d1 = _load(run1)
+    d2 = _load(run2)
+
+    # 메트릭별 (label, key, higher_is_better, format).
+    # higher_is_better=None 이면 색상 X (단순 사실).
+    metrics: list[tuple[str, str, bool | None, str]] = [
+        ("초기 자본", "initial_equity", None, "{:,.0f}"),
+        ("최종 자본", "final_equity", None, "{:,.0f}"),
+        ("총 수익률 %", "total_return_pct", True, "{:+.2f}"),
+        ("CAGR %", "cagr_pct", True, "{:+.2f}"),
+        ("Sharpe", "sharpe", True, "{:.3f}"),
+        ("연환산 변동성 %", "annualized_vol_pct", False, "{:.2f}"),
+        ("최대 낙폭 %", "max_drawdown_pct", True, "{:.2f}"),  # 음수라 큰 값(0에 가까움)이 좋음
+        ("승률 %", "win_rate_pct", True, "{:.2f}"),
+        ("거래 횟수", "num_trades", None, "{:,}"),
+        ("라운드트립", "num_round_trips", None, "{:,}"),
+    ]
+
+    table = Table(title=f"백테스트 비교 · {run1.name} → {run2.name}")
+    table.add_column("항목")
+    table.add_column(run1.name, justify="right")
+    table.add_column(run2.name, justify="right")
+    table.add_column("차이", justify="right")
+
+    for label, key, higher_better, fmt in metrics:
+        v1 = d1.get(key)
+        v2 = d2.get(key)
+        if v1 is None or v2 is None:
+            continue
+        diff = float(v2) - float(v1)
+        # 부호 명시 — 음수면 fmt 가 자동으로 '-' 붙임, 양수는 '+' 수동 prefix.
+        diff_str = ("+" if diff > 0 else "") + fmt.format(diff)
+        if higher_better is None or abs(diff) < 1e-9:
+            color = "white"
+        elif (diff > 0) == higher_better:
+            color = "green"
+        else:
+            color = "red"
+        table.add_row(
+            label,
+            fmt.format(float(v1)),
+            fmt.format(float(v2)),
+            f"[{color}]{diff_str}[/{color}]",
+        )
+
+    console.print(table)
+
+
 orders_app = typer.Typer(help="주문 저널 진단·복구 도구.")
 app.add_typer(orders_app, name="orders")
 
