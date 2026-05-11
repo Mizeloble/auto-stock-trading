@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # 비어있으면 인커밍 명령 비활성 — 봇은 어떤 메시지에도 응답하지 않는다.
     telegram_allowed_chat_ids: str = ""
 
+    # 29단계 PR25 (#12) — Discord 웹훅 fallback 채널. 텔레그램과 동시 활성 시
+    # 모든 알림이 양쪽으로 fan-out (한 채널 다운 방어). 비어있으면 비활성.
+    discord_webhook_url: SecretStr = SecretStr("")
+
     # Claude API (선택). 키가 있을 때만 `auto-trade strategy advise` 가 동작.
     # 모델 ID 는 환경별 override 가능 — Sonnet 계열로 비용 낮출 수 있음.
     anthropic_api_key: SecretStr = SecretStr("")
@@ -85,6 +89,10 @@ class Settings(BaseSettings):
     @property
     def has_telegram(self) -> bool:
         return bool(self.telegram_bot_token.get_secret_value() and self.telegram_chat_id)
+
+    @property
+    def has_discord(self) -> bool:
+        return bool(self.discord_webhook_url.get_secret_value())
 
     @property
     def parsed_allowed_chat_ids(self) -> set[str]:

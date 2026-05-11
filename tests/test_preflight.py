@@ -19,6 +19,7 @@ from auto_trading.preflight import (
     check_heartbeat_recent,
     check_latest_backtest_sharpe,
     check_llm_cost_within_budget,
+    check_multi_channel_alerts,
     check_no_pending_orders,
     check_recent_paper_day_mdd,
     check_risk_limits_active,
@@ -269,12 +270,39 @@ def test_llm_cost_passes_with_alert_warning(tmp_path: Path) -> None:
     assert "알림 임계" in result.detail
 
 
+# ---- check_multi_channel_alerts (29단계 PR25) -------------------------------
+
+
+def test_multi_channel_passes_when_both_active() -> None:
+    result = check_multi_channel_alerts(has_telegram=True, has_discord=True)
+    assert result.ok is True
+    assert "Telegram + Discord" in result.detail
+
+
+def test_multi_channel_fails_when_only_telegram() -> None:
+    result = check_multi_channel_alerts(has_telegram=True, has_discord=False)
+    assert result.ok is False
+    assert "Telegram" in result.detail
+
+
+def test_multi_channel_fails_when_only_discord() -> None:
+    result = check_multi_channel_alerts(has_telegram=False, has_discord=True)
+    assert result.ok is False
+    assert "Discord" in result.detail
+
+
+def test_multi_channel_fails_when_no_channels() -> None:
+    result = check_multi_channel_alerts(has_telegram=False, has_discord=False)
+    assert result.ok is False
+    assert "0개" in result.detail
+
+
 # ---- run_all_gates -----------------------------------------------------------
 
 
 def test_run_all_gates_returns_active_plus_skipped(tmp_path: Path) -> None:
-    """5 활성 + 1 conditional(llm_cost — None 경로 → skipped) + 3 placeholder = 9건.
-    skipped 는 항상 4건 (3 placeholder + llm_cost 비활성)."""
+    """5 활성 + 1 conditional(llm_cost None → skipped) + 1 multi_channel_alerts +
+    2 placeholder = 9건. skipped 는 3건 (2 placeholder + llm_cost 비활성)."""
     results = run_all_gates(
         profile_path=tmp_path / "p.yaml",
         journal_path=tmp_path / "state.jsonl",
@@ -282,13 +310,16 @@ def test_run_all_gates_returns_active_plus_skipped(tmp_path: Path) -> None:
         reports_root=tmp_path / "reports",
         backtests_root=tmp_path / "backtests",
     )
+    # 5 기본 활성 + 1 llm_cost(None→skipped) + 1 multi_channel + 2 placeholder = 9.
     assert len(results) == 9
     skipped = [r for r in results if r.skipped]
-    assert len(skipped) == 4
+    # 2 placeholder + llm_cost(None) = 3.
+    assert len(skipped) == 3
     active = [r for r in results if not r.skipped]
     assert all(isinstance(r, GateResult) for r in active)
-    # journal 미존재는 "실행 이력 0" 으로 정상 (no_pending_orders 통과). 나머지 4 활성은 실패.
+    # journal 미존재 = no_pending_orders 통과. multi_channel_alerts 도 default(False/False)
+    # 면 fail. 나머지 4 + multi_channel 1 = 5 fail.
     failed_active = [r for r in active if not r.ok]
-    assert len(failed_active) == 4
+    assert len(failed_active) == 5
     passed_active_names = {r.name for r in active if r.ok}
     assert passed_active_names == {"no_pending_orders"}

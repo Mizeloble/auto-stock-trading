@@ -1336,6 +1336,8 @@ def preflight(
         backtests_root=backtests_root,
         llm_cost_path=settings.llm_cost_path,
         llm_monthly_budget_usd=settings.llm_monthly_budget_usd,
+        has_telegram=settings.has_telegram,
+        has_discord=settings.has_discord,
     )
 
     table = Table(title="실거래 전 안전 체크리스트")

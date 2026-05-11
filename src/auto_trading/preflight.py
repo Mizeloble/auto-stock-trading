@@ -40,6 +40,7 @@ __all__ = [
     "check_heartbeat_recent",
     "check_latest_backtest_sharpe",
     "check_llm_cost_within_budget",
+    "check_multi_channel_alerts",
     "check_no_pending_orders",
     "check_recent_paper_day_mdd",
     "check_risk_limits_active",
@@ -298,12 +299,36 @@ def check_llm_cost_within_budget(
     )
 
 
+def check_multi_channel_alerts(has_telegram: bool, has_discord: bool) -> GateResult:
+    """29단계 PR25 (#12) — 알림 채널이 2개 이상 활성 (한 채널 다운 방어).
+
+    검사 기준:
+    - Telegram + Discord 둘 다 활성 → ok.
+    - 한 채널만 활성 → 실패 (한 채널 다운 시 침묵 위험).
+    - 둘 다 비활성 → 실패 + 별도 detail (사실상 NoopNotifier — 알림 없음).
+    """
+    name = "multi_channel_alerts"
+    if has_telegram and has_discord:
+        return GateResult(name=name, ok=True, detail="Telegram + Discord 활성 (fan-out)")
+    if not has_telegram and not has_discord:
+        return GateResult(
+            name=name,
+            ok=False,
+            detail="알림 채널 0개 — TELEGRAM_BOT_TOKEN / DISCORD_WEBHOOK_URL 중 최소 하나 활성 필요",
+        )
+    single = "Telegram" if has_telegram else "Discord"
+    return GateResult(
+        name=name,
+        ok=False,
+        detail=f"{single} 만 활성 — fallback 채널 1개 더 추가 권장 (단일 채널 다운 시 침묵)",
+    )
+
+
 # ---- 미구현 placeholder ------------------------------------------------------
 
 
 _SKIPPED_GATES: tuple[tuple[str, str], ...] = (
     ("kill_switch_simulation", "PR 미구현 — 강제 -3% 시나리오로 kill-switch 발화 검증"),
-    ("multi_channel_alerts", "PR 미구현 (#12) — 텔레그램 외 fallback 채널 ack"),
     ("corporate_action_cache_fresh", "PR 미구현 (#11) — KRX 액면분할/배당락 캐시 7일 이내"),
 )
 
@@ -327,6 +352,8 @@ def run_all_gates(
     backtests_root: Path,
     llm_cost_path: Path | None = None,
     llm_monthly_budget_usd: float = 5.0,
+    has_telegram: bool = False,
+    has_discord: bool = False,
 ) -> list[GateResult]:
     """모든 게이트 실행 → 결과 리스트 (선언 순서대로).
 
@@ -341,6 +368,7 @@ def run_all_gates(
         (check_recent_paper_day_mdd, (reports_root,)),
         (check_latest_backtest_sharpe, (backtests_root,)),
         (check_llm_cost_within_budget, (llm_cost_path, llm_monthly_budget_usd)),
+        (check_multi_channel_alerts, (has_telegram, has_discord)),
     ):
         try:
             results.append(fn(*args))

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from ..config import Settings, get_settings
 from .base import NoopNotifier, Notifier
+from .discord import DiscordNotifier
+from .multi import MultiNotifier
 from .telegram import TelegramNotifier
 from .telegram_commands import (
     ControlAction,
@@ -15,13 +17,30 @@ from .telegram_commands import (
 
 
 def build_notifier(settings: Settings | None = None) -> Notifier:
+    """활성 채널을 모아 단일 Notifier 반환.
+
+    - 둘 다 활성: `MultiNotifier(Telegram, Discord)` — fan-out.
+    - 텔레그램만: `TelegramNotifier`.
+    - Discord 만: `DiscordNotifier`.
+    - 둘 다 비활성: `NoopNotifier`.
+    """
     s = settings or get_settings()
+    notifiers: list[Notifier] = []
     if s.has_telegram:
-        return TelegramNotifier(
-            token=s.telegram_bot_token.get_secret_value(),
-            chat_id=s.telegram_chat_id,
+        notifiers.append(
+            TelegramNotifier(
+                token=s.telegram_bot_token.get_secret_value(),
+                chat_id=s.telegram_chat_id,
+            )
         )
-    return NoopNotifier()
+    if s.has_discord:
+        notifiers.append(DiscordNotifier(webhook_url=s.discord_webhook_url.get_secret_value()))
+
+    if not notifiers:
+        return NoopNotifier()
+    if len(notifiers) == 1:
+        return notifiers[0]
+    return MultiNotifier(notifiers)
 
 
 def build_command_handler(
