@@ -371,7 +371,13 @@ class PaperRunner:
         self._balance_failures = 0
         positions = {h.symbol: h.quantity for h in snap.holdings}
         avg_prices = {h.symbol: float(h.avg_price) for h in snap.holdings}
-        equity = float(snap.total_evaluation) or float(snap.deposit)
+        # 29단계 회귀(2026-05-11) — total_equity 는 "예수금 + 보유 평가금" 으로 명시 계산.
+        # 키움 `tot_evlt_amt` 는 모드/응답 버전에 따라 보유 평가금만 담는 경우가 있어
+        # 이를 그대로 day_start_equity 분모로 쓰면 일부 매도 직후 분자만 줄어든 것처럼
+        # 보여 kill switch 가 오발동(예: 12주→부분 익절 6주에서 today_change≈-47% 로 계산)함.
+        # 두 필드를 합산하면 매도가 cash↑·equity↓ 로 상쇄돼 안정.
+        holdings_value = sum(float(h.market_value) for h in snap.holdings)
+        equity = float(snap.deposit) + holdings_value
         day_start = previous.day_start_equity if previous and previous.day_start_equity else equity
         # 23단계 Phase B — 잔고 갱신은 누적 매수대금을 리셋하지 않음 (러너 재시작 = 자정 리셋).
         today_notional = previous.today_notional_used if previous is not None else 0.0

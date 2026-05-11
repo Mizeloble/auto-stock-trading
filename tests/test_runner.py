@@ -15,12 +15,19 @@ from auto_trading.runner import PaperRunner
 from auto_trading.strategy.sma_crossover import SmaCrossover
 
 
-def _snapshot(deposit: int = 1_000_000, equity: int = 1_500_000) -> AccountSnapshot:
+def _snapshot(
+    deposit: int = 1_000_000,
+    equity: int = 1_500_000,
+    *,
+    holdings: list[Holding] | None = None,
+) -> AccountSnapshot:
     return AccountSnapshot(
         deposit=Decimal(deposit),
         total_evaluation=Decimal(equity),
         total_pnl=Decimal(0),
-        holdings=[
+        holdings=holdings
+        if holdings is not None
+        else [
             Holding(
                 symbol="005930",
                 name="삼성전자",
@@ -52,22 +59,57 @@ async def test_snapshot_success_resets_failure_counter() -> None:
 
     assert r._balance_failures == 0
     assert state.deposit == 1_000_000
-    assert state.day_start_equity == 1_500_000  # 최초 스냅샷이므로 오늘 시작치로 고정
+    # total_equity 는 예수금 + 보유 평가금 합계 (deposit 1_000_000 + market_value 650_000).
+    assert state.total_equity == 1_650_000
+    assert state.day_start_equity == 1_650_000  # 최초 스냅샷이므로 오늘 시작치로 고정
 
 
 async def test_snapshot_preserves_day_start_equity_across_refreshes() -> None:
     """하루 시작 에쿼티는 첫 스냅샷 값을 계속 유지해야 일일 손실 한도가 정확하게 계산된다."""
     r = _runner()
 
-    with patch.object(runner_module, "get_balance", return_value=_snapshot(equity=1_500_000)):
+    holdings_650k = [
+        Holding(
+            symbol="005930",
+            name="삼성전자",
+            quantity=10,
+            avg_price=Decimal("60000"),
+            current_price=Decimal("65000"),
+            market_value=Decimal("650000"),
+            pnl=Decimal("50000"),
+            pnl_pct=Decimal("8.3"),
+        ),
+    ]
+    holdings_550k = [
+        Holding(
+            symbol="005930",
+            name="삼성전자",
+            quantity=10,
+            avg_price=Decimal("60000"),
+            current_price=Decimal("55000"),
+            market_value=Decimal("550000"),
+            pnl=Decimal("-50000"),
+            pnl_pct=Decimal("-8.3"),
+        ),
+    ]
+
+    with patch.object(
+        runner_module,
+        "get_balance",
+        return_value=_snapshot(deposit=1_000_000, holdings=holdings_650k),
+    ):
         first = await r._snapshot_account(rest=object(), previous=None)  # type: ignore[arg-type]
 
-    with patch.object(runner_module, "get_balance", return_value=_snapshot(equity=1_400_000)):
+    with patch.object(
+        runner_module,
+        "get_balance",
+        return_value=_snapshot(deposit=1_000_000, holdings=holdings_550k),
+    ):
         second = await r._snapshot_account(rest=object(), previous=first)  # type: ignore[arg-type]
 
-    assert first.day_start_equity == 1_500_000
-    assert second.day_start_equity == 1_500_000  # 유지
-    assert second.total_equity == 1_400_000
+    assert first.day_start_equity == 1_650_000  # 1_000_000 cash + 650_000 holdings
+    assert second.day_start_equity == 1_650_000  # 유지
+    assert second.total_equity == 1_550_000  # 1_000_000 cash + 550_000 holdings
 
 
 async def test_snapshot_failure_returns_previous_state() -> None:
@@ -100,6 +142,69 @@ async def test_snapshot_raises_after_max_consecutive_failures() -> None:
         await r._snapshot_account(rest=object(), previous=good)  # type: ignore[arg-type]
         with pytest.raises(RuntimeError, match="balance fetch failed"):
             await r._snapshot_account(rest=object(), previous=good)  # type: ignore[arg-type]
+
+
+async def test_snapshot_total_equity_stable_across_partial_sell() -> None:
+    """2026-05-11 회귀: 부분 익절 직후 today_change 가 -50% 로 잘못 계산돼 kill switch 가
+    오발동한 사건. total_equity 가 'deposit + holdings_market_value' 로 계산되면 매도가
+    cash 증가·holdings 감소로 상쇄돼 안정해야 한다.
+
+    시나리오:
+    1) 12주 보유, 현재가 284,500 → holdings 3,414,000 + cash 46,694,000 → equity 50,108,000
+    2) 부분 익절 6주 매도 → holdings 1,707,000 + cash 48,401,000 → equity 50,108,000
+       (즉 day_start_equity 와의 비율이 거의 0% — kill switch 발화 X)
+    """
+    r = _runner()
+
+    before_partial = [
+        Holding(
+            symbol="005930",
+            name="삼성전자",
+            quantity=12,
+            avg_price=Decimal("275500"),
+            current_price=Decimal("284500"),
+            market_value=Decimal("3414000"),
+            pnl=Decimal("108000"),
+            pnl_pct=Decimal("3.27"),
+        ),
+    ]
+    after_partial = [
+        Holding(
+            symbol="005930",
+            name="삼성전자",
+            quantity=6,
+            avg_price=Decimal("275500"),
+            current_price=Decimal("284500"),
+            market_value=Decimal("1707000"),
+            pnl=Decimal("54000"),
+            pnl_pct=Decimal("3.27"),
+        ),
+    ]
+    snap_before = AccountSnapshot(
+        deposit=Decimal("46694000"),
+        total_evaluation=Decimal("3414000"),
+        total_pnl=Decimal("108000"),
+        holdings=before_partial,
+    )
+    snap_after = AccountSnapshot(
+        deposit=Decimal("48401000"),
+        total_evaluation=Decimal("1707000"),
+        total_pnl=Decimal("54000"),
+        holdings=after_partial,
+    )
+
+    with patch.object(runner_module, "get_balance", return_value=snap_before):
+        first = await r._snapshot_account(rest=object(), previous=None)  # type: ignore[arg-type]
+    with patch.object(runner_module, "get_balance", return_value=snap_after):
+        second = await r._snapshot_account(rest=object(), previous=first)  # type: ignore[arg-type]
+
+    # day_start_equity 는 첫 스냅샷 시점 fixed.
+    assert first.day_start_equity == 50_108_000
+    assert second.day_start_equity == 50_108_000
+    # 부분 익절 직후 total_equity 가 거의 그대로 — kill switch 의 today_change 거의 0.
+    assert second.total_equity == pytest.approx(50_108_000)
+    today_change = second.total_equity / second.day_start_equity - 1.0
+    assert abs(today_change) < 0.001  # 1‰ 미만, -3% 한도와 한참 멀어야
 
 
 async def test_snapshot_first_call_failure_propagates() -> None:
