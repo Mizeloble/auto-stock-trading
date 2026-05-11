@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr = SecretStr("")
     anthropic_model: str = "claude-opus-4-7"
 
+    # 29단계 PR15 (#16) — LLM 비용 누적 추적. None 이면 비활성 (기존 동작 호환).
+    # 운영에선 .env 의 `LLM_COST_PATH=data/llm-cost.jsonl` 으로 활성.
+    # 한도 초과 시 LLMBudgetExceeded raise → 호출자가 catch 해서 사용자에게 안내.
+    llm_cost_path: Path | None = None
+    llm_monthly_budget_usd: float = 5.0  # memory cost discipline — 월 $5
+
     @property
     def rest_base_url(self) -> str:
         return (

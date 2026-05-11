@@ -16,6 +16,7 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 from ..llm import extract_tool_use_input
+from ..llm.cost import check_budget_or_raise, get_default_tracker, record_response
 from .profile import StrategyName, StrategyProfile
 from .scanner import RegimeReport
 
@@ -124,6 +125,9 @@ def advise(
 ) -> AdvisorResponse:
     """LLM 호출 → AdvisorResponse. 검증 실패 시 ValidationError raise."""
     user_payload = _build_user_payload(profile, df, report)
+    # 29단계 PR15 — 호출 직전 한도 검사 + 호출 직후 record. 미활성(None) 시 no-op.
+    tracker = get_default_tracker()
+    check_budget_or_raise(tracker)
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -151,6 +155,7 @@ def advise(
         ],
     )
 
+    record_response(tracker, response, model=model)
     tool_input = extract_tool_use_input(response, "propose_change")
     return AdvisorResponse.model_validate(
         {

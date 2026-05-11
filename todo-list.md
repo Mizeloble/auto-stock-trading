@@ -88,7 +88,13 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 새 plist `scripts/launchd/com.mizeloble.auto-trade.heartbeat-check.plist` — 5분(StartInterval=300) 간격, RunAtLoad=false.
   - `launchd-install.sh` / `launchd-uninstall.sh` 의 LABELS 에 라벨 추가, chmod +x 자동.
   - 사용자 수동 작업: `./scripts/launchd-install.sh` 한 번만 실행하면 끝.
-- [ ] **PR15 · `feat(llm): 비용 추적 wiring + preflight 게이트 활성 — #16 2차`** — 3개 호출 지점에 cost_tracker.record + budget alert/over 시 텔레그램 + LLM 차단.
+- [x] **PR15 · `feat(llm): 비용 추적 wiring + preflight 게이트 활성 — #16 2차`**
+  - 새 모듈 `llm/cost.py` — `get_default_tracker()` / `LLMBudgetExceeded` / `check_budget_or_raise()` / `record_response()` 어댑터.
+  - `Settings.llm_cost_path: Path | None` (default 비활성) + `llm_monthly_budget_usd: float = 5.0` 추가. `.env.example` 갱신.
+  - 3개 LLM 호출 지점 wiring — `news/proposal.py:propose_daytrade_profile` / `notify/insight.py:propose_insight` / `strategy/llm_advisor.py:advise`. 호출 직전 한도 검사 + 호출 직후 record. 미활성 시 no-op.
+  - preflight 의 `llm_cost_within_budget` placeholder → 활성 게이트로 승격. cost_path None 이면 skipped, 활성 시 실 게이트.
+  - 테스트 16건 (cost helper 11 + preflight 게이트 4 + 통합 1). 685 전체 통과.
+  - **운영 활성**: `.env` 에 `LLM_COST_PATH=data/llm-cost.jsonl` 추가 시 자동 누적 + 월 $5 한도 초과 시 LLM 호출 차단 + preflight 가 한도 검증.
 - [x] **PR12 · `feat(kiwoom): OAuth 토큰 디스크 캐시 — #21`**
   - `TokenProvider.cache_path: Path | None` 추가 — 시동 시 자동 로드, 발급 후 자동 저장, invalidate 시 자동 삭제.
   - 만료 마진(REFRESH_MARGIN=10분) 안의 캐시는 무시하고 새로 발급. 손상된 JSON / 형식 오류는 swallow + 로그 → 정상 발급 fallback.

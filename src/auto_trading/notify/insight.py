@@ -21,6 +21,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 from ..llm import extract_tool_use_input
+from ..llm.cost import check_budget_or_raise, get_default_tracker, record_response
 from ..reports.daily import DailyReport, load_daily_report
 
 
@@ -175,6 +176,9 @@ def insight(
     빈 입력도 안전 처리하지만 LLM 응답이 의미 있을 가능성은 낮다.
     """
     payload = _summarize_reports(reports)
+    # 29단계 PR15 — 호출 직전 한도 검사 + 호출 직후 record. 미활성(None) 시 no-op.
+    tracker = get_default_tracker()
+    check_budget_or_raise(tracker)
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -201,6 +205,7 @@ def insight(
             }
         ],
     )
+    record_response(tracker, response, model=model)
     tool_input = extract_tool_use_input(response, "propose_insight")
     return InsightResponse.model_validate(tool_input)
 

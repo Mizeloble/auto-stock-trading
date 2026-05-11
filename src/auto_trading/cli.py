@@ -1130,12 +1130,15 @@ def preflight(
 
     from .preflight import run_all_gates
 
+    settings = get_settings()
     results = run_all_gates(
         profile_path=profile,
         journal_path=journal,
         heartbeat_path=heartbeat_path,
         reports_root=reports_root,
         backtests_root=backtests_root,
+        llm_cost_path=settings.llm_cost_path,
+        llm_monthly_budget_usd=settings.llm_monthly_budget_usd,
     )
 
     table = Table(title="실거래 전 안전 체크리스트")

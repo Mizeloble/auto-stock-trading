@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
-from auto_trading._common import Side
+from auto_trading._common import KST, Side
 from auto_trading.account.order_journal import OrderJournal
 from auto_trading.account.orders import Order
+from auto_trading.llm.cost_tracker import CostTracker
 from auto_trading.preflight import (
     GateResult,
     check_heartbeat_recent,
     check_latest_backtest_sharpe,
+    check_llm_cost_within_budget,
     check_no_pending_orders,
     check_recent_paper_day_mdd,
     check_risk_limits_active,
@@ -210,11 +213,68 @@ def test_latest_backtest_sharpe_fails_when_no_runs(tmp_path: Path) -> None:
     assert result.ok is False
 
 
+# ---- check_llm_cost_within_budget (29단계 PR15) -----------------------------
+
+
+def test_llm_cost_skipped_when_path_none() -> None:
+    """cost 추적 비활성 환경 → skipped 로 표시 (활성 게이트 X)."""
+    result = check_llm_cost_within_budget(None)
+    assert result.skipped is True
+    assert "비활성" in result.detail
+
+
+def test_llm_cost_passes_when_under_budget(tmp_path: Path) -> None:
+    path = tmp_path / "cost.jsonl"
+    tracker = CostTracker(path=path, monthly_budget_usd=5.0)
+    tracker.record(
+        model="claude-opus-4-7",
+        input_tokens=1_000,
+        output_tokens=500,
+        ts=datetime.now(tz=KST),
+    )
+    result = check_llm_cost_within_budget(path, monthly_budget_usd=5.0)
+    assert result.ok is True
+    assert result.skipped is False
+    assert "$5.00" in result.detail
+
+
+def test_llm_cost_fails_when_over_budget(tmp_path: Path) -> None:
+    path = tmp_path / "cost.jsonl"
+    tracker = CostTracker(path=path, monthly_budget_usd=0.5)
+    tracker.record(
+        model="claude-opus-4-7",
+        input_tokens=10_000,
+        output_tokens=10_000,
+        ts=datetime.now(tz=KST),
+    )
+    result = check_llm_cost_within_budget(path, monthly_budget_usd=0.5)
+    assert result.ok is False
+    assert result.skipped is False
+    assert "한도 초과" in result.detail
+
+
+def test_llm_cost_passes_with_alert_warning(tmp_path: Path) -> None:
+    """알림 임계(80%) 도달했지만 한도 초과는 아닐 때 — ok=True 단 detail 에 경고."""
+    path = tmp_path / "cost.jsonl"
+    tracker = CostTracker(path=path, monthly_budget_usd=1.0)
+    # $0.9 사용 — 90% (alert ≥80%, over <100%).
+    tracker.record(
+        model="claude-opus-4-7",
+        input_tokens=10_000,
+        output_tokens=10_000,
+        ts=datetime.now(tz=KST),
+    )
+    result = check_llm_cost_within_budget(path, monthly_budget_usd=1.0)
+    assert result.ok is True  # 100% 미만은 통과
+    assert "알림 임계" in result.detail
+
+
 # ---- run_all_gates -----------------------------------------------------------
 
 
 def test_run_all_gates_returns_active_plus_skipped(tmp_path: Path) -> None:
-    """5 활성 + 4 placeholder = 9건. 활성은 실패해도 collect 되고, skipped 는 항상 4건."""
+    """5 활성 + 1 conditional(llm_cost — None 경로 → skipped) + 3 placeholder = 9건.
+    skipped 는 항상 4건 (3 placeholder + llm_cost 비활성)."""
     results = run_all_gates(
         profile_path=tmp_path / "p.yaml",
         journal_path=tmp_path / "state.jsonl",
