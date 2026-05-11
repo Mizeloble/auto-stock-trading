@@ -1334,6 +1334,66 @@ def detect_regime(
     console.print(f"[bold]권장:[/bold] {hint}")
 
 
+data_app = typer.Typer(help="데이터 파일 진단·정합성 검사.")
+app.add_typer(data_app, name="data")
+
+
+@data_app.command("check")
+def data_check(
+    reports_root: Path = typer.Option(
+        Path("data/reports"),
+        "--reports-root",
+        help="daily-*.json 폴더.",
+    ),
+    journal: Path = typer.Option(
+        Path("data/orders/state.jsonl"),
+        "--journal",
+        help="주문 저널.",
+    ),
+) -> None:
+    """데이터 정합성 일괄 검사 — 깨진 파일이 백테스트/리포트를 오염시키기 전에 잡는다.
+
+    무엇/왜:
+    - `data/reports/daily-*.json` — JSON valid + date 필드 + 파일명 일치 + 비정상 PnL% 검출.
+    - `data/orders/state.jsonl` — 라인 단위 JSON + event/client_id 필수 + 알려진 event 값.
+    - 손상된 파일을 *조기 발견* 하면 디버깅 비용 절약.
+
+    어떻게 확인:
+    - 깨끗하면 `✓ 모든 데이터 정합성 통과.` + exit 0.
+    - error 1건 이상 → exit 1. warning 만 있으면 exit 0 (정보용).
+    """
+    from .monitor.data_integrity import run_all_checks, severity_counts
+
+    issues = run_all_checks(reports_root=reports_root, journal_path=journal)
+    if not issues:
+        console.print("[green]✓ 모든 데이터 정합성 통과.[/green]")
+        console.print(f"[dim]검사: reports={reports_root}, journal={journal}[/dim]")
+        return
+
+    table = Table(title=f"데이터 정합성 issue ({len(issues)}건)")
+    table.add_column("심각도", justify="center")
+    table.add_column("종류")
+    table.add_column("파일")
+    table.add_column("상세")
+    for issue in issues:
+        color = "red" if issue.severity == "error" else "yellow"
+        sev = f"[{color}]{issue.severity}[/{color}]"
+        # 파일 경로는 마지막 두 단계만 (긴 절대경로 줄임).
+        path_short = "/".join(Path(issue.path).parts[-2:])
+        table.add_row(sev, issue.kind, path_short, issue.detail[:80])
+    console.print(table)
+
+    err, warn = severity_counts(issues)
+    if err > 0:
+        console.print(
+            f"[red]✗ error {err}건[/red]"
+            + (f" + warning {warn}건" if warn else "")
+            + " — 데이터 정리 후 다시 실행."
+        )
+        raise typer.Exit(code=1)
+    console.print(f"[yellow]⚠ warning {warn}건 (error 없음)[/yellow]")
+
+
 @app.command("backtest-compare")
 def backtest_compare(
     run1: Path = typer.Argument(..., help="기준 백테스트 결과 폴더 (report.json 포함)."),
