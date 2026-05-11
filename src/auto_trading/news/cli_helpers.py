@@ -21,6 +21,7 @@ import structlog
 
 from ..market import calendar as krx_calendar
 from ..reports.daily import DailyReport
+from ..strategy.scanner import RegimeReport
 from .collector import NewsItem
 from .profile_writer import ApplyResult, apply_and_persist, format_apply_message
 from .proposal import DaytradeProposal, propose_daytrade_profile
@@ -76,15 +77,20 @@ def run_weekly_proposal_cycle(
     client: Any,  # anthropic.Anthropic — 호출자가 _build_anthropic_client 로 주입
     model: str,
     max_news_items: int,
+    regime: RegimeReport | None = None,
 ) -> tuple[DaytradeProposal, ApplyResult, str]:
     """LLM 호출 → 안전 캡 적용 → 콘솔/텔레그램용 한국어 메시지까지.
 
     target_path 가 None 이면 current_path 를 그대로 덮어쓰기.
+
+    `regime` — 29단계 PR18 (#5 일부). 시장국면을 LLM 입력에 추가해 더 정확한
+    프로파일 제안을 받는다. None 이면 기존 동작 (reports + news 만).
     """
     proposal = propose_daytrade_profile(
         inputs.reports,
         inputs.news,
         client=client,
+        regime=regime,
         model=model,
         max_news_items=max_news_items,
     )

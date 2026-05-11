@@ -88,6 +88,14 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 새 plist `scripts/launchd/com.mizeloble.auto-trade.heartbeat-check.plist` — 5분(StartInterval=300) 간격, RunAtLoad=false.
   - `launchd-install.sh` / `launchd-uninstall.sh` 의 LABELS 에 라벨 추가, chmod +x 자동.
   - 사용자 수동 작업: `./scripts/launchd-install.sh` 한 번만 실행하면 끝.
+- [x] **PR18 · `feat(news): weekly-proposal 에 시장국면 입력 추가 — #5 일부`**
+  - `propose_daytrade_profile` 시그니처에 `regime: RegimeReport | None = None` 추가.
+  - `_summarize_regime` 새 헬퍼 — None 이면 빈 dict, 활성 시 regime/summary_ko/metrics 노출.
+  - `SYSTEM_PROMPT_KO` 갱신 — regime 별 가이드 4개 카테고리 (trend_up/trend_down/range/high_vol) 일반 조정 방향.
+  - `run_weekly_proposal_cycle` 시그니처에 `regime` 추가 → propose 로 그대로 전달.
+  - `cli.py weekly_proposal` 시동 시 KODEX 200 60일봉 fetch + classify. 실패는 swallow (regime=None 으로 fallback). dry-run 도 regime 출력.
+  - 토요일 cron LLM 호출이 시장국면 인식 → 더 정확한 daytrade 프로파일 제안.
+  - 테스트 6건 (_summarize_regime 2 + propose payload 2 + cycle 전달 2). 703 전체 통과.
 - [x] **PR17 · `feat(cli): detect-regime 시장국면 진단 — #5 사전 작업`**
   - 새 명령 `auto-trade detect-regime` — KODEX 200(069500) 60일봉 → `scanner.classify()` → 시장국면(추세상승/추세하락/박스/고변동성) + 지표 표 + 권장 메시지.
   - `--symbol` (default 069500) / `--days` (default 60) 옵션.

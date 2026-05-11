@@ -898,6 +898,19 @@ def weekly_proposal(
     if inputs.is_empty:
         console.print("[red]데이터 부족:[/red] reports + news 모두 비어있습니다.")
         raise typer.Exit(code=1)
+
+    # 29단계 PR18 (#5 일부) — 현재 시장국면을 LLM 입력에 추가.
+    # KOSPI 200 추종 ETF(069500) 60일봉 → classify. fetch 실패는 swallow (regime=None
+    # 으로 LLM 호출 — 기존 동작 유지). LLM 비용 절약 위해 dry-run 도 시도.
+    regime: scanner.RegimeReport | None = None
+    try:
+        regime_bars = _fetch_daily_bars("069500")
+        regime_df = bars_to_dataframe(regime_bars).tail(60)
+        regime = scanner.classify(regime_df, lookback=60)
+        console.print(f"[cyan]시장국면:[/cyan] {regime.regime.value} — {regime.summary_ko}")
+    except Exception as exc:
+        console.print(f"[dim]regime 분류 생략 (fetch 실패): {exc}[/dim]")
+
     console.print(
         f"[cyan]입력:[/cyan] reports {len(inputs.reports)}건 · news {len(inputs.news)}건 "
         f"(LLM 입력 최대 {max_news_items}건)"
@@ -908,6 +921,7 @@ def weekly_proposal(
             {
                 "reports": _summarize_reports(inputs.reports),
                 "news": _summarize_news(inputs.news, max_items=max_news_items),
+                "regime": regime.regime.value if regime else None,
             }
         )
         return
@@ -920,6 +934,7 @@ def weekly_proposal(
         client=_build_anthropic_client(),
         model=get_settings().anthropic_model,
         max_news_items=max_news_items,
+        regime=regime,
     )
     console.print(msg)
 
