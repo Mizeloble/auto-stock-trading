@@ -35,7 +35,7 @@ def _setup_passing_env(root: Path) -> tuple[Path, Path, Path, Path, Path]:
     """모든 활성 게이트가 통과하는 환경 — 5건 모두 ok."""
     profile = root / "profile.yaml"
     profile.write_text(
-        "risk:\n  stop_loss_pct: 0.01\n  daily_loss_kill: true\n",
+        "risk:\n  stop_loss_pct: 0.01\n  daily_loss_kill: true\n  daily_loss_limit: 0.03\n",
         encoding="utf-8",
     )
     journal = root / "state.jsonl"  # 미존재 = "실행 이력 0" 통과
@@ -87,6 +87,7 @@ def test_preflight_all_active_pass_returns_exit_0(isolated_cwd: Path) -> None:
         "heartbeat_recent",
         "recent_paper_day_mdd",
         "latest_backtest_sharpe",
+        "kill_switch_simulation",
     ):
         assert name in result.output
 
@@ -107,12 +108,11 @@ def test_preflight_one_gate_failure_returns_exit_1(isolated_cwd: Path) -> None:
 
 
 def test_preflight_shows_skipped_gates_section(isolated_cwd: Path) -> None:
-    """미구현 게이트는 별도 표시 (skip)."""
+    """미구현 게이트는 별도 표시 (skip). PR26 에서 kill_switch_simulation 은 활성으로 승격."""
     profile, journal, hb, reports, backtests = _setup_passing_env(isolated_cwd)
 
     result = _invoke(profile, journal, hb, reports, backtests)
 
-    assert "kill_switch_simulation" in result.output
     assert "corporate_action_cache_fresh" in result.output
     assert "PR 미구현" in result.output
 
@@ -124,7 +124,7 @@ def test_preflight_falls_back_to_default_profile_if_current_missing(isolated_cwd
     default = isolated_cwd / "strategies" / "profiles" / "daytrade-default.yaml"
     default.parent.mkdir(parents=True, exist_ok=True)
     default.write_text(
-        "risk:\n  stop_loss_pct: 0.01\n  daily_loss_kill: true\n",
+        "risk:\n  stop_loss_pct: 0.01\n  daily_loss_kill: true\n  daily_loss_limit: 0.03\n",
         encoding="utf-8",
     )
     nonexistent = isolated_cwd / "missing.yaml"

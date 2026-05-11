@@ -7,15 +7,16 @@
 *read-only* 함수. 외부 호출 없이 디스크/yaml 만 읽음. 이번 PR 의 책임은
 *판정* 까지. CLI 출력·exit code 는 cli.py 가 결합.
 
-활성 게이트 (5):
+활성 게이트 (6):
 - ``check_risk_limits_active`` — daytrade YAML 의 손절·일일캡·kill 활성 여부
 - ``check_no_pending_orders`` — 주문 저널에 결과 미확인 이벤트가 없는지
 - ``check_heartbeat_recent`` — heartbeat 파일 mtime 이 max_age 안
 - ``check_recent_paper_day_mdd`` — 최근 N일 일일 손실률의 누적 최저가 임계 안
 - ``check_latest_backtest_sharpe`` — 가장 최근 백테스트의 Sharpe ≥ 임계
+- ``check_kill_switch_simulation`` — 강제 -3% 시나리오에서 kill-switch 가 실제로 발화하는지
 
 미구현 placeholder (이번 PR 에선 skipped=True 로 표시, 향후 PR 에서 활성):
-- kill-switch 시뮬 / 다채널 알림 ack / LLM 비용 누적 / corporate action 캐시
+- corporate action 캐시
 
 설계 원칙:
 - 한 게이트 실패가 다른 게이트 평가를 막지 않는다 — 모두 독립.
@@ -34,10 +35,12 @@ from .account.order_journal import OrderJournal
 from .account.recovery import find_suspect_orders
 from .heartbeat import check_heartbeat
 from .llm.cost_tracker import CostTracker
+from .risk.manager import AccountState, RiskLimits, RiskManager
 
 __all__ = [
     "GateResult",
     "check_heartbeat_recent",
+    "check_kill_switch_simulation",
     "check_latest_backtest_sharpe",
     "check_llm_cost_within_budget",
     "check_no_pending_orders",
@@ -298,11 +301,86 @@ def check_llm_cost_within_budget(
     )
 
 
+def check_kill_switch_simulation(profile_path: Path) -> GateResult:
+    """강제 -3% 시나리오 → kill-switch 가 실제로 발화하는지 + 정상 시 오발화 안 하는지.
+
+    무엇/왜:
+    - kill-switch 는 "실거래에서 최악의 하루 손실 캡". 코드 회귀로 조용히 깨져있으면
+      막상 -3% 도달했을 때 발화 안 함 — 가장 위험한 침묵 실패.
+    - 외부 호출 없는 *순수* 시뮬. 프로파일의 ``daily_loss_kill`` + ``daily_loss_limit``
+      을 그대로 ``RiskLimits`` 에 로드 → 가상 AccountState 둘 (한도 *초과* / *미달*) 로
+      ``should_force_liquidate()`` 가 양쪽 모두 기대대로 동작하는지 확인.
+    - 한도 초과에서 발화 안 하거나, 한도 미달에서 오발화하면 ✗ 로 명확히 분리해 보고.
+
+    profile 의 ``daily_loss_kill`` 자체가 False 면 시뮬 자체가 무의미 — fail
+    (사용자가 활성화하라는 메시지). ``check_risk_limits_active`` 와 의도적으로
+    중복: 그 게이트는 *설정* 만 보고, 이 게이트는 *실제 코드 동작* 까지 확인.
+    """
+    name = "kill_switch_simulation"
+    if not profile_path.exists():
+        return GateResult(name=name, ok=False, detail=f"프로파일 파일 없음: {profile_path}")
+    try:
+        raw = yaml.safe_load(profile_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        return GateResult(name=name, ok=False, detail=f"YAML 파싱 실패: {exc}")
+    risk = raw.get("risk") or {}
+    if not bool(risk.get("daily_loss_kill")):
+        return GateResult(
+            name=name,
+            ok=False,
+            detail="daily_loss_kill=False — 시뮬 불가, 프로파일에서 활성화 필요",
+        )
+    raw_limit = risk.get("daily_loss_limit")
+    daily_loss_limit = float(raw_limit) if raw_limit is not None else 0.03
+    if daily_loss_limit <= 0:
+        return GateResult(
+            name=name,
+            ok=False,
+            detail=f"daily_loss_limit={daily_loss_limit} — 양수 필요",
+        )
+    limits = RiskLimits(daily_loss_kill=True, daily_loss_limit=daily_loss_limit)
+    manager = RiskManager(limits=limits)
+    # 한도 초과 시나리오 (한도의 1.5 배 손실) — 발화 기대.
+    breach = AccountState(
+        deposit=0.0,
+        total_equity=100.0 * (1.0 - daily_loss_limit * 1.5),
+        day_start_equity=100.0,
+    )
+    if not manager.should_force_liquidate(breach):
+        return GateResult(
+            name=name,
+            ok=False,
+            detail=(
+                f"한도 -{daily_loss_limit:.1%} 초과(-{daily_loss_limit * 1.5:.1%})에서 "
+                f"미발화 — kill-switch 로직 깨짐"
+            ),
+        )
+    # 한도 미달 시나리오 (한도의 0.5 배 손실) — 발화 X 기대.
+    safe = AccountState(
+        deposit=0.0,
+        total_equity=100.0 * (1.0 - daily_loss_limit * 0.5),
+        day_start_equity=100.0,
+    )
+    if manager.should_force_liquidate(safe):
+        return GateResult(
+            name=name,
+            ok=False,
+            detail=(
+                f"한도 -{daily_loss_limit:.1%} 미달(-{daily_loss_limit * 0.5:.1%})에서 "
+                f"오발화 — 임계 비교 깨짐"
+            ),
+        )
+    return GateResult(
+        name=name,
+        ok=True,
+        detail=f"daily_loss_limit=-{daily_loss_limit:.1%} 시뮬 통과 (초과 발화 + 미달 보존)",
+    )
+
+
 # ---- 미구현 placeholder ------------------------------------------------------
 
 
 _SKIPPED_GATES: tuple[tuple[str, str], ...] = (
-    ("kill_switch_simulation", "PR 미구현 — 강제 -3% 시나리오로 kill-switch 발화 검증"),
     # multi_channel_alerts (#12) 는 사용자가 단일 채널(텔레그램) 운영 의향 — 게이트 제거.
     # 추후 Slack/이메일 등 fallback 채널 도입 시 별도 게이트로 재추가.
     ("corporate_action_cache_fresh", "PR 미구현 (#11) — KRX 액면분할/배당락 캐시 7일 이내"),
@@ -341,6 +419,7 @@ def run_all_gates(
         (check_heartbeat_recent, (heartbeat_path,)),
         (check_recent_paper_day_mdd, (reports_root,)),
         (check_latest_backtest_sharpe, (backtests_root,)),
+        (check_kill_switch_simulation, (profile_path,)),
         (check_llm_cost_within_budget, (llm_cost_path, llm_monthly_budget_usd)),
     ):
         try:
