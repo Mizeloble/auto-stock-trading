@@ -1176,6 +1176,68 @@ def preflight(
         console.print(f"[dim]({skipped_count}개 게이트 미구현 — 향후 PR)[/dim]")
 
 
+@app.command("detect-regime")
+def detect_regime(
+    symbol: str = typer.Option(
+        "069500",
+        "--symbol",
+        help="분류 기준 종목. default 069500 (KODEX 200 — KOSPI 200 추종 ETF).",
+    ),
+    days: int = typer.Option(
+        60,
+        "--days",
+        help="lookback 일봉 수. classify 는 최소 20봉, 60 권장.",
+    ),
+) -> None:
+    """현재 시장국면(추세상승/추세하락/박스/고변동성) 분류.
+
+    무엇/왜:
+    - 사용자가 daytrade 프로파일을 선택할 때 시장 상황 한눈에 확인.
+    - 추세장은 추세추종(SMA crossover) 이 유리, 박스는 평균회귀(RSI) 가 유리.
+    - LLM 호출 0, 외부 의존 키움 일봉 1회.
+
+    어떻게 확인:
+    - `auto-trade detect-regime` → KODEX 200 60일봉 기반 분류 출력.
+    - `auto-trade detect-regime --symbol 005930 --days 90` 처럼 종목/기간 변경 가능.
+    """
+    bars = _fetch_daily_bars(symbol)
+    df = bars_to_dataframe(bars)
+    if len(df) > days:
+        df = df.tail(days)
+
+    report = scanner.classify(df, lookback=days)
+
+    color = {
+        scanner.MarketRegime.TREND_UP: "green",
+        scanner.MarketRegime.TREND_DOWN: "red",
+        scanner.MarketRegime.RANGE: "cyan",
+        scanner.MarketRegime.HIGH_VOL: "yellow",
+    }[report.regime]
+    console.print(
+        f"[bold {color}]시장국면: {report.regime.value}[/bold {color}]   "
+        f"({symbol}, 최근 {int(report.metrics.get('bars', 0))}봉)"
+    )
+    console.print(f"[dim]{report.summary_ko}[/dim]")
+
+    table = Table(title="지표")
+    table.add_column("항목")
+    table.add_column("값", justify="right")
+    table.add_row("기울기 (일평균 %)", f"{report.metrics.get('slope_pct', 0) * 100:+.3f}")
+    table.add_row("ATR / close (%)", f"{report.metrics.get('atr_pct', 0) * 100:.2f}")
+    table.add_row("볼린저 밴드폭 (%)", f"{report.metrics.get('bb_width_pct', 0) * 100:.2f}")
+    last_close = report.metrics.get("last_close", 0)
+    table.add_row("마지막 종가", f"{last_close:,.2f}")
+    console.print(table)
+
+    hint = {
+        scanner.MarketRegime.TREND_UP: "추세추종(SMA crossover) 유리. 손절을 좀 더 풀어주거나 진입을 적극적으로.",
+        scanner.MarketRegime.TREND_DOWN: "하락 추세 — 신규 진입 자제 또는 보수적으로. 매수 비활성 고려.",
+        scanner.MarketRegime.RANGE: "박스 — 평균회귀(RSI reversion) 또는 좁은 손절·익절.",
+        scanner.MarketRegime.HIGH_VOL: "고변동성 — 신호가 휩쓸릴 위험. 손절 폭을 넓히거나 일시 중지.",
+    }[report.regime]
+    console.print(f"[bold]권장:[/bold] {hint}")
+
+
 orders_app = typer.Typer(help="주문 저널 진단·복구 도구.")
 app.add_typer(orders_app, name="orders")
 
