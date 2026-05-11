@@ -1056,9 +1056,7 @@ def heartbeat_check(
         if status.reason == "stopped":
             console.print(f"[green]heartbeat stopped[/green] · sentinel ok (path={stopped_path})")
         else:
-            console.print(
-                f"[green]heartbeat OK[/green] · age={status.age_sec:.0f}s (path={path})"
-            )
+            console.print(f"[green]heartbeat OK[/green] · age={status.age_sec:.0f}s (path={path})")
         raise typer.Exit(code=0)
 
     # cooldown — 직전 알림이 cooldown_sec 안이면 침묵.
