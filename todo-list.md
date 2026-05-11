@@ -75,6 +75,7 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 테스트 16건 추가 (heartbeat write/swallow/check 7건 + runner background task 4건 + CLI 5건). 558 전체 통과.
   - ~~launchd plist 등록은 사용자 수동 작업~~ → **PR14 (#13 마무리)** 에서 plist + install/uninstall 라벨 자동 추가. 사용자는 `./scripts/launchd-install.sh` 한 번만 실행.
 - [ ] **PR4 · `feat(account): 키움 미체결 조회 + suspect 자동 매칭 — #9 3차`** — 봇 재시작 시 suspect 들을 키움에 재조회해 실제 체결 여부 확인 + 저널 보강 + 로컬 state 동기화. 키움 미체결 TR 코드 probe 후 진행.
+- [ ] **테스트 격리 후속 (PR12 회귀)** — PR12 토큰 디스크 캐시(`data/auth/token.json`)가 respx 단위 테스트 10여 개를 깨뜨림. 운영 paper-day 가 만든 토큰 파일이 테스트 cwd 격리 없이 그대로 로드되어 `oauth2/token` mock 라우트가 호출되지 않음. 영향: `tests/test_account_balance.py`, `test_account_orders.py`, `test_auth.py`, `test_cli_paper_day.py`, `test_cli_log_setup.py`, `test_market_*.py`, `test_paper_day_full_cycle.py`, `test_rest_client.py`. 해결: 각 테스트에 `isolated_cwd` 픽스처 인자 추가 또는 conftest.py 에 Kiwoom 사용 테스트용 autouse cwd 격리. 한 PR 로 묶어 처리.
 - [x] **PR13 · `feat(llm): 비용 누적 추적 모듈 — #16 1차`**
   - 새 모듈 `llm/cost_tracker.py` — `CostTracker` (JSONL append-only, account/order_journal 패턴 재사용) + `CostEntry` / `MonthlySummary` / `BudgetStatus` 데이터클래스.
   - 모델별 가격표 `MODEL_PRICES_USD_PER_M` (Opus/Sonnet/Haiku 4.x 계열). 알 수 없는 모델은 가장 비싼 default(Opus) 가격 — 한도 보호.
@@ -95,6 +96,20 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - `PaperRunner.latency_tracker` 자동 생성 (__post_init__). `_place_and_track` 성공/실패 분기에 monotonic timer → `order_send_ok` / `order_send_fail` 라벨로 record.
   - 새 CLI `auto-trade latency --days 7` — 최근 N일 일별 label 통계 표. p99 ≥ 3000ms 시 빨강 강조 (키움 API 1회/3.6초 인접 = 단기 전략 위험).
   - 테스트 15건 (percentile 4 + record/replay/disk 3 + daily_stats 2 + Settings 헬퍼 2 + CLI 4). 718 전체 통과.
+- [x] **PR20 · `fix(runner): kill switch total_equity 산식 — 부분 익절 오발동 회귀`** (PR#86, 2026-05-11)
+  - 2026-05-11 09:01 paper-day 가 부분 익절(+3.27%) 직후 today_change=-47% 로 잘못 계산돼 daily_loss_kill 오발동. 멀쩡한 +2.44% 이익 포지션이 강제 청산됐다.
+  - `_snapshot_account` 가 `total_equity = float(snap.total_evaluation) or float(snap.deposit)` 로 처리해 키움 mock 의 `tot_evlt_amt` (보유 평가금만) 응답에 취약. 매도 직후 분자만 줄어 -47% 로 보였다.
+  - `total_equity = float(snap.deposit) + sum(float(h.market_value) for h in snap.holdings)` 로 명시 합산 — 매도가 cash↑·holdings↓ 로 상쇄돼 안정.
+  - 회귀 테스트 `test_snapshot_total_equity_stable_across_partial_sell` 가 12주→부분 익절 6주 매도 시나리오 재현. today_change 1‰ 미만 확인.
+- [x] **PR21 · `fix(heartbeat): 정상 종료 sentinel — cron 알림 폭주 차단`** (PR#87, 2026-05-11)
+  - PR20 후속 회귀: 러너가 09:01 자기 정지된 뒤 cron heartbeat-check 가 30분마다 "heartbeat missing" 텔레그램 알림 14회 도달.
+  - cron 이 단순 mtime 만 봐 "의도된 정지" 와 "행 걸린 정지" 구분 못 함.
+  - 새 sentinel `data/heartbeat/stopped.txt` — 러너 시동 시 `clear_stopped()`, finally 블록 + `stopped_before_universe` 빠른 경로 둘 다 `mark_stopped()`. `check_heartbeat` 에 `stopped_path` 인자 추가, sentinel 이 heartbeat 보다 최근이면 `reason="stopped"` 반환 → cron 침묵.
+  - 테스트 13건 추가 (sentinel 라이프사이클 + sentinel/heartbeat mtime 비교 + CLI 침묵 케이스 + run() 시동/종료 라이프사이클). 105 전체 통과.
+- [x] **PR22 · `fix(reports): note_ko 의 매수 N건 은 실제 체결 기준`** (PR#88, 2026-05-11)
+  - 일일 리포트 메모와 `buys` 배열 불일치: 발굴 3건 + 매수 0건(kill switch) 인데 메모는 "매수 3건 ... · 청산 1건" 으로 잘못 표기. 주간 인사이트 LLM 도 잘못 학습.
+  - `_summary_ko` 에 `buys` 파라미터 추가. buys 비어있고 chosen 만 있으면 "발굴 N건 (체결 0)" 분리 표기, buys 있으면 unique symbol 수로 표기. 같은 종목 분할 매수는 1건으로 dedup.
+  - 테스트 3건 추가 (실 체결 기준 카운트 / 매수 0 케이스 / 분할 매수 dedup). 52 전체 통과.
 - [x] **PR18 · `feat(news): weekly-proposal 에 시장국면 입력 추가 — #5 일부`**
   - `propose_daytrade_profile` 시그니처에 `regime: RegimeReport | None = None` 추가.
   - `_summarize_regime` 새 헬퍼 — None 이면 빈 dict, 활성 시 regime/summary_ko/metrics 노출.
