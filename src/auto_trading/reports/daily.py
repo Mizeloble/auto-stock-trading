@@ -458,8 +458,7 @@ def _summary_ko(
                 seen.add(trade.symbol)
                 buy_syms.append(trade.symbol)
         parts.append(
-            f"매수 {len(buy_syms)}건 "
-            f"({', '.join(buy_syms[:3])}{'…' if len(buy_syms) > 3 else ''})"
+            f"매수 {len(buy_syms)}건 ({', '.join(buy_syms[:3])}{'…' if len(buy_syms) > 3 else ''})"
         )
     elif chosen:
         # 발굴은 됐지만 실제 매수 0건 — 메모와 buys 배열의 정합성 유지.
