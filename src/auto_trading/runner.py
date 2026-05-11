@@ -222,6 +222,11 @@ class PaperRunner:
         self._install_signal_handlers()
         self._started_at = datetime.now()
 
+        # 29단계 회귀(2026-05-11) — 이전 사이클의 "정상 종료" sentinel 정리.
+        # cron heartbeat-check 가 다시 미갱신을 잡아낼 수 있게.
+        if self.heartbeat is not None:
+            self.heartbeat.clear_stopped()
+
         # 29단계 PR2 — 시동 시 손실 의심 주문 검사. 자동 복구는 X (다음 PR), 알림만.
         await self._warn_recovery_pending()
 
@@ -232,6 +237,9 @@ class PaperRunner:
             done = await self._wait_universe_or_stop()
             if not done:
                 # universe 가 채워지기 전에 외부 stop. notifier 만 깔끔히 정리하고 종료.
+                # 29단계 회귀 — heartbeat 가 주입된 경우 정상 종료 sentinel 도 함께 touch.
+                if self.heartbeat is not None:
+                    self.heartbeat.mark_stopped()
                 await self.notifier.notify("runner.stopped", reason="stopped_before_universe")
                 await self.notifier.aclose()
                 return
@@ -313,6 +321,10 @@ class PaperRunner:
                 heartbeat_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await heartbeat_task
+            # 29단계 회귀(2026-05-11) — 정상 종료 sentinel touch. cron 이 이후
+            # missing 알림을 30분마다 쏘지 않게.
+            if self.heartbeat is not None:
+                self.heartbeat.mark_stopped()
             await self.notifier.notify("runner.stopped", reason=stop_reason)
             await self.notifier.aclose()
 
