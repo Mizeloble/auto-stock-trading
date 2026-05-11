@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from ..strategy import indicators as ind
 from ..strategy.base import Bar, Side, Signal, Strategy
 from .broker import SimulatedBroker, Trade
 from .metrics import PerformanceReport, compute
@@ -36,13 +37,22 @@ class BacktestResult:
 class Backtester:
     strategy: Strategy
     initial_cash: float = 10_000_000.0  # 기본 천만원
-    position_sizing: str = "all_in"  # all_in: 가용 현금 전부로 매수
+    # all_in: 가용 현금 * weight 로 최대 수량 매수.
+    # atr_normalized: (initial_cash * atr_risk_pct) / ATR 로 수량 정규화 — 변동성
+    # 큰 종목엔 자동으로 적게 들어감 (29단계 PR21 #6).
+    position_sizing: str = "all_in"
+    atr_period: int = 14
+    atr_risk_pct: float = 0.01  # 자본 대비 단위 위험 (atr_normalized 활성 시만)
     commission_rate: float = 0.00015
     tax_rate_sell: float = 0.0020  # 2026 인상 반영
     slippage_bps: float = 5.0  # 0.05% 보수적 기본
 
     _broker: SimulatedBroker = field(init=False)
     _equity: list[tuple[datetime, float]] = field(init=False, default_factory=list)
+    # 29단계 PR21 — atr_normalized sizing 위한 직전 봉 누적. SELL 영향 X (수량은 보유 전체).
+    _highs: list[float] = field(init=False, default_factory=list)
+    _lows: list[float] = field(init=False, default_factory=list)
+    _closes: list[float] = field(init=False, default_factory=list)
 
     def __post_init__(self) -> None:
         self._broker = SimulatedBroker(
@@ -83,6 +93,12 @@ class Backtester:
                     )
                 pending = []
 
+            # ATR sizing 용 history 누적 — strategy.on_bar 이후라도 OK
+            # (다음 봉 시가에 체결되는 사이즈 계산에만 사용).
+            self._highs.append(bar.high)
+            self._lows.append(bar.low)
+            self._closes.append(bar.close)
+
             signals = self.strategy.on_bar(bar)
             if signals:
                 pending.extend(signals)
@@ -107,8 +123,22 @@ class Backtester:
             return pos.quantity if pos else 0
         if price <= 0:
             return 0
+        weight = max(0.0, min(1.0, signal.weight))
+
+        if self.position_sizing == "atr_normalized":
+            # ATR 기반 변동성 정규화. period+1 봉 미달이면 진입 X (안전).
+            atr_val = ind.atr(self._highs, self._lows, self._closes, period=self.atr_period)
+            if atr_val is None or atr_val <= 0:
+                return 0
+            # 자본 * 단위 위험 / ATR = "1 ATR 움직임당 risk_pct% 손실" 수량.
+            risk_budget = self.initial_cash * self.atr_risk_pct * weight
+            qty_by_risk = risk_budget / atr_val
+            # 현금 한도도 동시 적용 — 적은 쪽 채택.
+            qty_by_cash = self._broker.cash / (price * (1 + self.commission_rate))
+            return max(0, int(min(qty_by_risk, qty_by_cash)))
+
         # all_in: 가용 현금으로 살 수 있는 최대 수량 * weight
-        budget = self._broker.cash * max(0.0, min(1.0, signal.weight))
+        budget = self._broker.cash * weight
         qty = int(budget // (price * (1 + self.commission_rate)))
         return max(0, qty)
 
