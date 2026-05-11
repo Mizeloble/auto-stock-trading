@@ -36,6 +36,7 @@ __all__ = [
     "DEFAULT_HEARTBEAT_PATH",
     "DEFAULT_INTERVAL_SEC",
     "DEFAULT_MAX_AGE_SEC",
+    "DEFAULT_STOPPED_PATH",
     "Heartbeat",
     "HeartbeatStatus",
     "check_heartbeat",
@@ -44,6 +45,11 @@ __all__ = [
 
 DEFAULT_HEARTBEAT_PATH = Path("data/heartbeat/runner.txt")
 DEFAULT_COOLDOWN_PATH = Path("data/heartbeat/last_alert.txt")
+# 29단계 회귀(2026-05-11) — 러너가 정상 종료한 직후에도 cron 이 mtime 만 보고
+# "heartbeat missing" 알림을 30분마다 쏘는 문제 차단용. 러너 finally 블록이
+# 이 sentinel 을 touch 하고, check_heartbeat 는 sentinel 이 heartbeat 보다
+# 최근이면 ok=True (reason="stopped") 로 처리한다.
+DEFAULT_STOPPED_PATH = Path("data/heartbeat/stopped.txt")
 DEFAULT_INTERVAL_SEC = 1800  # 30분 — 러너가 갱신
 DEFAULT_MAX_AGE_SEC = 3600  # 1시간 — cron 이 누락으로 판정
 DEFAULT_COOLDOWN_SEC = 1800  # 30분 — 같은 누락에 알림 1회
@@ -55,9 +61,14 @@ class Heartbeat:
 
     path: Path = DEFAULT_HEARTBEAT_PATH
     interval_sec: int = DEFAULT_INTERVAL_SEC
+    # 29단계 회귀(2026-05-11) — 정상 종료 sentinel. 러너 finally 블록이
+    # mark_stopped() 호출, 시작 시 clear_stopped() 호출. cron 은
+    # check_heartbeat 가 ok="stopped" 로 응답하면 알림 생략.
+    stopped_path: Path = DEFAULT_STOPPED_PATH
 
     def __post_init__(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.stopped_path.parent.mkdir(parents=True, exist_ok=True)
 
     def write(self) -> None:
         """현재 시각(ISO 8601 KST)을 파일에 truncate-write.
@@ -73,14 +84,31 @@ class Heartbeat:
         except OSError as exc:
             log.error("heartbeat.write_failed", path=str(self.path), error=str(exc))
 
+    def mark_stopped(self) -> None:
+        """정상 종료 sentinel touch. 디스크 실패는 swallow + 로그."""
+        try:
+            self.stopped_path.write_text(
+                datetime.now(tz=KST).isoformat() + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            log.error("heartbeat.stopped_write_failed", path=str(self.stopped_path), error=str(exc))
+
+    def clear_stopped(self) -> None:
+        """다음 사이클 시작 — sentinel 정리. 없어도 무시."""
+        try:
+            self.stopped_path.unlink(missing_ok=True)
+        except OSError as exc:
+            log.error("heartbeat.stopped_clear_failed", path=str(self.stopped_path), error=str(exc))
+
 
 @dataclass(frozen=True)
 class HeartbeatStatus:
     """check_heartbeat 결과. CLI 와 단위 테스트가 공용."""
 
     ok: bool
-    reason: str  # "ok" / "missing" / "stale"
-    age_sec: float | None  # 정상/stale 일 때 파일 나이. missing 이면 None.
+    reason: str  # "ok" / "missing" / "stale" / "stopped"
+    age_sec: float | None  # 정상/stale 일 때 파일 나이. missing/stopped 이면 None.
 
 
 def check_heartbeat(
@@ -88,15 +116,30 @@ def check_heartbeat(
     max_age_sec: int,
     *,
     now: float | None = None,
+    stopped_path: Path | None = None,
 ) -> HeartbeatStatus:
     """heartbeat 파일 상태 진단. 외부 호출 없음 — 순수 함수처럼 동작.
 
     `now` 는 단위 테스트에서 시간을 고정하기 위한 주입. None 이면 wall-clock.
+
+    29단계 회귀(2026-05-11) — `stopped_path` 가 존재하고 heartbeat 보다 최근이면
+    "정상 종료" 로 판정해 ok=True, reason="stopped" 반환. 러너가 finally 블록에서
+    mark_stopped() 한 다음에는 cron 이 missing/stale 알림을 30분마다 쏘지 않게.
     """
     current = time.time() if now is None else now
-    if not path.exists():
+    stopped = stopped_path if stopped_path is not None else DEFAULT_STOPPED_PATH
+
+    hb_mtime = path.stat().st_mtime if path.exists() else None
+    if stopped.exists():
+        stopped_mtime = stopped.stat().st_mtime
+        # heartbeat 가 stopped 보다 더 최근이면 sentinel 은 stale — 무시 (러너 재시동 후
+        # clear 가 누락된 보호용). 그 외에는 ok="stopped".
+        if hb_mtime is None or stopped_mtime >= hb_mtime:
+            return HeartbeatStatus(ok=True, reason="stopped", age_sec=None)
+
+    if hb_mtime is None:
         return HeartbeatStatus(ok=False, reason="missing", age_sec=None)
-    age = current - path.stat().st_mtime
+    age = current - hb_mtime
     if age > max_age_sec:
         return HeartbeatStatus(ok=False, reason="stale", age_sec=age)
     return HeartbeatStatus(ok=True, reason="ok", age_sec=age)

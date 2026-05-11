@@ -81,3 +81,83 @@ def test_check_heartbeat_stale_file(tmp_path: Path) -> None:
     assert status.reason == "stale"
     assert status.age_sec is not None
     assert status.age_sec >= 3600
+
+
+# 29단계 회귀(2026-05-11) — 정상 종료 sentinel 처리.
+
+
+def test_mark_stopped_creates_sentinel(tmp_path: Path) -> None:
+    hb = Heartbeat(path=tmp_path / "runner.txt", stopped_path=tmp_path / "stopped.txt")
+    hb.mark_stopped()
+    assert hb.stopped_path.exists()
+    assert "T" in hb.stopped_path.read_text(encoding="utf-8")
+
+
+def test_clear_stopped_removes_sentinel(tmp_path: Path) -> None:
+    hb = Heartbeat(path=tmp_path / "runner.txt", stopped_path=tmp_path / "stopped.txt")
+    hb.stopped_path.write_text("stale\n", encoding="utf-8")
+    hb.clear_stopped()
+    assert not hb.stopped_path.exists()
+
+
+def test_clear_stopped_silent_when_missing(tmp_path: Path) -> None:
+    """이전 사이클에 stopped sentinel 이 없어도 idempotent."""
+    hb = Heartbeat(path=tmp_path / "runner.txt", stopped_path=tmp_path / "stopped.txt")
+    hb.clear_stopped()  # 예외 X
+
+
+def test_check_heartbeat_stopped_when_sentinel_exists_and_no_heartbeat(tmp_path: Path) -> None:
+    """heartbeat 파일이 없어도 stopped sentinel 만 있으면 ok=True (정상 종료)."""
+    stopped = tmp_path / "stopped.txt"
+    stopped.write_text("now\n", encoding="utf-8")
+    status = check_heartbeat(
+        tmp_path / "runner.txt",
+        max_age_sec=3600,
+        stopped_path=stopped,
+    )
+    assert status.ok is True
+    assert status.reason == "stopped"
+    assert status.age_sec is None
+
+
+def test_check_heartbeat_stopped_when_sentinel_newer_than_heartbeat(tmp_path: Path) -> None:
+    """heartbeat 가 stale 이라도 stopped sentinel 이 그보다 최근이면 ok=stopped."""
+    hb_path = tmp_path / "runner.txt"
+    hb_path.write_text("old\n", encoding="utf-8")
+    old = hb_path.stat().st_mtime - 7200
+    os.utime(hb_path, (old, old))
+
+    stopped = tmp_path / "stopped.txt"
+    stopped.write_text("recent\n", encoding="utf-8")
+
+    status = check_heartbeat(hb_path, max_age_sec=3600, stopped_path=stopped)
+    assert status.ok is True
+    assert status.reason == "stopped"
+
+
+def test_check_heartbeat_stale_when_heartbeat_newer_than_stopped(tmp_path: Path) -> None:
+    """러너가 재시동해 heartbeat 갱신했는데 stopped sentinel 이 남아있는 보호 케이스 —
+    heartbeat 가 더 최근이면 sentinel 은 stale 로 보고 정상 진단 흐름 진행."""
+    stopped = tmp_path / "stopped.txt"
+    stopped.write_text("from_yesterday\n", encoding="utf-8")
+    old = stopped.stat().st_mtime - 7200
+    os.utime(stopped, (old, old))
+
+    hb_path = tmp_path / "runner.txt"
+    hb_path.write_text("now\n", encoding="utf-8")
+
+    fake_now = hb_path.stat().st_mtime + 1
+    status = check_heartbeat(hb_path, max_age_sec=3600, stopped_path=stopped, now=fake_now)
+    assert status.ok is True
+    assert status.reason == "ok"  # sentinel 무시, heartbeat 신선
+
+
+def test_check_heartbeat_missing_when_no_sentinel(tmp_path: Path) -> None:
+    """sentinel 도 heartbeat 도 없으면 기존 동작 그대로 missing."""
+    status = check_heartbeat(
+        tmp_path / "runner.txt",
+        max_age_sec=3600,
+        stopped_path=tmp_path / "stopped.txt",
+    )
+    assert status.ok is False
+    assert status.reason == "missing"

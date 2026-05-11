@@ -108,3 +108,45 @@ def test_heartbeat_check_cooldown_expired_re_alerts(isolated_cwd: Path) -> None:
 
     assert result.exit_code == 0, result.output
     fake_notifier.notify.assert_awaited_once()
+
+
+# 29단계 회귀(2026-05-11) — stopped sentinel 이 있으면 알림 생략.
+
+
+def test_heartbeat_check_stopped_silent(isolated_cwd: Path) -> None:
+    """heartbeat 파일이 stale 이라도 stopped sentinel 이 있으면 cron 침묵."""
+    hb_dir = isolated_cwd / "data" / "heartbeat"
+    hb_dir.mkdir(parents=True, exist_ok=True)
+    # stopped sentinel 만 존재 — heartbeat 자체는 없는 paper-day 정상 종료 후 상태.
+    (hb_dir / "stopped.txt").write_text("stopped\n", encoding="utf-8")
+
+    fake_notifier = AsyncMock()
+    with patch.object(cli_module, "build_notifier", return_value=fake_notifier):
+        result = CliRunner().invoke(app, ["heartbeat-check"])
+
+    assert result.exit_code == 0, result.output
+    assert "stopped" in result.output
+    fake_notifier.notify.assert_not_called()
+
+
+def test_heartbeat_check_stale_heartbeat_silenced_by_newer_stopped(isolated_cwd: Path) -> None:
+    """장 마감 → 러너 종료 직후, heartbeat 가 1시간 넘게 갱신 안 됐어도 sentinel 이
+    더 최근이면 알림 생략 (실제 운영 시나리오)."""
+    hb_dir = isolated_cwd / "data" / "heartbeat"
+    hb_dir.mkdir(parents=True, exist_ok=True)
+
+    hb = hb_dir / "runner.txt"
+    hb.write_text("old\n", encoding="utf-8")
+    old = hb.stat().st_mtime - 7200  # 2시간 전 — 사실상 stale
+    os.utime(hb, (old, old))
+
+    stopped = hb_dir / "stopped.txt"
+    stopped.write_text("recent\n", encoding="utf-8")  # heartbeat 보다 최근
+
+    fake_notifier = AsyncMock()
+    with patch.object(cli_module, "build_notifier", return_value=fake_notifier):
+        result = CliRunner().invoke(app, ["heartbeat-check", "--max-age-sec", "3600"])
+
+    assert result.exit_code == 0, result.output
+    assert "stopped" in result.output
+    fake_notifier.notify.assert_not_called()

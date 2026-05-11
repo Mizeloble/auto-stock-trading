@@ -1046,11 +1046,19 @@ def heartbeat_check(
     어떻게 확인: 봇을 SIGSTOP 후 1시간 대기 → 이 명령 실행 → 텔레그램에
     "🚨 heartbeat stale" 도착. 정상 운영 중에는 침묵.
     """
-    from .heartbeat import check_heartbeat
+    from .heartbeat import DEFAULT_STOPPED_PATH, check_heartbeat
 
-    status = check_heartbeat(path, max_age_sec)
+    # 29단계 회귀(2026-05-11) — 러너가 정상 종료 sentinel 을 남기면 cron 은 침묵.
+    # heartbeat 파일과 같은 디렉터리에 있는 stopped.txt 를 본다.
+    stopped_path = path.parent / DEFAULT_STOPPED_PATH.name
+    status = check_heartbeat(path, max_age_sec, stopped_path=stopped_path)
     if status.ok:
-        console.print(f"[green]heartbeat OK[/green] · age={status.age_sec:.0f}s (path={path})")
+        if status.reason == "stopped":
+            console.print(f"[green]heartbeat stopped[/green] · sentinel ok (path={stopped_path})")
+        else:
+            console.print(
+                f"[green]heartbeat OK[/green] · age={status.age_sec:.0f}s (path={path})"
+            )
         raise typer.Exit(code=0)
 
     # cooldown — 직전 알림이 cooldown_sec 안이면 침묵.
