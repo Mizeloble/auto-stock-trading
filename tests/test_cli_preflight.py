@@ -113,7 +113,7 @@ def test_preflight_shows_skipped_gates_section(isolated_cwd: Path) -> None:
     result = _invoke(profile, journal, hb, reports, backtests)
 
     assert "kill_switch_simulation" in result.output
-    assert "multi_channel_alerts" in result.output
+    assert "corporate_action_cache_fresh" in result.output
     assert "PR 미구현" in result.output
 
 

@@ -303,7 +303,8 @@ def check_llm_cost_within_budget(
 
 _SKIPPED_GATES: tuple[tuple[str, str], ...] = (
     ("kill_switch_simulation", "PR 미구현 — 강제 -3% 시나리오로 kill-switch 발화 검증"),
-    ("multi_channel_alerts", "PR 미구현 (#12) — 텔레그램 외 fallback 채널 ack"),
+    # multi_channel_alerts (#12) 는 사용자가 단일 채널(텔레그램) 운영 의향 — 게이트 제거.
+    # 추후 Slack/이메일 등 fallback 채널 도입 시 별도 게이트로 재추가.
     ("corporate_action_cache_fresh", "PR 미구현 (#11) — KRX 액면분할/배당락 캐시 7일 이내"),
 )
 

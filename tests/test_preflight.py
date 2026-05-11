@@ -273,8 +273,9 @@ def test_llm_cost_passes_with_alert_warning(tmp_path: Path) -> None:
 
 
 def test_run_all_gates_returns_active_plus_skipped(tmp_path: Path) -> None:
-    """5 활성 + 1 conditional(llm_cost — None 경로 → skipped) + 3 placeholder = 9건.
-    skipped 는 항상 4건 (3 placeholder + llm_cost 비활성)."""
+    """5 활성 + 1 conditional(llm_cost — None 경로 → skipped) + 2 placeholder = 8건.
+    skipped 는 3건 (2 placeholder + llm_cost 비활성).
+    multi_channel_alerts 게이트는 사용자 단일 채널 운영 의향으로 제거됨."""
     results = run_all_gates(
         profile_path=tmp_path / "p.yaml",
         journal_path=tmp_path / "state.jsonl",
@@ -282,9 +283,9 @@ def test_run_all_gates_returns_active_plus_skipped(tmp_path: Path) -> None:
         reports_root=tmp_path / "reports",
         backtests_root=tmp_path / "backtests",
     )
-    assert len(results) == 9
+    assert len(results) == 8
     skipped = [r for r in results if r.skipped]
-    assert len(skipped) == 4
+    assert len(skipped) == 3
     active = [r for r in results if not r.skipped]
     assert all(isinstance(r, GateResult) for r in active)
     # journal 미존재는 "실행 이력 0" 으로 정상 (no_pending_orders 통과). 나머지 4 활성은 실패.
