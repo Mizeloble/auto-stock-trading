@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from ..llm import extract_tool_use_input
 from ..llm.cost import check_budget_or_raise, get_default_tracker, record_response
 from ..reports.daily import DailyReport
+from ..strategy.scanner import RegimeReport
 from .collector import NewsItem
 
 
@@ -54,8 +55,15 @@ class _AnthropicLike(Protocol):
 
 SYSTEM_PROMPT_KO = """\
 당신은 한국 주식 day-trade 자동매매 봇의 주간 운영 분석가입니다.
-지난 주의 (a) 일일 트레이딩 결과 (b) 시장 뉴스 헤드라인 을 보고, 다음 주에 적용할 day-trade
-프로파일의 파라미터를 propose_daytrade_profile 도구로 제안하세요.
+지난 주의 (a) 일일 트레이딩 결과 (b) 시장 뉴스 헤드라인 (c) 현재 시장국면(regime) 을
+보고, 다음 주에 적용할 day-trade 프로파일의 파라미터를 propose_daytrade_profile
+도구로 제안하세요. regime 이 없으면(데이터 부족) reports + news 만 보고 판단합니다.
+
+regime 별 일반 가이드:
+- trend_up: 추세추종 유리. 손절(stop_loss_pct) 0.012~0.018 로 약간 풀고 진입 적극.
+- trend_down: 하락 추세. 신규 진입 자제, momentum_threshold_pct 활성 또는 top_n 축소.
+- range: 박스. 좁은 손절·익절 (stop_loss_pct ~0.008, partial_take_pct ~0.010).
+- high_vol: 고변동성. 손절을 더 넓히거나 daily_loss_kill=True 로 안전 우선.
 
 조정 가능한 파라미터:
 - top_n: 1~10 (거래량 상위 후보 수)
@@ -71,7 +79,7 @@ SYSTEM_PROMPT_KO = """\
 규칙:
 - 변경할 필드만 채우고, 유지할 필드는 비워두세요(필드 자체를 응답에 포함하지 말 것).
 - summary_ko: 한국어 1~3문장 — 다음 주 핵심 변경.
-- rationale_ko: 한국어 4~10문장 — 데이터·뉴스 근거.
+- rationale_ko: 한국어 4~10문장 — 데이터·뉴스·regime 근거.
 - themes_to_watch: 다음 주 주목할 섹터/테마 (최대 10).
 - symbols_to_avoid: 다음 주 피할 종목 코드 (최대 20).
 - confidence: 0.0~1.0, 데이터 충실도·일관성 기반.
@@ -196,12 +204,24 @@ def _summarize_current_profile(profile_dict: dict[str, Any] | None) -> dict[str,
 # ---- LLM 호출 ------------------------------------------------------------
 
 
+def _summarize_regime(regime: RegimeReport | None) -> dict[str, Any]:
+    """RegimeReport → LLM 입력용 dict. None 이면 빈 dict (LLM 이 알아서 처리)."""
+    if regime is None:
+        return {}
+    return {
+        "regime": regime.regime.value,
+        "summary_ko": regime.summary_ko,
+        "metrics": regime.metrics,
+    }
+
+
 def propose_daytrade_profile(
     reports: list[DailyReport],
     news: list[NewsItem],
     *,
     client: _AnthropicLike,
     current_profile: dict[str, Any] | None = None,
+    regime: RegimeReport | None = None,
     model: str = "claude-opus-4-7",
     max_tokens: int = 1024,
     max_news_items: int = 80,
@@ -210,11 +230,15 @@ def propose_daytrade_profile(
 
     `max_news_items` — 수집된 뉴스 중 LLM 입력으로 보낼 상한. default 80
     (호출당 input ~25k tok ≈ $0.45, 주 1회 cron 기준 월 ~$2).
+
+    `regime` — KODEX 200 등 시장 대표 종목의 분류 결과. None 이면 LLM 이
+    reports + news 만 보고 판단.
     """
     payload = {
         "reports": _summarize_reports(reports),
         "news": _summarize_news(news, max_items=max_news_items),
         "current_profile": _summarize_current_profile(current_profile),
+        "regime": _summarize_regime(regime),
     }
     # 29단계 PR15 — 호출 직전 한도 검사 + 호출 직후 record. 미활성(None) 시 no-op.
     tracker = get_default_tracker()
