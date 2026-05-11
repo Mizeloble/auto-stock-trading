@@ -17,6 +17,7 @@ from auto_trading.llm.cost_tracker import CostTracker
 from auto_trading.preflight import (
     GateResult,
     check_heartbeat_recent,
+    check_kill_switch_simulation,
     check_latest_backtest_sharpe,
     check_llm_cost_within_budget,
     check_no_pending_orders,
@@ -213,6 +214,57 @@ def test_latest_backtest_sharpe_fails_when_no_runs(tmp_path: Path) -> None:
     assert result.ok is False
 
 
+# ---- check_kill_switch_simulation (29단계 PR26) ------------------------------
+
+
+def _write_kill_profile(
+    path: Path, *, daily_loss_kill: bool = True, daily_loss_limit: float = 0.03
+) -> None:
+    path.write_text(
+        f"risk:\n  stop_loss_pct: 0.01\n  daily_loss_kill: {str(daily_loss_kill).lower()}\n"
+        f"  daily_loss_limit: {daily_loss_limit}\n",
+        encoding="utf-8",
+    )
+
+
+def test_kill_switch_simulation_passes_with_daily_loss_kill(tmp_path: Path) -> None:
+    profile = tmp_path / "p.yaml"
+    _write_kill_profile(profile, daily_loss_kill=True, daily_loss_limit=0.03)
+    result = check_kill_switch_simulation(profile)
+    assert result.ok is True
+    assert "3.0%" in result.detail or "-3.0%" in result.detail
+
+
+def test_kill_switch_simulation_fails_when_kill_off(tmp_path: Path) -> None:
+    profile = tmp_path / "p.yaml"
+    _write_kill_profile(profile, daily_loss_kill=False)
+    result = check_kill_switch_simulation(profile)
+    assert result.ok is False
+    assert "daily_loss_kill" in result.detail
+
+
+def test_kill_switch_simulation_fails_when_profile_missing(tmp_path: Path) -> None:
+    result = check_kill_switch_simulation(tmp_path / "nope.yaml")
+    assert result.ok is False
+    assert "없음" in result.detail
+
+
+def test_kill_switch_simulation_fails_on_invalid_yaml(tmp_path: Path) -> None:
+    profile = tmp_path / "bad.yaml"
+    profile.write_text(": : : not yaml", encoding="utf-8")
+    result = check_kill_switch_simulation(profile)
+    assert result.ok is False
+
+
+def test_kill_switch_simulation_fails_when_limit_zero(tmp_path: Path) -> None:
+    """daily_loss_limit=0 이면 시뮬 의미 없음 → fail."""
+    profile = tmp_path / "p.yaml"
+    _write_kill_profile(profile, daily_loss_kill=True, daily_loss_limit=0.0)
+    result = check_kill_switch_simulation(profile)
+    assert result.ok is False
+    assert "daily_loss_limit" in result.detail
+
+
 # ---- check_llm_cost_within_budget (29단계 PR15) -----------------------------
 
 
@@ -273,9 +325,9 @@ def test_llm_cost_passes_with_alert_warning(tmp_path: Path) -> None:
 
 
 def test_run_all_gates_returns_active_plus_skipped(tmp_path: Path) -> None:
-    """5 활성 + 1 conditional(llm_cost — None 경로 → skipped) + 2 placeholder = 8건.
-    skipped 는 3건 (2 placeholder + llm_cost 비활성).
-    multi_channel_alerts 게이트는 사용자 단일 채널 운영 의향으로 제거됨."""
+    """6 활성 + 1 conditional(llm_cost — None 경로 → skipped) + 1 placeholder = 8건.
+    skipped 는 2건 (1 placeholder + llm_cost 비활성).
+    PR26 (#17 후속) — kill_switch_simulation 이 placeholder 에서 활성으로 승격."""
     results = run_all_gates(
         profile_path=tmp_path / "p.yaml",
         journal_path=tmp_path / "state.jsonl",
@@ -285,11 +337,11 @@ def test_run_all_gates_returns_active_plus_skipped(tmp_path: Path) -> None:
     )
     assert len(results) == 8
     skipped = [r for r in results if r.skipped]
-    assert len(skipped) == 3
+    assert len(skipped) == 2
     active = [r for r in results if not r.skipped]
     assert all(isinstance(r, GateResult) for r in active)
-    # journal 미존재는 "실행 이력 0" 으로 정상 (no_pending_orders 통과). 나머지 4 활성은 실패.
+    # journal 미존재는 "실행 이력 0" 으로 정상 (no_pending_orders 통과). 나머지 5 활성은 실패.
     failed_active = [r for r in active if not r.ok]
-    assert len(failed_active) == 4
+    assert len(failed_active) == 5
     passed_active_names = {r.name for r in active if r.ok}
     assert passed_active_names == {"no_pending_orders"}
