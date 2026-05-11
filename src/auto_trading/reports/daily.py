@@ -176,6 +176,7 @@ def build_daily_report(
 
     note_ko = _summary_ko(
         chosen=discovery_chosen,
+        buys=buys,
         blocked=discovery_blocked,
         liquidations=liquidations,
         realized_pnl=realized_pnl,
@@ -429,21 +430,39 @@ def _aggregate_pnl(liqs: list[LiquidationRecord]) -> tuple[float | None, float |
 def _summary_ko(
     *,
     chosen: list[str],
+    buys: list[TradeRecord],
     blocked: list[tuple[str, str]],
     liquidations: list[LiquidationRecord],
     realized_pnl: float | None,
     realized_pnl_after_cost: float | None,
     error_count: int,
 ) -> str:
-    if not chosen and not liquidations:
+    """note_ko 빌더. 2026-05-11 회귀: 발굴(`chosen`)과 실제 체결(`buys`) 을 구분.
+
+    - 기존 동작: `매수 N건` 의 N 을 `len(chosen)` 으로 표기 → kill switch / 게이트로 매수
+      실패한 날에도 "매수 3건" 으로 찍혀 사용자·주간 인사이트 LLM 둘 다 오독했음.
+    - 새 동작: `매수 N건` 의 N 은 실제 체결된 `buys` 기준. 발굴은 됐는데 체결 0건이면
+      "발굴 N건 (체결 0)" 로 분리 표기 → buys 배열이 비어있다는 사실을 메모와 일치시킴.
+    """
+    if not chosen and not liquidations and not buys:
         if blocked:
             return f"매수 후보 {len(blocked)}건 모두 게이트 차단 — 거래 없음."
         return "거래 없음."
     parts: list[str] = []
-    if chosen:
+    if buys:
+        # 중복 종목 제거(같은 종목 분할 매수도 1건으로 — 발굴 카운트와 일관성).
+        seen: set[str] = set()
+        buy_syms: list[str] = []
+        for trade in buys:
+            if trade.symbol not in seen:
+                seen.add(trade.symbol)
+                buy_syms.append(trade.symbol)
         parts.append(
-            f"매수 {len(chosen)}건 ({', '.join(chosen[:3])}{'…' if len(chosen) > 3 else ''})"
+            f"매수 {len(buy_syms)}건 ({', '.join(buy_syms[:3])}{'…' if len(buy_syms) > 3 else ''})"
         )
+    elif chosen:
+        # 발굴은 됐지만 실제 매수 0건 — 메모와 buys 배열의 정합성 유지.
+        parts.append(f"발굴 {len(chosen)}건 (체결 0)")
     if liquidations:
         parts.append(f"청산 {len(liquidations)}건")
     if realized_pnl is not None:
