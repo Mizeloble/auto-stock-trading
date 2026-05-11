@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     llm_cost_path: Path | None = None
     llm_monthly_budget_usd: float = 5.0  # memory cost discipline — 월 $5
 
+    # 29단계 PR19 (#20) — 신호→주문 latency 모니터링. None 이면 비활성.
+    # 운영에선 .env 의 `LATENCY_LOG_PATH=data/latency.jsonl` 으로 활성.
+    # 누적 후 `auto-trade latency` 로 일별 p50/p95/p99 통계 확인.
+    latency_log_path: Path | None = None
+
     @property
     def rest_base_url(self) -> str:
         return (

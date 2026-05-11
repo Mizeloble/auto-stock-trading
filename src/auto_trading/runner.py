@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import signal as _signal
+import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -36,6 +37,7 @@ from .kiwoom.rest import KiwoomRestClient
 from .kiwoom.schemas import KiwoomError
 from .kiwoom.ws import KiwoomWebSocket, Subscription
 from .market.feed import Tick, ticks
+from .monitor.latency import LatencyTracker, get_default_latency_tracker
 from .notify.base import NoopNotifier, Notifier
 from .notify.state import RunnerStateSnapshot
 from .risk.consecutive_loss import ConsecutiveLossTracker
@@ -144,6 +146,9 @@ class PaperRunner:
     # 29단계 PR10 (#14 2차) — 연속 손절 자동 일시중지. None 이면 비활성.
     # __post_init__ 에서 risk.limits.max_consecutive_losses > 0 면 자동 생성.
     loss_tracker: ConsecutiveLossTracker | None = None
+    # 29단계 PR19 (#20) — 주문 송신 latency 모니터. None 이면 비활성.
+    # __post_init__ 에서 Settings.latency_log_path 활성 시 자동 생성.
+    latency_tracker: LatencyTracker | None = None
     _settings: Settings = field(default_factory=get_settings)
     _balance_failures: int = field(default=0, init=False)
     # 텔레그램 인커밍 명령 응답용 인메모리 상태 (runner 가 매 사이클 갱신)
@@ -174,6 +179,10 @@ class PaperRunner:
                 threshold=self.risk.limits.max_consecutive_losses,
                 pause_seconds=self.risk.limits.consecutive_loss_pause_sec,
             )
+
+        # 29단계 PR19 — latency 트래커 자동 생성 (Settings 의 path 활성 시).
+        if self.latency_tracker is None:
+            self.latency_tracker = get_default_latency_tracker(self._settings)
 
         # day-trade 모드(liquidate_at 설정)는 시작 시 universe 미정 허용.
         # set_universe() 호출 전까지 run() 이 대기.
@@ -604,8 +613,16 @@ class PaperRunner:
         self, rest: KiwoomRestClient, order: Order, bar: Bar, account: AccountState
     ) -> None:
         """REST 송신 + 성공·실패 분기. 성공 시 로컬 포지션·평단 즉시 갱신, notifier 양방향."""
+        # 29단계 PR19 — 송신부터 응답까지 시간 측정 (활성 시).
+        t0 = _time.monotonic()
         try:
             result = await place_order(rest, order, journal=self.journal)
+            # 29단계 PR19 — 성공 송신 latency 기록 (활성 시).
+            if self.latency_tracker is not None:
+                self.latency_tracker.record(
+                    label="order_send_ok",
+                    duration_ms=(_time.monotonic() - t0) * 1000.0,
+                )
             # 시장가는 order.price=None. 봉 종가로 근사 — 정확한 체결가는 사후 잔고 갱신 시점에.
             ref_price = float(order.price or Decimal(str(bar.close)))
             log.info(
@@ -655,6 +672,12 @@ class PaperRunner:
             if order.side is Side.SELL and account.positions.get(order.symbol, 0) <= 0:
                 self._mark_exit(order.symbol, bar.ts)
         except Exception as exc:
+            # 29단계 PR19 — 실패 송신 latency 도 기록 (timeout/거절 분석).
+            if self.latency_tracker is not None:
+                self.latency_tracker.record(
+                    label="order_send_fail",
+                    duration_ms=(_time.monotonic() - t0) * 1000.0,
+                )
             # 29단계 PR6 (#10 2차) — KiwoomError 면 카테고리 분류 + skip 등록.
             # 그 외 예외(네트워크 등)는 카테고리 UNKNOWN, skip 0.
             category = RejectCategory.UNKNOWN

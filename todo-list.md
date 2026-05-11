@@ -88,6 +88,13 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 새 plist `scripts/launchd/com.mizeloble.auto-trade.heartbeat-check.plist` — 5분(StartInterval=300) 간격, RunAtLoad=false.
   - `launchd-install.sh` / `launchd-uninstall.sh` 의 LABELS 에 라벨 추가, chmod +x 자동.
   - 사용자 수동 작업: `./scripts/launchd-install.sh` 한 번만 실행하면 끝.
+- [x] **PR19 · `feat(monitor): 신호→주문 latency 추적 + CLI — #20`**
+  - 새 도메인 `auto_trading/monitor/` + `latency.py` 모듈. `LatencyTracker` (JSONL append-only + 일별 통계) + `LatencyEntry` / `DailyLatencyStats`.
+  - `_percentile` 선형 보간 헬퍼. p50/p95/p99/max 계산.
+  - `Settings.latency_log_path: Path | None = None` (default 비활성). `.env` 의 `LATENCY_LOG_PATH=data/latency.jsonl` 으로 활성.
+  - `PaperRunner.latency_tracker` 자동 생성 (__post_init__). `_place_and_track` 성공/실패 분기에 monotonic timer → `order_send_ok` / `order_send_fail` 라벨로 record.
+  - 새 CLI `auto-trade latency --days 7` — 최근 N일 일별 label 통계 표. p99 ≥ 3000ms 시 빨강 강조 (키움 API 1회/3.6초 인접 = 단기 전략 위험).
+  - 테스트 15건 (percentile 4 + record/replay/disk 3 + daily_stats 2 + Settings 헬퍼 2 + CLI 4). 718 전체 통과.
 - [x] **PR18 · `feat(news): weekly-proposal 에 시장국면 입력 추가 — #5 일부`**
   - `propose_daytrade_profile` 시그니처에 `regime: RegimeReport | None = None` 추가.
   - `_summarize_regime` 새 헬퍼 — None 이면 빈 dict, 활성 시 regime/summary_ko/metrics 노출.

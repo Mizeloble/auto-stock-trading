@@ -1191,6 +1191,81 @@ def preflight(
         console.print(f"[dim]({skipped_count}개 게이트 미구현 — 향후 PR)[/dim]")
 
 
+@app.command()
+def latency(
+    path: Path = typer.Option(
+        Path("data/latency.jsonl"),
+        "--path",
+        help="latency 저널 경로.",
+    ),
+    days: int = typer.Option(
+        7,
+        "--days",
+        help="최근 N일 통계.",
+    ),
+) -> None:
+    """주문 송신 latency 일별 통계 (p50/p95/p99).
+
+    무엇/왜:
+    - 실거래에서 백테스트와 PnL 차이의 큰 원인이 latency. 추적해야 식별 가능.
+    - 활성: `.env` 의 `LATENCY_LOG_PATH=data/latency.jsonl`. 활성 시 runner 가
+      주문 송신마다 자동 누적. 매 호출 비용 < 1ms.
+    - p99 가 임계 (예: 3000ms — 키움 API 1회/3.6초 제한 인접) 초과면 단기
+      전략 신호가 실거래에서 의미 없어질 위험.
+
+    어떻게 확인: `auto-trade latency --days 7` — 최근 7일 일별 label 통계.
+    """
+    from datetime import timedelta as _td
+
+    from .monitor.latency import LatencyTracker
+
+    if not path.exists():
+        console.print(f"[yellow]latency 저널 없음:[/yellow] {path}")
+        console.print("[dim]`.env` 에 LATENCY_LOG_PATH 추가 후 paper-day 1회 이상 시동 필요.[/dim]")
+        return
+
+    tracker = LatencyTracker(path=path)
+    today = datetime.now(KST).date()
+
+    table = Table(title=f"주문 송신 latency (최근 {days}일)")
+    table.add_column("일자")
+    table.add_column("label")
+    table.add_column("건수", justify="right")
+    table.add_column("mean", justify="right")
+    table.add_column("p50", justify="right")
+    table.add_column("p95", justify="right")
+    table.add_column("p99", justify="right")
+    table.add_column("max", justify="right")
+
+    any_data = False
+    for offset in range(days):
+        target = (today - _td(days=offset)).isoformat()
+        stats_list = tracker.daily_stats(target)
+        if not stats_list:
+            continue
+        for stats in stats_list:
+            any_data = True
+            # p99 가 3초 초과면 빨강 강조.
+            p99_color = "red" if stats.p99_ms >= 3000 else "white"
+            table.add_row(
+                stats.date,
+                stats.label,
+                f"{stats.count:,}",
+                f"{stats.mean_ms:.1f}",
+                f"{stats.p50_ms:.1f}",
+                f"{stats.p95_ms:.1f}",
+                f"[{p99_color}]{stats.p99_ms:.1f}[/{p99_color}]",
+                f"{stats.max_ms:.1f}",
+            )
+
+    if not any_data:
+        console.print(f"[dim]최근 {days}일 데이터 없음. paper-day 운영 후 다시 확인.[/dim]")
+        return
+
+    console.print(table)
+    console.print("[dim]단위: ms · p99 ≥ 3000ms 시 빨강 강조 (단기 전략 신호가 휩쓸릴 위험).[/dim]")
+
+
 @app.command("detect-regime")
 def detect_regime(
     symbol: str = typer.Option(
