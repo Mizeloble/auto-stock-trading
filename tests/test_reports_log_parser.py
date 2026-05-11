@@ -71,6 +71,39 @@ def test_parse_extracts_each_event_type_into_correct_bucket() -> None:
     assert len(events.fatal) == 1
 
 
+def test_parse_extracts_timeline_event_types() -> None:
+    """2026-05-11 회귀 후속: partial_take / kill_switch / liquidate_start 도 잡힌다."""
+    lines = [
+        _line(
+            "position_guard.partial_take",
+            symbol="005930",
+            price=284500.0,
+            avg_price=275500.0,
+            gain_pct=3.27,
+            qty_to_sell=6,
+            qty_remaining=6,
+        ),
+        _line(
+            "runner.kill_switch_triggered",
+            today_change=-0.035,
+            daily_loss_limit=0.03,
+        ),
+        _line(
+            "runner.liquidate_start",
+            reason="daily_loss_kill",
+            symbols=["005930"],
+            dry_run=False,
+        ),
+    ]
+    events = parse_lines(lines)
+    assert len(events.partial_takes) == 1
+    assert events.partial_takes[0]["symbol"] == "005930"
+    assert len(events.kill_switches) == 1
+    assert events.kill_switches[0]["today_change"] == -0.035
+    assert len(events.liquidate_starts) == 1
+    assert events.liquidate_starts[0]["reason"] == "daily_loss_kill"
+
+
 def test_parse_log_missing_file_returns_empty_events(tmp_path: Path) -> None:
     """파일이 없으면 모든 필드가 비어있는 LogEvents — 호출자 안전 분기용."""
     events = parse_log(tmp_path / "does-not-exist.log")
