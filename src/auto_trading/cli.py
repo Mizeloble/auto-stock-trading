@@ -1176,5 +1176,133 @@ def preflight(
         console.print(f"[dim]({skipped_count}개 게이트 미구현 — 향후 PR)[/dim]")
 
 
+orders_app = typer.Typer(help="주문 저널 진단·복구 도구.")
+app.add_typer(orders_app, name="orders")
+
+
+@orders_app.command("inspect")
+def orders_inspect(
+    journal: Path = typer.Option(
+        Path("data/orders/state.jsonl"),
+        "--journal",
+        help="주문 저널 경로.",
+    ),
+    suspect_only: bool = typer.Option(
+        False,
+        "--suspect-only",
+        help="결과 미확인(submit-only) 주문만 표시.",
+    ),
+    tail: int = typer.Option(
+        50,
+        "--tail",
+        help="최근 N개 이벤트만 (전체 모드). suspect-only 면 무시.",
+    ),
+) -> None:
+    """주문 저널 진단 — 모든 이벤트 표 출력 + 결과 미확인 강조.
+
+    무엇/왜:
+    - `preflight` 의 `no_pending_orders` 게이트가 fail 했을 때 *무엇이* 미해결인지
+      사용자가 즉시 파악. 키움 HTS / 봇 인증 도구 외부에서 확인 후 정정.
+    - 저널은 봇이 송신한 주문의 *진실 기록* — 키움 응답 누락이나 봇 죽음으로
+      체결 여부 불확실한 항목 발견에 사용.
+
+    어떻게 확인:
+    - `auto-trade orders inspect` — 최근 50개 이벤트 + suspect 강조.
+    - `auto-trade orders inspect --suspect-only` — 결과 미확인 항목만.
+    """
+    from .account.order_journal import OrderJournal
+    from .account.recovery import find_suspect_orders
+
+    if not journal.exists():
+        console.print(f"[yellow]저널 파일 없음:[/yellow] {journal}")
+        console.print(
+            "[dim]봇이 한 번도 안 돌았거나 KIWOOM_TOKEN_CACHE_PATH 와 다른 경로일 수 있음.[/dim]"
+        )
+        return
+
+    j = OrderJournal(path=journal)
+    events = list(j.replay())
+    if not events:
+        console.print(f"[dim]저널 비어있음: {journal}[/dim]")
+        return
+
+    suspects = find_suspect_orders(j.replay())
+    suspect_ids = {s.client_id for s in suspects}
+
+    if suspect_only:
+        if not suspects:
+            console.print("[green]✓ 결과 미확인 주문 없음.[/green]")
+            return
+        table = Table(title=f"결과 미확인 주문 ({len(suspects)}건)")
+        table.add_column("client_id (앞 8자)")
+        table.add_column("송신 시각")
+        table.add_column("종목")
+        table.add_column("방향", justify="center")
+        table.add_column("수량", justify="right")
+        table.add_column("타입")
+        table.add_column("가격", justify="right")
+        for s in suspects:
+            table.add_row(
+                s.client_id[:8],
+                s.submitted_at,
+                s.symbol,
+                s.side,
+                str(s.quantity),
+                s.order_type,
+                s.price or "-",
+            )
+        console.print(table)
+        console.print(
+            "[yellow]권장 조치:[/yellow] 키움 HTS 에서 해당 client_id 시각·종목·수량과 일치하는 "
+            "주문이 *실제로* 들어갔는지 확인 후, 봇 재시작 또는 저널 수동 정리."
+        )
+        return
+
+    # 전체 모드 — 최근 N개 이벤트 + suspect 강조.
+    recent = events[-tail:] if tail > 0 else events
+    table = Table(title=f"주문 저널 (최근 {len(recent)}/{len(events)} 이벤트)")
+    table.add_column("시각")
+    table.add_column("이벤트", justify="center")
+    table.add_column("client_id")
+    table.add_column("상세")
+
+    for ev in recent:
+        ts = str(ev.get("ts", ""))[:19].replace("T", " ")
+        kind = str(ev.get("event", "?"))
+        cid_full = str(ev.get("client_id", ""))
+        cid = cid_full[:8]
+        is_suspect = cid_full in suspect_ids and kind == "submit"
+
+        if kind == "submit":
+            symbol = ev.get("symbol", "?")
+            side = ev.get("side", "?")
+            qty = ev.get("qty", "?")
+            detail = f"{side} {symbol} x{qty}"
+            if is_suspect:
+                detail = f"[red]{detail} (결과 미확인)[/red]"
+            kind_label = "[yellow]submit[/yellow]" if is_suspect else "submit"
+        elif kind == "accepted":
+            detail = f"order_no={ev.get('order_no', '?')}"
+            kind_label = "[green]accepted[/green]"
+        elif kind == "failed":
+            err = str(ev.get("error", ""))[:60]
+            detail = f"[red]{err}[/red]"
+            kind_label = "[red]failed[/red]"
+        else:
+            detail = str(ev)[:60]
+            kind_label = kind
+
+        table.add_row(ts, kind_label, cid, detail)
+
+    console.print(table)
+    if suspects:
+        console.print(
+            f"[yellow]주의:[/yellow] 결과 미확인 주문 {len(suspects)}건. "
+            "`auto-trade orders inspect --suspect-only` 로 상세 확인."
+        )
+    else:
+        console.print("[green]✓ 결과 미확인 주문 없음.[/green]")
+
+
 if __name__ == "__main__":
     app()

@@ -88,6 +88,13 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 새 plist `scripts/launchd/com.mizeloble.auto-trade.heartbeat-check.plist` — 5분(StartInterval=300) 간격, RunAtLoad=false.
   - `launchd-install.sh` / `launchd-uninstall.sh` 의 LABELS 에 라벨 추가, chmod +x 자동.
   - 사용자 수동 작업: `./scripts/launchd-install.sh` 한 번만 실행하면 끝.
+- [x] **PR16 · `feat(cli): orders inspect 진단 명령 — preflight 후속`**
+  - 새 명령 `auto-trade orders inspect` — 주문 저널 (`data/orders/state.jsonl`) 진단.
+  - 옵션: `--journal` / `--suspect-only` / `--tail` (전체 모드 기본 50건).
+  - 전체 모드: 모든 이벤트를 시각·종류·client_id(앞 8자)·상세로 표 출력. submit-only(결과 미확인) 행을 빨강 강조.
+  - `--suspect-only`: 결과 미확인 주문만 표 + 권장 조치 안내 (키움 HTS 와 대조).
+  - 운영 시나리오: preflight 의 `no_pending_orders` 게이트가 fail 했을 때 이 명령으로 *무엇이* 미해결인지 즉시 파악.
+  - 테스트 6건 (파일 없음 / 빈 저널 / 정상 / suspect 강조 / suspect-only / suspect-only when clean). 691 전체 통과.
 - [x] **PR15 · `feat(llm): 비용 추적 wiring + preflight 게이트 활성 — #16 2차`**
   - 새 모듈 `llm/cost.py` — `get_default_tracker()` / `LLMBudgetExceeded` / `check_budget_or_raise()` / `record_response()` 어댑터.
   - `Settings.llm_cost_path: Path | None` (default 비활성) + `llm_monthly_budget_usd: float = 5.0` 추가. `.env.example` 갱신.
