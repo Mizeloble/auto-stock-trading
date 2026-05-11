@@ -114,6 +114,76 @@ def test_build_empty_events_returns_minimal_report() -> None:
     assert "거래 없음" in report.note_ko or "차단" in report.note_ko
 
 
+# 2026-05-11 회귀: note_ko 가 buys 와 일치해야 한다.
+
+
+def test_note_ko_uses_actual_buys_not_discovery_count() -> None:
+    """기존 버그: 발굴 3건 + 실제 매수 1건일 때 note_ko 가 "매수 3건" 으로 잘못 표기.
+
+    수정: 매수는 실제 체결(buys) 기준으로 세고, 발굴 카운트와 분리.
+    """
+    events = LogEvents(
+        discovery={
+            "event": "daytrade.discovery",
+            "chosen": ["005930", "028050", "006360"],  # 3건 발굴
+            "blocked": [],
+        },
+        orders_accepted=[
+            # 실제 체결은 005930 1건뿐.
+            {"symbol": "005930", "side": "buy", "qty": 12, "price": 275500.0},
+        ],
+    )
+    report = build_daily_report(date="2026-05-07", events=events, snapshot=None)
+    assert len(report.buys) == 1
+    assert "매수 1건" in report.note_ko
+    # 발굴 카운트(3)가 매수 카운트로 새어나오면 안 됨.
+    assert "매수 3건" not in report.note_ko
+
+
+def test_note_ko_says_discovery_when_buys_empty_but_chosen_present() -> None:
+    """2026-05-11 회귀: 발굴 3건 + 매수 0건(kill switch 등) + 청산 1건.
+
+    기존 메모는 "매수 3건 ... · 청산 1건" 으로 잘못 적었다. 새 동작은
+    실제 buys 가 0건임을 명시해야 한다.
+    """
+    events = LogEvents(
+        discovery={
+            "event": "daytrade.discovery",
+            "chosen": ["005930", "336570", "046890"],
+            "blocked": [],
+        },
+        liquidations_accepted=[
+            {"symbol": "005930", "qty": 6, "buy_price": 275500.0},
+        ],
+    )
+    report = build_daily_report(date="2026-05-11", events=events, snapshot=None)
+    assert report.buys == []
+    assert len(report.liquidations) == 1
+    assert "발굴 3건" in report.note_ko
+    assert "체결 0" in report.note_ko
+    assert "청산 1건" in report.note_ko
+    assert "매수 3건" not in report.note_ko
+
+
+def test_note_ko_dedupes_buy_symbols() -> None:
+    """같은 종목 분할 매수는 1건으로 — 발굴 카운트와 일관성."""
+    events = LogEvents(
+        discovery={
+            "event": "daytrade.discovery",
+            "chosen": ["005930"],
+            "blocked": [],
+        },
+        orders_accepted=[
+            {"symbol": "005930", "side": "buy", "qty": 5, "price": 275500.0},
+            {"symbol": "005930", "side": "buy", "qty": 7, "price": 280000.0},
+        ],
+    )
+    report = build_daily_report(date="2026-05-07", events=events, snapshot=None)
+    assert len(report.buys) == 2  # buys 배열엔 둘 다 보존
+    assert "매수 1건" in report.note_ko  # 메모에선 종목 기준 1건
+    assert "005930" in report.note_ko
+
+
 def test_build_counts_errors_from_orders_liqs_fatals_and_balance() -> None:
     events = LogEvents(
         orders_failed=[{"symbol": "A", "side": "buy", "qty": 1, "error": "x"}],
