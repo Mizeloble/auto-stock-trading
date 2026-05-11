@@ -194,11 +194,7 @@ def _ts(hh: int, mm: int) -> str:
     from datetime import datetime, timedelta, timezone
 
     kst = timezone(timedelta(hours=9))
-    return (
-        datetime(2026, 5, 11, hh, mm, tzinfo=kst)
-        .astimezone(UTC)
-        .strftime("%Y-%m-%dT%H:%M:%SZ")
-    )
+    return datetime(2026, 5, 11, hh, mm, tzinfo=kst).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def test_timeline_collects_and_sorts_event_types() -> None:
