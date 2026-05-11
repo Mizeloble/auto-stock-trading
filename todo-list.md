@@ -88,6 +88,12 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 새 plist `scripts/launchd/com.mizeloble.auto-trade.heartbeat-check.plist` — 5분(StartInterval=300) 간격, RunAtLoad=false.
   - `launchd-install.sh` / `launchd-uninstall.sh` 의 LABELS 에 라벨 추가, chmod +x 자동.
   - 사용자 수동 작업: `./scripts/launchd-install.sh` 한 번만 실행하면 끝.
+- [x] **PR17 · `feat(cli): detect-regime 시장국면 진단 — #5 사전 작업`**
+  - 새 명령 `auto-trade detect-regime` — KODEX 200(069500) 60일봉 → `scanner.classify()` → 시장국면(추세상승/추세하락/박스/고변동성) + 지표 표 + 권장 메시지.
+  - `--symbol` (default 069500) / `--days` (default 60) 옵션.
+  - 사용자가 daytrade 프로파일 선택할 때 시장 상황 즉시 확인.
+  - 테스트 6건 (4 카테고리 + 빈 응답 가드 + 지표 표 노출). 697 전체 통과.
+  - **자동 라우팅(#5 본진)은 PR18 로 분리** — paper-day 시동 시 분류 결과로 daytrade-{trend,range,crash}.yaml 자동 선택.
 - [x] **PR16 · `feat(cli): orders inspect 진단 명령 — preflight 후속`**
   - 새 명령 `auto-trade orders inspect` — 주문 저널 (`data/orders/state.jsonl`) 진단.
   - 옵션: `--journal` / `--suspect-only` / `--tail` (전체 모드 기본 50건).
