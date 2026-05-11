@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from auto_trading.reports.daily import (
     DailyReport,
     LiquidationRecord,
     MarketGateInfo,
+    TimelineEvent,
     TradeRecord,
     build_daily_report,
     load_daily_report,
@@ -182,6 +184,114 @@ def test_note_ko_dedupes_buy_symbols() -> None:
     assert len(report.buys) == 2  # buys 배열엔 둘 다 보존
     assert "매수 1건" in report.note_ko  # 메모에선 종목 기준 1건
     assert "005930" in report.note_ko
+
+
+# 2026-05-11 사용자 피드백 — timeline 빌더 회귀.
+
+
+def _ts(hh: int, mm: int) -> str:
+    """KST hh:mm 으로 나오게 하는 UTC ISO 8601. KST 09:00 = UTC 00:00, KST 08:55 = UTC 전날 23:55."""
+    from datetime import datetime, timedelta, timezone
+
+    kst = timezone(timedelta(hours=9))
+    return datetime(2026, 5, 11, hh, mm, tzinfo=kst).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_timeline_collects_and_sorts_event_types() -> None:
+    """발굴·매수·부분 익절·kill switch·청산 시작을 시각 순으로 한 줄씩."""
+    events = LogEvents(
+        symbol_names={"005930": "삼성전자"},
+        discovery={
+            "event": "daytrade.discovery",
+            "chosen": ["005930"],
+            "blocked": [],
+            "timestamp": _ts(8, 55),
+        },
+        orders_accepted=[
+            {
+                "symbol": "005930",
+                "side": "buy",
+                "qty": 12,
+                "price": 275500.0,
+                "timestamp": _ts(9, 0),
+            }
+        ],
+        partial_takes=[
+            {
+                "symbol": "005930",
+                "price": 284500.0,
+                "avg_price": 275500.0,
+                "gain_pct": 3.27,
+                "qty_to_sell": 6,
+                "qty_remaining": 6,
+                "timestamp": _ts(9, 1),
+            }
+        ],
+        kill_switches=[
+            {
+                "today_change": -0.035,
+                "daily_loss_limit": 0.03,
+                "timestamp": _ts(9, 1),
+            }
+        ],
+        liquidate_starts=[
+            {
+                "reason": "daily_loss_kill",
+                "symbols": ["005930"],
+                "dry_run": False,
+                "timestamp": _ts(9, 1),
+            }
+        ],
+    )
+    report = build_daily_report(date="2026-05-11", events=events, snapshot=None)
+    times = [(ev.time_kst, ev.kind) for ev in report.timeline]
+    assert times == [
+        ("08:55", "discovery"),
+        ("09:00", "buy"),
+        ("09:01", "partial_take"),
+        ("09:01", "kill_switch"),
+        ("09:01", "liquidate"),
+    ]
+    # 텍스트에 종목명·수량·가격 포함.
+    buy_text = next(ev.text for ev in report.timeline if ev.kind == "buy")
+    assert "005930 삼성전자" in buy_text and "12주" in buy_text and "275,500원" in buy_text
+    pt_text = next(ev.text for ev in report.timeline if ev.kind == "partial_take")
+    assert "+3.27%" in pt_text and "6주" in pt_text
+    ks_text = next(ev.text for ev in report.timeline if ev.kind == "kill_switch")
+    assert "🛑" in ks_text and "-3.50%" in ks_text  # today_change=-0.035 → -3.50%
+    liq_text = next(ev.text for ev in report.timeline if ev.kind == "liquidate")
+    assert "일일 손실 한도" in liq_text and "005930 삼성전자" in liq_text
+
+
+def test_timeline_skips_events_without_timestamp() -> None:
+    events = LogEvents(
+        discovery={"event": "daytrade.discovery", "chosen": ["A"]},  # timestamp 없음
+        orders_accepted=[
+            {"symbol": "A", "side": "buy", "qty": 1, "price": 1.0},  # timestamp 없음
+        ],
+    )
+    report = build_daily_report(date="2026-05-11", events=events, snapshot=None)
+    assert report.timeline == []
+
+
+def test_timeline_round_trip_through_json(tmp_path: Path) -> None:
+    """저장·로드 라운드트립에서 timeline 도 보존."""
+    report = DailyReport(
+        date="2026-05-11",
+        mode="day-trade",
+        dry_run=False,
+        discovery_chosen=[],
+        discovery_blocked=[],
+        market_gates=[],
+        buys=[],
+        liquidations=[],
+        error_count=0,
+        note_ko="",
+        timeline=[TimelineEvent(time_kst="09:01", kind="buy", text="매수 A 1주 @1원")],
+    )
+    path = save_daily_report(report, root=tmp_path)
+    loaded = load_daily_report(path)
+    assert loaded.timeline == report.timeline
 
 
 def test_build_counts_errors_from_orders_liqs_fatals_and_balance() -> None:

@@ -188,8 +188,48 @@ def _build_trade_lines(
     return pair_lines, only_buy_lines, only_sell_lines
 
 
+_TIMELINE_KIND_PREFIX_KO = {
+    "discovery": "🔎",
+    "buy": "💰",
+    "partial_take": "💵",
+    "kill_switch": "🛑",
+    "liquidate": "🧹",
+}
+
+
+def _build_timeline_lines(timeline: list, *, max_lines: int = 12) -> list[str]:
+    """일일 리포트의 시계열 섹션 — '[09:01] 💵 부분 익절 ...' 한 줄씩.
+
+    payload['timeline'] 은 build_daily_report 가 채운 TimelineEvent asdict 리스트.
+    너무 길면 max_lines 까지 자르고 끝에 "외 N건" 안내.
+    """
+    if not isinstance(timeline, list) or not timeline:
+        return []
+    out: list[str] = []
+    for ev in timeline[:max_lines]:
+        if not isinstance(ev, dict):
+            continue
+        kind = str(ev.get("kind") or "")
+        time_kst = str(ev.get("time_kst") or "?")
+        text = str(ev.get("text") or "")
+        # text 가 이미 이모지로 시작(예: kill_switch 의 🛑) 이면 prefix 중복 회피.
+        if text and text[0] in "🛑💵💰🧹🔎":
+            out.append(f"[{time_kst}] {text}")
+        else:
+            prefix = _TIMELINE_KIND_PREFIX_KO.get(kind, "•")
+            out.append(f"[{time_kst}] {prefix} {text}")
+    if len(timeline) > max_lines:
+        out.append(f"  외 {len(timeline) - max_lines}건")
+    return out
+
+
 def _build_closing_balance(payload: dict) -> list[str]:
-    """마감 잔고 섹션 — closing_cash 가 있을 때만 렌더. 없으면 빈 리스트."""
+    """마감 잔고 섹션 — closing_cash 가 있을 때만 렌더. 없으면 빈 리스트.
+
+    2026-05-11 사용자 피드백: '총평가' 라벨이 '예수금 + 보유' 합인지 보유 평가금만인지
+    헷갈린다. 라벨을 '보유 평가금' 으로 명확화하고, '계좌 총합' 한 줄을 추가해 합계 표시.
+    보유 종목 손익은 '(매수가 대비)' 를 명시.
+    """
     cash = payload.get("closing_cash")
     if cash is None:
         return []
@@ -198,11 +238,16 @@ def _build_closing_balance(payload: dict) -> list[str]:
     out: list[str] = ["💰 마감 잔고"]
     out.append(f"예수금: {_won(cash)}")
     if equity is not None:
-        out.append(f"총평가: {_won(equity)}")
+        out.append(f"보유 평가금: {_won(equity)}")
+        try:
+            total = float(cash) + float(equity)
+            out.append(f"계좌 총합: {_won(total)}")
+        except TypeError, ValueError:
+            pass
     if not holdings:
         out.append("보유: 없음 (전량 청산)")
         return out
-    out.append(f"보유: {len(holdings)}종목")
+    out.append(f"보유: {len(holdings)}종목 (손익은 매수가 대비)")
     for h in holdings[:6]:
         sym = str(h.get("symbol") or "?")
         name = h.get("name") if isinstance(h.get("name"), str) else None
@@ -369,6 +414,12 @@ def format_daily_report(payload: dict) -> str:
                 metric = f" (last {float(last):.2f} / 5 {float(sma5):.2f} / 20 {float(sma20):.2f})"
             lines.append(f"- {g.get('market', '?')} {mark}{metric}")
 
+    timeline_lines = _build_timeline_lines(payload.get("timeline") or [])
+    if timeline_lines:
+        lines.append("")
+        lines.append(f"⏱ 오늘 흐름 ({len(timeline_lines)}건)")
+        lines.extend(timeline_lines)
+
     buys = payload.get("buys") or []
     liqs = payload.get("liquidations") or []
     pair_lines, only_buy_lines, only_sell_lines = _build_trade_lines(buys, liqs)
@@ -398,7 +449,8 @@ def format_daily_report(payload: dict) -> str:
     if realized is not None:
         pct_part = f"/{_signed_pct(realized_pct)}" if realized_pct is not None else ""
         summary_parts.append(f"실현 {_signed_won(realized)}{pct_part}")
-    summary_parts.append(f"매매 {len(buys) + len(liqs)}건")
+    # 2026-05-11 사용자 피드백: "매매 N건" 이 매수·청산 합산이라 헷갈림 → 각각 표기.
+    summary_parts.append(f"매수 {len(buys)}건 · 청산 {len(liqs)}건")
     if err:
         summary_parts.append(f"에러 {err}건")
     if summary_parts:

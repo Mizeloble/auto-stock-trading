@@ -36,6 +36,13 @@ class LogEvents:
         default_factory=list
     )  # runner.liquidate_failed
     signal_rejected: list[dict[str, Any]] = field(default_factory=list)  # runner.signal_rejected
+    # 2026-05-11 회귀 후속 — 일일 리포트에 시계열 표시용. 부분 익절·kill switch·청산
+    # 시작 이벤트는 reports/daily.py 의 timeline 빌더가 매수/청산 체결과 합쳐 시각 순으로 정렬.
+    partial_takes: list[dict[str, Any]] = field(default_factory=list)  # position_guard.partial_take
+    kill_switches: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # runner.kill_switch_triggered
+    liquidate_starts: list[dict[str, Any]] = field(default_factory=list)  # runner.liquidate_start
     balance_failures: int = 0  # runner.balance_fetch_failed 누적 카운트
     fatal: list[dict[str, Any]] = field(default_factory=list)  # runner.balance_failed_fatal 등
     # daytrade.discovery / universe_chosen 로그의 names 필드 통합 — 코드→종목명.
@@ -55,6 +62,9 @@ _INTEREST: dict[str, str] = {
     "runner.liquidate_accepted": "liquidations_accepted",
     "runner.liquidate_failed": "liquidations_failed",
     "runner.signal_rejected": "signal_rejected",
+    "position_guard.partial_take": "partial_takes",
+    "runner.kill_switch_triggered": "kill_switches",
+    "runner.liquidate_start": "liquidate_starts",
     "runner.balance_fetch_failed": "_balance_failed",
     "runner.balance_failed_fatal": "fatal",
 }

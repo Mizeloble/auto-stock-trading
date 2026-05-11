@@ -189,7 +189,9 @@ def test_format_includes_closing_balance_when_present() -> None:
     )
     assert "💰 마감 잔고" in msg
     assert "예수금: 50,000,000원" in msg
-    assert "총평가: 50,032,500원" in msg
+    assert "보유 평가금: 50,032,500원" in msg
+    # 계좌 총합(= cash + equity) 한 줄도 함께 노출.
+    assert "계좌 총합: 100,032,500원" in msg
     assert "보유: 없음 (전량 청산)" in msg
 
 
@@ -213,9 +215,72 @@ def test_format_closing_holdings_render_with_pnl() -> None:
         )
     )
     assert "보유: 1종목" in msg
+    # 손익 라벨이 매수가 대비임을 명시 — 2026-05-11 사용자 피드백.
+    assert "매수가 대비" in msg
     assert "005930 삼성전자" in msg
     assert "+32,500원" in msg
     assert "+0.98%" in msg
+
+
+# 2026-05-11 사용자 피드백 — 시계열 섹션 + 라벨 명확화.
+
+
+def test_format_renders_timeline_section_with_kst_time_prefix() -> None:
+    """timeline 이벤트들이 [HH:MM] 시각 + 종류별 이모지 + 텍스트로 렌더."""
+    msg = format_daily_report(
+        _payload(
+            timeline=[
+                {
+                    "time_kst": "08:55",
+                    "kind": "discovery",
+                    "text": "발굴 채택 3건: 005930 삼성전자",
+                },
+                {
+                    "time_kst": "09:00",
+                    "kind": "buy",
+                    "text": "매수 005930 삼성전자 12주 @275,500원",
+                },
+                {
+                    "time_kst": "09:01",
+                    "kind": "partial_take",
+                    "text": "부분 익절 005930 삼성전자 6주 @284,500원 +3.27%",
+                },
+                {
+                    "time_kst": "09:01",
+                    "kind": "kill_switch",
+                    "text": "🛑 일일 손실 한도 도달 (당일 -3.50%, 한도 -3.0%) — 강제 청산",
+                },
+            ],
+        )
+    )
+    assert "⏱ 오늘 흐름 (4건)" in msg
+    assert "[08:55] 🔎 발굴 채택 3건" in msg
+    assert "[09:00] 💰 매수 005930 삼성전자 12주 @275,500원" in msg
+    assert "[09:01] 💵 부분 익절 005930 삼성전자 6주 @284,500원 +3.27%" in msg
+    # kill switch 의 🛑 가 text 첫 글자라 prefix 중복되지 않게.
+    assert "[09:01] 🛑 일일 손실 한도 도달" in msg
+
+
+def test_format_timeline_section_omitted_when_empty() -> None:
+    msg = format_daily_report(_payload(timeline=[]))
+    assert "⏱ 오늘 흐름" not in msg
+
+
+def test_format_timeline_truncates_with_overflow_note() -> None:
+    timeline = [
+        {"time_kst": f"09:{i:02d}", "kind": "buy", "text": f"매수 005930 {i}주"} for i in range(15)
+    ]
+    msg = format_daily_report(_payload(timeline=timeline))
+    assert "외 3건" in msg  # 기본 max_lines=12 → 3건 잘림
+
+
+def test_format_summary_line_splits_buy_and_liq_counts() -> None:
+    """기존 '매매 N건' 합산 표기가 헷갈린다는 피드백 → 매수/청산 분리."""
+    msg = format_daily_report(_payload())
+    # 매수 1 + 청산 1 케이스.
+    assert "매수 1건 · 청산 1건" in msg
+    # 합산 라벨은 사라져야 함.
+    assert "매매 2건" not in msg
 
 
 def test_format_omits_closing_section_when_cash_missing() -> None:
