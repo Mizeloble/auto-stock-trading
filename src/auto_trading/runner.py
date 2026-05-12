@@ -19,6 +19,7 @@ import contextlib
 import signal as _signal
 import time as _time
 from dataclasses import dataclass, field
+from datetime import date as _date
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -41,6 +42,7 @@ from .monitor.latency import LatencyTracker, get_default_latency_tracker
 from .notify.base import NoopNotifier, Notifier
 from .notify.state import RunnerStateSnapshot
 from .risk.consecutive_loss import ConsecutiveLossTracker
+from .risk.correlation_collector import refresh_correlations
 from .risk.manager import AccountState, Decision, RiskManager
 from .risk.position_guard import GuardAction, PositionGuard
 from .strategy.base import Signal, Strategy
@@ -167,6 +169,12 @@ class PaperRunner:
     # 29단계 PR6 (#10 2차) — reject 분류 결과로 일시 차단된 종목.
     # symbol → skip 만료 시각 (KST). 만료 후 자연 회복.
     _skipped_until: dict[str, datetime] = field(default_factory=dict, init=False)
+    # 29단계 PR28 (#15 Phase 2) — 보유 종목 페어 상관계수 캐시.
+    # 캐시 키: (refresh_date, frozenset(보유 symbol)). 둘 중 하나 변경 시 재계산.
+    # 한도 비활성(max_position_correlation=0) 이면 새로고침 자체를 스킵 — 외부 호출 0.
+    _holding_correlations: dict[tuple[str, str], float] = field(default_factory=dict, init=False)
+    _correlations_refresh_date: _date | None = field(default=None, init=False)
+    _correlations_refresh_symbols: frozenset[str] = field(default_factory=frozenset, init=False)
 
     def __post_init__(self) -> None:
         # 23단계 Phase C — 명시 주입 안 했으면 risk.limits 를 그대로 따르는 PositionGuard 자동 생성.
@@ -420,6 +428,8 @@ class PaperRunner:
         strat = self.strategies.get(bar.symbol)
         if strat is None:
             return
+        # 29단계 PR28 — 시그널 평가 전에 페어 상관계수 캐시 갱신 (한도 활성 시만).
+        await self._refresh_correlations_if_needed(rest, account)
         for signal in strat.on_bar(bar):
             # 시그널은 리스크 거절·체결 여부와 무관하게 이력에 기록 (텔레그램 /last_signal 용).
             self._recent_signals[signal.symbol] = signal
@@ -533,6 +543,43 @@ class PaperRunner:
         log.info("runner.loss_tracker_unpaused")
         return True
 
+    async def _refresh_correlations_if_needed(
+        self, rest: KiwoomRestClient, account: AccountState
+    ) -> None:
+        """보유 종목 또는 날짜 변경 시 페어 상관계수 재계산 — 29단계 PR28.
+
+        무엇/왜:
+        - ``max_position_correlation`` 비활성 (0) 이면 외부 호출 자체를 스킵.
+        - 캐시 키 = (오늘 KST 날짜, 현재 보유 frozenset). 키 일치하면 재호출 없음.
+        - 보유 0 이면 가드 무의미 → 빈 dict 유지.
+        - fetch 실패 (전체 또는 일부) 는 warning 로그만 + 마지막 캐시 보존 — BUY 가
+          가드 없이 통과하는 부수효과를 최소화.
+
+        어떻게 확인: tests/test_runner_correlation.py.
+        """
+        if self.risk.limits.max_position_correlation <= 0:
+            return
+        held = frozenset(s for s, q in account.positions.items() if q > 0)
+        if not held:
+            self._holding_correlations = {}
+            self._correlations_refresh_symbols = frozenset()
+            return
+        today = datetime.now(tz=KST).date()
+        if self._correlations_refresh_date == today and self._correlations_refresh_symbols == held:
+            return
+        try:
+            self._holding_correlations = await refresh_correlations(rest, sorted(held))
+        except Exception as exc:
+            log.warning("runner.correlation_refresh_failed", error=str(exc))
+            return
+        self._correlations_refresh_date = today
+        self._correlations_refresh_symbols = held
+        log.info(
+            "runner.correlation_refreshed",
+            symbols=sorted(held),
+            pairs=len(self._holding_correlations),
+        )
+
     async def _evaluate_signal(
         self, signal: Signal, bar: Bar, account: AccountState
     ) -> Order | None:
@@ -570,7 +617,12 @@ class PaperRunner:
                 paused_until=until_iso,
             )
             return None
-        decision = self.risk.evaluate(signal, price=bar.close, account=account)
+        decision = self.risk.evaluate(
+            signal,
+            price=bar.close,
+            account=account,
+            holding_correlations=self._holding_correlations or None,
+        )
         if decision.decision is Decision.REJECT or decision.order is None:
             log.info(
                 "runner.signal_rejected",
