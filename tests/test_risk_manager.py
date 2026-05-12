@@ -188,3 +188,98 @@ def test_should_force_liquidate_false_within_threshold() -> None:
         day_start_equity=10_000_000,
     )
     assert rm.should_force_liquidate(acct) is False
+
+
+# ---- 29단계 PR27 (#15 Phase 1) — 상관계수 가드 ------------------------------
+
+
+def test_buy_rejected_when_correlation_exceeds_limit() -> None:
+    """기존 보유와 상관 0.85 (한도 0.7 초과) → REJECT."""
+    rm = RiskManager(limits=RiskLimits(max_position_correlation=0.7, max_portfolio_exposure=1.0))
+    acct = AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        day_start_equity=10_000_000,
+        positions={"AAA": 10},  # 보유 1종목
+        avg_prices={"AAA": 50_000.0},
+    )
+    corr = {("AAA", "TGT"): 0.85}
+    d = rm.evaluate(_buy("TGT"), price=70_000, account=acct, holding_correlations=corr)
+    assert d.decision is Decision.REJECT
+    assert "correlation guard" in d.reason
+    assert "AAA" in d.reason
+
+
+def test_buy_approved_when_correlation_below_limit() -> None:
+    """상관 0.5 (한도 0.7 미만) → 통과."""
+    rm = RiskManager(limits=RiskLimits(max_position_correlation=0.7, max_portfolio_exposure=1.0))
+    acct = AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        day_start_equity=10_000_000,
+        positions={"AAA": 10},
+        avg_prices={"AAA": 50_000.0},
+    )
+    corr = {("AAA", "TGT"): 0.5}
+    d = rm.evaluate(_buy("TGT"), price=70_000, account=acct, holding_correlations=corr)
+    assert d.decision is Decision.APPROVE
+
+
+def test_buy_approved_when_correlation_guard_disabled() -> None:
+    """max_position_correlation=0 (기본) 이면 페어 데이터 무시 — 기존 동작."""
+    rm = RiskManager(limits=RiskLimits(max_portfolio_exposure=1.0))
+    acct = AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        day_start_equity=10_000_000,
+        positions={"AAA": 10},
+        avg_prices={"AAA": 50_000.0},
+    )
+    corr = {("AAA", "TGT"): 0.99}  # 활성이었으면 거절될 값
+    d = rm.evaluate(_buy("TGT"), price=70_000, account=acct, holding_correlations=corr)
+    assert d.decision is Decision.APPROVE
+
+
+def test_buy_approved_when_correlation_data_missing() -> None:
+    """한도는 켜져있지만 페어 데이터 None → 가드 스킵 (러너가 데이터 못 모은 부팅 직후 등)."""
+    rm = RiskManager(limits=RiskLimits(max_position_correlation=0.7, max_portfolio_exposure=1.0))
+    acct = AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        day_start_equity=10_000_000,
+        positions={"AAA": 10},
+        avg_prices={"AAA": 50_000.0},
+    )
+    d = rm.evaluate(_buy("TGT"), price=70_000, account=acct, holding_correlations=None)
+    assert d.decision is Decision.APPROVE
+
+
+def test_buy_correlation_ignores_zero_qty_holdings() -> None:
+    """positions 에 수량 0 잔존(매도 후 dict 미정리) 인 종목은 가드 비교 대상 X."""
+    rm = RiskManager(limits=RiskLimits(max_position_correlation=0.7, max_portfolio_exposure=1.0))
+    acct = AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        day_start_equity=10_000_000,
+        positions={"AAA": 0, "BBB": 5},  # AAA 수량 0
+        avg_prices={"AAA": 50_000.0, "BBB": 30_000.0},
+    )
+    # AAA 와 강한 상관이 있어도 수량 0 이라 스킵, BBB 와는 약함 → 통과.
+    corr = {("AAA", "TGT"): 0.95, ("BBB", "TGT"): 0.3}
+    d = rm.evaluate(_buy("TGT"), price=70_000, account=acct, holding_correlations=corr)
+    assert d.decision is Decision.APPROVE
+
+
+def test_buy_correlation_guard_does_not_block_sell() -> None:
+    """가드는 BUY 만. SELL 은 상관계수와 무관."""
+    rm = RiskManager(limits=RiskLimits(max_position_correlation=0.7))
+    acct = AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        day_start_equity=10_000_000,
+        positions={"TGT": 10, "AAA": 5},
+        avg_prices={"TGT": 70_000.0, "AAA": 50_000.0},
+    )
+    corr = {("AAA", "TGT"): 0.99}
+    d = rm.evaluate(_sell("TGT"), price=70_000, account=acct, holding_correlations=corr)
+    assert d.decision is Decision.APPROVE
