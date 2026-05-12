@@ -94,24 +94,27 @@ def _pair_buy_liq_records(
 ) -> tuple[list[tuple[dict, dict]], list[dict], list[dict]]:
     """매수·청산 records → 페어/단방향 분류 (포맷 X, 데이터만).
 
-    같은 종목이 buys 와 liqs 양쪽에 있으면 페어로 묶고, 한쪽만 있으면 single 로.
-    한 종목에 매수가 여러 건이면 첫 매수만 페어 베이스 — day-trade 1:1 가정.
-    매수 입력 순서대로 페어 결과를 반환해 호출자가 안정적인 출력 순서를 가짐.
+    같은 종목이 buys 와 liqs 양쪽에 있으면 FIFO 로 raw 페어링 — 매수 3건·청산 2건
+    이면 페어 2 + only_buy 1. 5/12 회귀(같은 종목 8회 BUY 인데 첫 1건만 살아남던
+    PR27 이전 dedup 동작) 회피. 매수 입력 순서대로 페어 결과를 반환해 호출자가
+    안정적인 출력 순서를 가짐.
     """
-    buy_by_sym: dict[str, dict] = {}
-    for t in buys:
-        sym = str(t.get("symbol") or "")
-        if sym and sym not in buy_by_sym:
-            buy_by_sym[sym] = t
-    liq_by_sym: dict[str, dict] = {}
+    liq_queue: dict[str, list[dict]] = {}
     for li in liqs:
         sym = str(li.get("symbol") or "")
-        if sym and sym not in liq_by_sym:
-            liq_by_sym[sym] = li
+        if sym:
+            liq_queue.setdefault(sym, []).append(li)
 
-    paired = [(buy_by_sym[s], liq_by_sym[s]) for s in buy_by_sym if s in liq_by_sym]
-    only_buys = [buy_by_sym[s] for s in buy_by_sym if s not in liq_by_sym]
-    only_sells = [liq_by_sym[s] for s in liq_by_sym if s not in buy_by_sym]
+    paired: list[tuple[dict, dict]] = []
+    only_buys: list[dict] = []
+    for t in buys:
+        sym = str(t.get("symbol") or "")
+        queue = liq_queue.get(sym)
+        if queue:
+            paired.append((t, queue.pop(0)))
+        else:
+            only_buys.append(t)
+    only_sells = [li for sym_queue in liq_queue.values() for li in sym_queue]
     return paired, only_buys, only_sells
 
 
@@ -197,29 +200,41 @@ _TIMELINE_KIND_PREFIX_KO = {
 }
 
 
+# 29단계 PR27 — truncate 보존 우선순위. 마지막 라운드의 강제청산·손절은 사용자가
+# 일일 리포트로 그날의 결말을 파악하는 핵심 신호라 "외 N건" 안쪽에 묻히지 않게 한다.
+_TIMELINE_PRIORITY_KINDS: frozenset[str] = frozenset({"kill_switch", "liquidate"})
+
+
+def _format_timeline_line(ev: dict) -> str:
+    kind = str(ev.get("kind") or "")
+    time_kst = str(ev.get("time_kst") or "?")
+    text = str(ev.get("text") or "")
+    if text and text[0] in "🛑💵💰🧹🔎":
+        return f"[{time_kst}] {text}"
+    prefix = _TIMELINE_KIND_PREFIX_KO.get(kind, "•")
+    return f"[{time_kst}] {prefix} {text}"
+
+
 def _build_timeline_lines(timeline: list, *, max_lines: int = 12) -> list[str]:
     """일일 리포트의 시계열 섹션 — '[09:01] 💵 부분 익절 ...' 한 줄씩.
 
     payload['timeline'] 은 build_daily_report 가 채운 TimelineEvent asdict 리스트.
-    너무 길면 max_lines 까지 자르고 끝에 "외 N건" 안내.
+    너무 길면 max_lines 까지 자르고 끝에 "외 N건" 안내. 단 kill_switch/liquidate
+    이벤트는 truncate 안쪽이라도 항상 포함(5/12 회귀: 13:15·14:51 손절·청산이
+    "외 18건" 으로 묻혀 사용자가 그날 결말을 못 봄).
     """
     if not isinstance(timeline, list) or not timeline:
         return []
-    out: list[str] = []
-    for ev in timeline[:max_lines]:
-        if not isinstance(ev, dict):
-            continue
-        kind = str(ev.get("kind") or "")
-        time_kst = str(ev.get("time_kst") or "?")
-        text = str(ev.get("text") or "")
-        # text 가 이미 이모지로 시작(예: kill_switch 의 🛑) 이면 prefix 중복 회피.
-        if text and text[0] in "🛑💵💰🧹🔎":
-            out.append(f"[{time_kst}] {text}")
-        else:
-            prefix = _TIMELINE_KIND_PREFIX_KO.get(kind, "•")
-            out.append(f"[{time_kst}] {prefix} {text}")
-    if len(timeline) > max_lines:
-        out.append(f"  외 {len(timeline) - max_lines}건")
+
+    head_evs = [ev for ev in timeline[:max_lines] if isinstance(ev, dict)]
+    tail = [ev for ev in timeline[max_lines:] if isinstance(ev, dict)]
+    preserved = [ev for ev in tail if ev.get("kind") in _TIMELINE_PRIORITY_KINDS]
+    dropped = len(tail) - len(preserved)
+
+    out: list[str] = [_format_timeline_line(ev) for ev in head_evs]
+    if dropped > 0:
+        out.append(f"  외 {dropped}건")
+    out.extend(_format_timeline_line(ev) for ev in preserved)
     return out
 
 
@@ -308,11 +323,15 @@ def format_balance(state: RunnerStateSnapshot) -> str:
     if state.snapshot is None:
         return "잔고 조회 전 — 첫 스냅샷이 도착하면 다시 시도하세요."
     snap = state.snapshot
+    # 29단계 PR27 — 평가손익 합계는 holdings.pnl 의 로컬 합산을 신뢰 (mock 응답에
+    # `tot_evltv_prft` 가 비어 0 으로 들어오는 회귀 차단). 종목별로 ±값이 보이는데
+    # 상단 합계가 0 으로 표기되던 5/12 사용자 혼란을 막는다.
+    pnl_total = sum((h.pnl for h in snap.holdings), Decimal(0))
     lines = [
         "💰 계좌 잔고",
         f"예수금: {_won(snap.deposit)}",
         f"총평가: {_won(snap.total_evaluation)}",
-        f"평가손익: {_signed_won(snap.total_pnl)}",
+        f"평가손익: {_signed_won(pnl_total)}",
     ]
     if snap.holdings:
         lines.append("")

@@ -32,18 +32,42 @@ def test_pair_buy_liq_records_classifies_paired_only_buy_only_sell() -> None:
     assert [s["symbol"] for s in only_sells] == ["C"]
 
 
-def test_pair_buy_liq_records_dedupe_first_buy_per_symbol() -> None:
-    """한 종목 매수 여러 건이면 첫 건만 페어 베이스로 (day-trade 1:1 가정)."""
+def test_pair_buy_liq_records_raw_fifo_per_symbol() -> None:
+    """한 종목 매수 N건·청산 M건이면 FIFO 로 raw 페어링 (PR27 5/12 회귀 픽스).
+
+    이전: dict dedup 으로 첫 매수만 살아남아 동일 종목 다회 진입이 카운트에서 사라짐.
+    이후: 매수·청산이 N:M 이면 페어 min(N, M) + only_buy max(0, N-M) + only_sell max(0, M-N).
+    """
     buys = [
         {"symbol": "A", "quantity": 10, "price": 100.0},
-        {"symbol": "A", "quantity": 5, "price": 105.0},  # 무시되어야 함
+        {"symbol": "A", "quantity": 5, "price": 105.0},
+        {"symbol": "A", "quantity": 7, "price": 110.0},  # only-buy (청산 짝 부족)
     ]
-    liqs = [{"symbol": "A", "quantity": 15, "sell_price": 110.0, "buy_price": 100.0}]
+    liqs = [
+        {"symbol": "A", "quantity": 10, "sell_price": 102.0, "buy_price": 100.0},
+        {"symbol": "A", "quantity": 5, "sell_price": 108.0, "buy_price": 105.0},
+    ]
+    paired, only_buys, only_sells = _pair_buy_liq_records(buys, liqs)
+    assert len(paired) == 2  # 첫 두 매수 ↔ 청산 FIFO
+    assert paired[0][0]["price"] == 100.0
+    assert paired[0][1]["sell_price"] == 102.0
+    assert paired[1][0]["price"] == 105.0
+    assert paired[1][1]["sell_price"] == 108.0
+    assert [b["price"] for b in only_buys] == [110.0]
+    assert only_sells == []
+
+
+def test_pair_buy_liq_records_more_sells_than_buys() -> None:
+    """청산이 매수보다 많으면 잉여 청산은 only_sell 로."""
+    buys = [{"symbol": "A", "quantity": 10, "price": 100.0}]
+    liqs = [
+        {"symbol": "A", "quantity": 10, "sell_price": 110.0, "buy_price": 100.0},
+        {"symbol": "A", "quantity": 3, "sell_price": 95.0, "buy_price": 100.0},
+    ]
     paired, only_buys, only_sells = _pair_buy_liq_records(buys, liqs)
     assert len(paired) == 1
-    assert paired[0][0]["price"] == 100.0  # 첫 건만 채택
     assert only_buys == []
-    assert only_sells == []
+    assert [s["sell_price"] for s in only_sells] == [95.0]
 
 
 def test_format_pair_line_includes_pnl_and_simulated_marker() -> None:

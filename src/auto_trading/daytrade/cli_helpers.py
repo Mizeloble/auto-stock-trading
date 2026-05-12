@@ -23,6 +23,7 @@ from pathlib import Path
 import structlog
 from rich.console import Console
 
+from ..heartbeat import Heartbeat
 from ..kiwoom.rest import KiwoomRestClient
 from ..market.index import IndexMomentumTracker, Market
 from ..notify.factory import build_notifier
@@ -102,6 +103,7 @@ def build_paper_day_runner(
     today_kst: date,
     log_dir: Path = Path("logs"),
     report_root: Path = Path("data/reports"),
+    heartbeat: Heartbeat | None = None,
 ) -> tuple[PaperRunner, IndexMomentumTracker | None]:
     """notifier 체인 + PaperRunner + ReportingNotifier wrap + (옵션) momentum tracker 까지 한 번에.
 
@@ -111,6 +113,9 @@ def build_paper_day_runner(
 
     호출자는 (필요 시) command handler 만 별도 wiring 후 paper_day_main / paper_day_with_commands
     중 하나를 await 하면 된다.
+
+    `heartbeat` 미지정이면 비활성(테스트 호환). cli.py paper-day 는 `Heartbeat()` 를 명시 주입해
+    cron `heartbeat-check` 와 같은 default path(`data/heartbeat/runner.txt`) 의 mtime 을 갱신한다.
     """
     inner = build_notifier()
     if telegram_throttle_min > 0:
@@ -122,6 +127,7 @@ def build_paper_day_runner(
         allow_real=allow_real,
         dry_run=dry_run,
         notifier=inner,
+        heartbeat=heartbeat,
     )
 
     momentum_tracker: IndexMomentumTracker | None = None
