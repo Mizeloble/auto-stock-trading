@@ -13,6 +13,7 @@ Strategy가 내놓은 Signal 을 실제 주문(Order) 로 바꾸기 전 검증·
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
@@ -22,6 +23,7 @@ import structlog
 from .._common import Side
 from ..account.orders import Order, OrderType
 from ..strategy.base import Signal
+from .correlation import max_correlation_with_holdings
 
 log = structlog.get_logger(__name__)
 
@@ -72,6 +74,11 @@ class RiskLimits:
     # 운영자가 텔레그램에서 수동 unpause 가능 (PR10 — runner 통합).
     max_consecutive_losses: int = 0
     consecutive_loss_pause_sec: int = 86_400  # 24h
+    # 29단계 PR27 (#15 Phase 1) — 보유 종목 간 페어 상관계수 가드.
+    # 0 이면 비활성. 활성 권장: 0.7 (그 이상이면 사실상 같은 종목 — 분산 효과 0).
+    # 러너가 30일 일별 수익률 → pairwise_pearson_correlation 으로 미리 계산해
+    # evaluate(holding_correlations=...) 로 주입. 비활성 시 evaluate 동작 불변.
+    max_position_correlation: float = 0.0
 
 
 @dataclass
@@ -84,7 +91,15 @@ class RiskManager:
         *,
         price: float,
         account: AccountState,
+        holding_correlations: Mapping[tuple[str, str], float] | None = None,
     ) -> RiskDecision:
+        """Signal → 검증된 Order 또는 거절.
+
+        holding_correlations:
+            러너가 미리 계산한 보유 종목 간 페어 상관계수. 키는 정렬된 튜플.
+            ``max_position_correlation > 0`` 이고 이 인자가 제공되면 BUY 시 상관 가드 적용.
+            None 이거나 한도 비활성이면 가드 스킵 — 기존 동작과 동일.
+        """
         if price <= 0:
             return RiskDecision(Decision.REJECT, reason="invalid price")
 
@@ -115,6 +130,19 @@ class RiskManager:
             if today_change <= -abs(self.limits.daily_loss_limit):
                 reason = f"daily loss limit hit ({today_change:.2%})"
                 log.warning("risk.reject", reason=reason, symbol=signal.symbol)
+                return RiskDecision(Decision.REJECT, reason=reason)
+
+        # 1b) 29단계 PR27 — 상관계수 가드. 한도 > 0 + 페어 데이터가 있을 때만.
+        corr_limit = float(self.limits.max_position_correlation)
+        if corr_limit > 0 and holding_correlations is not None:
+            existing = [s for s, q in account.positions.items() if q > 0 and s != signal.symbol]
+            best = max_correlation_with_holdings(signal.symbol, existing, holding_correlations)
+            if best is not None and best[1] >= corr_limit:
+                reason = (
+                    f"correlation guard ({signal.symbol} vs {best[0]} "
+                    f"corr={best[1]:.2f} >= {corr_limit:.2f})"
+                )
+                log.info("risk.reject", reason=reason, symbol=signal.symbol)
                 return RiskDecision(Decision.REJECT, reason=reason)
 
         equity_d = Decimal(str(account.total_equity))
