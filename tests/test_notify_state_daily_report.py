@@ -311,9 +311,7 @@ def test_format_daily_report_counts_buys_for_repeat_entries() -> None:
     PR27: _pair_buy_liq_records 가 raw FIFO 페어링이라 N:M 매수/청산 케이스에서
     페어 수와 only_buy 수가 입력 그대로 보존.
     """
-    buys = [
-        {"symbol": "A", "quantity": 10, "price": 100.0, "simulated": True} for _ in range(3)
-    ]
+    buys = [{"symbol": "A", "quantity": 10, "price": 100.0, "simulated": True} for _ in range(3)]
     liqs = [
         {"symbol": "A", "quantity": 10, "sell_price": 110.0, "buy_price": 100.0, "simulated": True}
         for _ in range(2)

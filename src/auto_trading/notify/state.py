@@ -230,7 +230,9 @@ def _build_timeline_lines(timeline: list, *, max_lines: int = 12) -> list[str]:
 
     head = list(timeline[:max_lines])
     tail = list(timeline[max_lines:])
-    preserved = [ev for ev in tail if isinstance(ev, dict) and ev.get("kind") in _TIMELINE_PRIORITY_KINDS]
+    preserved = [
+        ev for ev in tail if isinstance(ev, dict) and ev.get("kind") in _TIMELINE_PRIORITY_KINDS
+    ]
     dropped = len(tail) - len(preserved)
 
     out: list[str] = []
