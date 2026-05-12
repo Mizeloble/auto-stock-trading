@@ -205,9 +205,7 @@ _TIMELINE_KIND_PREFIX_KO = {
 _TIMELINE_PRIORITY_KINDS: frozenset[str] = frozenset({"kill_switch", "liquidate"})
 
 
-def _format_timeline_line(ev: dict) -> str | None:
-    if not isinstance(ev, dict):
-        return None
+def _format_timeline_line(ev: dict) -> str:
     kind = str(ev.get("kind") or "")
     time_kst = str(ev.get("time_kst") or "?")
     text = str(ev.get("text") or "")
@@ -228,24 +226,15 @@ def _build_timeline_lines(timeline: list, *, max_lines: int = 12) -> list[str]:
     if not isinstance(timeline, list) or not timeline:
         return []
 
-    head = list(timeline[:max_lines])
-    tail = list(timeline[max_lines:])
-    preserved = [
-        ev for ev in tail if isinstance(ev, dict) and ev.get("kind") in _TIMELINE_PRIORITY_KINDS
-    ]
+    head_evs = [ev for ev in timeline[:max_lines] if isinstance(ev, dict)]
+    tail = [ev for ev in timeline[max_lines:] if isinstance(ev, dict)]
+    preserved = [ev for ev in tail if ev.get("kind") in _TIMELINE_PRIORITY_KINDS]
     dropped = len(tail) - len(preserved)
 
-    out: list[str] = []
-    for ev in head:
-        line = _format_timeline_line(ev)
-        if line is not None:
-            out.append(line)
+    out: list[str] = [_format_timeline_line(ev) for ev in head_evs]
     if dropped > 0:
         out.append(f"  외 {dropped}건")
-    for ev in preserved:
-        line = _format_timeline_line(ev)
-        if line is not None:
-            out.append(line)
+    out.extend(_format_timeline_line(ev) for ev in preserved)
     return out
 
 
