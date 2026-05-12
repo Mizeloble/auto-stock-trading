@@ -536,6 +536,9 @@ def paper(
             strategies[sym] = registry.get(strategy, **params)
             symbol_list.append(sym)
 
+    # 29단계 PR27 — paper-day 와 동일하게 heartbeat writer 명시 주입.
+    from .heartbeat import Heartbeat
+
     runner = PaperRunner(
         strategies=strategies,  # type: ignore[arg-type]
         symbols=symbol_list,
@@ -543,6 +546,7 @@ def paper(
         allow_real=allow_real,
         dry_run=dry_run,
         notifier=build_notifier(),
+        heartbeat=Heartbeat(),
     )
     handler = build_command_handler(
         runner.state_snapshot,
@@ -676,6 +680,11 @@ def paper_day(
         console.print(f"[cyan]텔레그램 throttle:[/cyan] {telegram_throttle_min}분 윈도우")
 
     liquidate_at = _parse_hhmm_kst(cfg.liquidate)
+    # 29단계 PR27 — heartbeat writer 명시 주입. 5/12 회귀(cron 거짓 알람 9건)는
+    # build_paper_day_runner 가 Heartbeat 없이 PaperRunner 를 만들어 _heartbeat_loop
+    # 자체가 시동되지 않은 게 원인. heartbeat-check cron 의 default path 와 일치.
+    from .heartbeat import Heartbeat
+
     runner, momentum_tracker = build_paper_day_runner(
         cfg,
         liquidate_at=liquidate_at,
@@ -684,6 +693,7 @@ def paper_day(
         dry_run=dry_run,
         telegram_throttle_min=telegram_throttle_min,
         today_kst=datetime.now(KST).date(),
+        heartbeat=Heartbeat(),
     )
     console.print(
         f"[cyan]day-trade 모드[/cyan] · 청산 {cfg.liquidate}"

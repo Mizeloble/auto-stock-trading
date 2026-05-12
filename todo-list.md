@@ -110,11 +110,11 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 일일 리포트 메모와 `buys` 배열 불일치: 발굴 3건 + 매수 0건(kill switch) 인데 메모는 "매수 3건 ... · 청산 1건" 으로 잘못 표기. 주간 인사이트 LLM 도 잘못 학습.
   - `_summary_ko` 에 `buys` 파라미터 추가. buys 비어있고 chosen 만 있으면 "발굴 N건 (체결 0)" 분리 표기, buys 있으면 unique symbol 수로 표기. 같은 종목 분할 매수는 1건으로 dedup.
   - 테스트 3건 추가 (실 체결 기준 카운트 / 매수 0 케이스 / 분할 매수 dedup). 52 전체 통과.
-- [ ] **PR27 · `fix: 2026-05-12 운영 회귀 픽스 3건 (잔고·heartbeat·일일 리포트)`** — 한 PR 묶음
-  - **(a) 잔고 평가손익 합계 누락** — 2026-05-12 11:29 `/balance` 응답이 종목별로는 005930 -27,617원 / 356680 -27,045원 인데 상단 라인은 `평가손익: 0원` 으로 표기. 잔고 포맷터(`notify/commands/status.py` 또는 balance 빌더)에서 `평가손익 = sum(holdings.unrealized_pnl)` 로컬 합산으로 채운다. 키움 snapshot 의 `평가손익` 필드를 그대로 쓰지 말고 일관화.
-  - **(b) heartbeat writer background task 동작 점검** — 5/12 매매 정상 흐름(매수 25 / 청산 1 / 트레일링·익절·손절 다수) 중에도 cron `heartbeat-check` 가 30분마다 `reason=missing age_sec=None path=data/heartbeat/runner.txt` 거짓 알람 9건 발사. PR21 sentinel 은 정지 상태가 아니라 도움 안 됨. 가설: (i) `_heartbeat_loop()` 가 paper-day 시동 경로에서 wiring 누락, (ii) cron CLI `--heartbeat` 경로와 runner 측 `heartbeat_path` 불일치, (iii) interval 1800s 안에 한 번도 write 못하는 cancel/예외 경로. cli.py paper-day 분기에서 `PaperRunner.heartbeat` 주입 + 시동 직후 1회 즉시 write 가 실제 파일을 만드는지 + atomic mtime 갱신 동작 실측.
-  - **(c) 일일 리포트 매수 카운트·흐름 truncate 정합성** — 같은 메시지 안에서 자기모순: `💰 매수: 2건 - 319400, 356680` 인데 끝줄은 `📊 매수 25건 · 청산 1건` (첫 라운드만 집계). `📋 매매 결과: 1건` 로 트레일링/익절/손절 다수가 빠짐 — round-trip 페어링이 첫 1건만 잡힘. `⏱ 오늘 흐름 (13건)` 후 `외 18건` 단순 truncate 로 13:15·14:51 손절 같은 후반 핵심 이벤트가 안 보임. 시간순 자르기 대신 손절/강제청산/마지막 라운드는 항상 포함하도록 우선순위 정렬.
-  - **검증**: (a) 2종목 손익 합산 / 0종목(0원 유지) / 1종목만 손익 / 미실현 부호 혼합. (b) paper-day 시뮬 + 시간 진행 → heartbeat 파일 mtime 1800s 마다 갱신 + `check_heartbeat` 가 정상 케이스에서 missing 안 반환. (c) 동일 종목 다회 재진입(매수 25·매도 다수·손절 2회) 시나리오 → 매수 unique 종목 카운트 정확 / 매매 결과 전체 round-trip 카운트 / 흐름에 손절 라인 포함.
+- [x] **PR27 · `fix: 2026-05-12 운영 회귀 픽스 3건 (잔고·heartbeat·일일 리포트)`** — 한 PR 묶음
+  - **(a) 잔고 평가손익 합계 누락** — `format_balance` (`notify/state.py`) 의 평가손익 라인을 `snap.total_pnl` 대신 `sum(h.pnl for h in snap.holdings)` 로컬 합산으로 변경. mock 응답이 `tot_evltv_prft` 를 안 보내 0 으로 들어오던 5/12 회귀 차단.
+  - **(b) heartbeat writer 미주입** — `build_paper_day_runner` (`daytrade/cli_helpers.py`) 에 `heartbeat: Heartbeat | None = None` 인자 추가 + PaperRunner 에 주입. cli.py 의 `paper` / `paper-day` 두 명령에서 `Heartbeat()` 명시 wiring. 5/12 거짓 알람 9건의 root cause 는 PaperRunner 생성 시 `heartbeat=` 인자 자체가 누락되어 `_heartbeat_loop` 가 시동되지 않은 것.
+  - **(c) 일일 리포트 매수 카운트·흐름 truncate 정합성** — `_pair_buy_liq_records` 를 dict dedup → raw FIFO 페어링으로 재설계 (같은 종목 N건 매수·M건 청산이면 페어 min(N,M) + only_buy max(0,N-M) + only_sell max(0,M-N)). `_build_timeline_lines` 에 우선순위 보존 — `kill_switch` / `liquidate` 이벤트는 max_lines 안쪽이라도 항상 포함, 그 외만 "외 N건" 으로 묶임.
+  - 회귀 테스트: format_balance 합계(2종목/0종목/mock 0원) 3건 · _pair_buy_liq_records FIFO·잉여 2건 · timeline 우선순위 보존·동일 종목 다회 재진입 카운트 2건 · build_paper_day_runner heartbeat 주입 2건. ruff 통과. 알려진 PR12 토큰 격리 회귀(별도 후속) 외 영향 없음.
 - [x] **PR18 · `feat(news): weekly-proposal 에 시장국면 입력 추가 — #5 일부`**
   - `propose_daytrade_profile` 시그니처에 `regime: RegimeReport | None = None` 추가.
   - `_summarize_regime` 새 헬퍼 — None 이면 빈 dict, 활성 시 regime/summary_ko/metrics 노출.

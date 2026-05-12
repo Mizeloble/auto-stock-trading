@@ -274,6 +274,55 @@ def test_format_timeline_truncates_with_overflow_note() -> None:
     assert "외 3건" in msg  # 기본 max_lines=12 → 3건 잘림
 
 
+def test_format_timeline_preserves_kill_switch_and_liquidate_past_truncate() -> None:
+    """29단계 PR27 — 5/12 회귀: 13:15·14:51 손절·청산이 '외 N건' 으로 묻혀 사용자가
+    그날 결말을 못 보던 동작 차단. truncate 안쪽이라도 kill_switch/liquidate 는 항상 포함.
+    """
+    timeline: list[dict] = [
+        {"time_kst": f"09:{i:02d}", "kind": "buy", "text": f"매수 005930 {i}주"} for i in range(12)
+    ]
+    timeline.append(
+        {
+            "time_kst": "13:15",
+            "kind": "kill_switch",
+            "text": "🛑 일일 손실 한도 도달 (-3.0%) — 강제 청산",
+        }
+    )
+    timeline.append({"time_kst": "13:30", "kind": "buy", "text": "매수 005930 99주"})
+    timeline.append(
+        {
+            "time_kst": "15:15",
+            "kind": "liquidate",
+            "text": "🧹 청산 005930 11주 @시장가",
+        }
+    )
+    msg = format_daily_report(_payload(timeline=timeline))
+    # 잘려도 우선순위 이벤트는 등장
+    assert "🛑 일일 손실 한도 도달" in msg
+    assert "🧹 청산 005930" in msg
+    # 우선순위 아닌 13:30 buy 는 "외 N건" 으로 묶임 (15 - 12 - 2 preserved = 1)
+    assert "외 1건" in msg
+    assert "매수 005930 99주" not in msg
+
+
+def test_format_daily_report_counts_buys_for_repeat_entries() -> None:
+    """5/12 회귀 — 같은 종목 다회 매수에서 페어 카운트가 1건으로 줄어 사용자 혼란.
+
+    PR27: _pair_buy_liq_records 가 raw FIFO 페어링이라 N:M 매수/청산 케이스에서
+    페어 수와 only_buy 수가 입력 그대로 보존.
+    """
+    buys = [
+        {"symbol": "A", "quantity": 10, "price": 100.0, "simulated": True} for _ in range(3)
+    ]
+    liqs = [
+        {"symbol": "A", "quantity": 10, "sell_price": 110.0, "buy_price": 100.0, "simulated": True}
+        for _ in range(2)
+    ]
+    msg = format_daily_report(_payload(buys=buys, liquidations=liqs))
+    assert "📋 매매 결과: 2건" in msg  # FIFO 페어 2건
+    assert "💰 매수: 1건" in msg  # 페어 안 된 잉여 매수 1건
+
+
 def test_format_summary_line_splits_buy_and_liq_counts() -> None:
     """기존 '매매 N건' 합산 표기가 헷갈린다는 피드백 → 매수/청산 분리."""
     msg = format_daily_report(_payload())

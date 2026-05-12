@@ -129,11 +129,62 @@ def test_format_balance_with_holdings_shows_deposit_and_per_symbol() -> None:
     text = format_balance(_empty_state(snapshot=_full_snapshot()))
     assert "50,000,000원" in text  # 예수금
     assert "51,500,000원" in text  # 총평가
-    assert "+150,000원" in text  # 평가손익 부호
+    # 29단계 PR27 — 평가손익 라인은 holdings.pnl 합산 (snap.total_pnl 무시).
+    # _full_snapshot 의 holdings 두 종목 pnl 합은 +100,000.
+    assert "평가손익: +100,000원" in text
     assert "삼성전자" in text
     assert "005930" in text
     assert "SK하이닉스" in text
     assert "000660" in text
+
+
+def test_format_balance_sums_holdings_when_kiwoom_total_pnl_zero() -> None:
+    """5/12 회귀 — mock 응답이 tot_evltv_prft 를 안 보내 snap.total_pnl=0 으로 들어와도
+    종목별 손익 합산이 평가손익 라인에 그대로 표기되어야 한다.
+    """
+    snap = AccountSnapshot(
+        deposit=Decimal(46_682_430),
+        total_evaluation=Decimal(6_371_960),
+        total_pnl=Decimal(0),  # mock 응답이 비어서 0 으로 들어옴
+        holdings=[
+            Holding(
+                symbol="005930",
+                name="삼성전자",
+                quantity=11,
+                avg_price=Decimal("279000"),
+                current_price=Decimal("278900"),
+                market_value=Decimal("3069000"),
+                pnl=Decimal("-27617"),
+                pnl_pct=Decimal("-0.90"),
+            ),
+            Holding(
+                symbol="356680",
+                name="엑스게이트",
+                quantity=212,
+                avg_price=Decimal("15567"),
+                current_price=Decimal("15580"),
+                market_value=Decimal("3302960"),
+                pnl=Decimal("-27045"),
+                pnl_pct=Decimal("-0.82"),
+            ),
+        ],
+    )
+    text = format_balance(_empty_state(snapshot=snap))
+    assert "평가손익: -54,662원" in text  # -27617 + -27045
+    assert "평가손익: 0원" not in text
+
+
+def test_format_balance_zero_holdings_keeps_zero_total() -> None:
+    """보유 없음이면 합계도 0원 — 기존 출력 유지."""
+    snap = AccountSnapshot(
+        deposit=Decimal(50_000_000),
+        total_evaluation=Decimal(0),
+        total_pnl=Decimal(0),
+        holdings=[],
+    )
+    text = format_balance(_empty_state(snapshot=snap))
+    assert "평가손익: 0원" in text
+    assert "보유 종목: 없음" in text
 
 
 def test_format_positions_empty() -> None:
