@@ -18,11 +18,15 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import structlog
 
+from ..market.validate import validate_bars
 from ..strategy import indicators as ind
 from ..strategy.base import Bar, Side, Signal, Strategy
 from .broker import SimulatedBroker, Trade
 from .metrics import PerformanceReport, compute
+
+log = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -67,18 +71,32 @@ class Backtester:
         self.strategy.reset()
         pending: list[Signal] = []
 
-        rows = list(df.itertuples(index=True))
-        for row in rows:
-            ts: datetime = row.Index
-            bar = Bar(
+        # 29단계 PR30 — 입력 OHLCV 정합성 1회 체크. issue 발견 시 warning 로그.
+        # 백테스트 진행 자체는 막지 않음 (사용자가 의도적으로 깨진 데이터로 시뮬할 수도
+        # 있고, 백테스트 결과는 결정적이어야 함). strict 모드는 후속 PR.
+        bars: list[Bar] = [
+            Bar(
                 symbol=symbol,
-                ts=ts,
+                ts=row.Index,
                 open=float(row.open),
                 high=float(row.high),
                 low=float(row.low),
                 close=float(row.close),
                 volume=int(row.volume),
             )
+            for row in df.itertuples(index=True)
+        ]
+        issues = validate_bars(bars, symbol=symbol)
+        if issues:
+            log.warning(
+                "backtest.data_integrity_issues",
+                symbol=symbol,
+                count=len(issues),
+                samples=[(i.kind.value, i.index, i.detail) for i in issues[:5]],
+            )
+
+        for bar in bars:
+            ts: datetime = bar.ts
 
             # 전 bar 에서 나온 시그널을 "오늘 시가"에 체결
             if pending:
