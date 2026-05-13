@@ -289,6 +289,26 @@ def _parse_walk_forward_spec(spec: str) -> tuple[int, int]:
     return window, step
 
 
+def _parse_cpcv_spec(spec: str) -> tuple[int, int]:
+    """\"10\" 또는 \"10/2\" → (n_folds=10, embargo_bars=2 or 0).
+
+    29단계 PR37 — purged k-fold CPCV CLI 결합.
+    """
+    parts = spec.split("/")
+    if len(parts) not in (1, 2):
+        raise typer.BadParameter("--cpcv 는 'N' 또는 'N/E' 형식 (예: '10' 또는 '10/2').")
+    try:
+        n_folds = int(parts[0])
+        embargo = int(parts[1]) if len(parts) == 2 else 0
+    except ValueError as exc:
+        raise typer.BadParameter(f"숫자 파싱 실패: {spec}") from exc
+    if n_folds < 2:
+        raise typer.BadParameter("--cpcv N 은 2 이상이어야 합니다.")
+    if embargo < 0:
+        raise typer.BadParameter("--cpcv embargo 는 음수 불가.")
+    return n_folds, embargo
+
+
 @app.command()
 def backtest(
     strategy: str | None = typer.Option(
@@ -307,16 +327,29 @@ def backtest(
         "--walk-forward",
         help="walk-forward 모드. 'window/step' 일 단위 (예: '90/30' = 90일 윈도우, 30일 간격).",
     ),
+    cpcv_spec: str | None = typer.Option(
+        None,
+        "--cpcv",
+        help=(
+            "Purged K-Fold CV 모드. 'N' 또는 'N/E' (예: '10' = 10 fold, '10/2' = "
+            "10 fold + 양 끝 2 봉 embargo). 29단계 PR37 (#2 Phase 1)."
+        ),
+    ),
 ) -> None:
     """과거 일봉으로 전략 시뮬레이션.
 
     \\--walk-forward 활성 시 단일 백테스트 대신 슬라이딩 윈도우로 분할 평가 —
     윈도우별 metric 분포로 전략의 시간 일관성 확인.
+
+    \\--cpcv 활성 시 균등 N-fold 분할 + embargo purge → fold 별 Sharpe/PSR 분포 +
+    p05/p95 신뢰구간. walk-forward 와는 상호 배타.
     """
     if profile is not None and (strategy or symbol):
         raise typer.BadParameter("--profile 과 --strategy/--symbol 은 동시에 줄 수 없습니다.")
     if profile is None and not (strategy and symbol):
         raise typer.BadParameter("--profile 또는 (--strategy + --symbol) 둘 중 하나가 필요합니다.")
+    if walk_forward_spec is not None and cpcv_spec is not None:
+        raise typer.BadParameter("--walk-forward 와 --cpcv 는 동시에 줄 수 없습니다.")
 
     strategy_name: str
     strategy_params: dict[str, object]
@@ -357,6 +390,21 @@ def backtest(
             df=df,
             window_days=window_days,
             step_days=step_days,
+            cash=cash,
+            out_dir=out_dir,
+        )
+        return
+
+    # 29단계 PR37 — CPCV (purged k-fold) 분기
+    if cpcv_spec is not None:
+        n_folds, embargo_bars = _parse_cpcv_spec(cpcv_spec)
+        _run_cpcv(
+            strategy_name=strategy_name,
+            strategy_params=strategy_params,
+            symbol=symbol,
+            df=df,
+            n_folds=n_folds,
+            embargo_bars=embargo_bars,
             cash=cash,
             out_dir=out_dir,
         )
@@ -506,6 +554,146 @@ def _run_walk_forward(
                 "positive_sharpe_ratio": s.positive_sharpe_ratio,
                 "window_days": window_days,
                 "step_days": step_days,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    console.print(f"[green]결과 저장:[/green] {out}")
+
+
+def _run_cpcv(
+    *,
+    strategy_name: str,
+    strategy_params: dict[str, object],
+    symbol: str,
+    df,  # pd.DataFrame
+    n_folds: int,
+    embargo_bars: int,
+    cash: float,
+    out_dir: Path | None,
+) -> None:
+    """purged k-fold CV 실행 + 표 출력 + 결과 저장 — 29단계 PR37 (#2 Phase 1).
+
+    저장 형식:
+    - folds.csv: fold 별 메트릭 행 (index, start, end, n_bars, Sharpe, PSR, MDD, win_rate, trades).
+    - summary.json: CPCVSummary as_dict.
+    """
+    import csv as _csv
+    import json as _json
+    from dataclasses import asdict as _asdict
+
+    from .backtest.cpcv import purged_kfold
+
+    def _factory():
+        return registry.get(strategy_name, **strategy_params)
+
+    result = purged_kfold(
+        _factory,
+        symbol,
+        df,
+        n_folds=n_folds,
+        embargo_bars=embargo_bars,
+        initial_cash=cash,
+    )
+
+    if result.summary.n_folds == 0:
+        console.print(
+            f"[yellow]CPCV fold 0건 — 데이터 부족 또는 분할 실패 (n_folds={n_folds}).[/yellow]"
+        )
+        raise typer.Exit(code=1)
+
+    # Fold 표.
+    table = Table(
+        title=f"CPCV · {strategy_name} · {symbol} (n_folds={n_folds} / embargo={embargo_bars})"
+    )
+    table.add_column("#", justify="right")
+    table.add_column("기간")
+    table.add_column("봉", justify="right")
+    table.add_column("Sharpe", justify="right")
+    table.add_column("PSR", justify="right")
+    table.add_column("MDD%", justify="right")
+    table.add_column("WinRate%", justify="right")
+    table.add_column("거래", justify="right")
+    for f in result.folds:
+        rep = f.report
+        s_color = "green" if rep.sharpe > 0 else "red"
+        table.add_row(
+            str(f.index),
+            f"{f.start.date()} → {f.end.date()}",
+            str(f.n_bars),
+            f"[{s_color}]{rep.sharpe:.3f}[/{s_color}]",
+            f"{rep.probabilistic_sharpe:.3f}",
+            f"{rep.max_drawdown * 100:.2f}",
+            f"{rep.win_rate * 100:.1f}",
+            str(rep.num_trades),
+        )
+    console.print(table)
+
+    # Summary.
+    s = result.summary
+    summary_table = Table(title="CPCV Summary (분포)")
+    summary_table.add_column("지표")
+    summary_table.add_column("값", justify="right")
+    summary_table.add_row("fold 개수", str(s.n_folds))
+    summary_table.add_row("Sharpe 평균", f"{s.sharpe_mean:.3f}")
+    summary_table.add_row("Sharpe 표준편차", f"{s.sharpe_std:.3f}")
+    summary_table.add_row(
+        "Sharpe p05 / p50 / p95", f"{s.sharpe_p05:.3f} / {s.sharpe_p50:.3f} / {s.sharpe_p95:.3f}"
+    )
+    summary_table.add_row("양수 Sharpe 비율", f"{s.positive_sharpe_ratio:.1%}")
+    summary_table.add_row("PSR 평균", f"{s.psr_mean:.3f}")
+    summary_table.add_row("최악 MDD%", f"{s.mdd_worst_pct:.2f}")
+    summary_table.add_row("승률 평균%", f"{s.win_rate_mean_pct:.2f}")
+    console.print(summary_table)
+
+    # 저장.
+    out = (
+        out_dir
+        or Path("data/backtests") / f"{strategy_name}_{symbol}_cpcv_{datetime.now():%Y%m%d_%H%M%S}"
+    )
+    out.mkdir(parents=True, exist_ok=True)
+
+    folds_path = out / "folds.csv"
+    with folds_path.open("w", newline="") as csv_file:
+        writer = _csv.writer(csv_file)
+        writer.writerow(
+            [
+                "index",
+                "start",
+                "end",
+                "n_bars",
+                "sharpe",
+                "probabilistic_sharpe",
+                "max_drawdown_pct",
+                "win_rate_pct",
+                "num_trades",
+            ]
+        )
+        for fold in result.folds:
+            rep = fold.report
+            writer.writerow(
+                [
+                    fold.index,
+                    fold.start.isoformat(),
+                    fold.end.isoformat(),
+                    fold.n_bars,
+                    rep.sharpe,
+                    rep.probabilistic_sharpe,
+                    rep.max_drawdown * 100.0,
+                    rep.win_rate * 100.0,
+                    rep.num_trades,
+                ]
+            )
+
+    summary_path = out / "summary.json"
+    summary_path.write_text(
+        _json.dumps(
+            {
+                **_asdict(result.summary),
+                "n_folds_requested": n_folds,
+                "embargo_bars": embargo_bars,
             },
             indent=2,
         ),
