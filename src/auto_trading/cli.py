@@ -1584,12 +1584,18 @@ def data_check(
 def backtest_compare(
     run1: Path = typer.Argument(..., help="기준 백테스트 결과 폴더 (report.json 포함)."),
     run2: Path = typer.Argument(..., help="비교 대상 폴더 (보통 새로 돌린 결과)."),
+    fail_on_regression: bool = typer.Option(
+        False,
+        "--fail-on-regression",
+        help="회귀 감지 시 exit 1 — CI 가드용. 기본은 표시만(exit 0).",
+    ),
 ) -> None:
-    """두 백테스트 결과 비교 — Sharpe/CAGR/MDD/win-rate 차이 표.
+    """두 백테스트 결과 비교 — Sharpe/PSR/CAGR/MDD/win-rate 차이 표.
 
     무엇/왜:
-    - 전략·파라미터 변경 후 회귀 즉시 감지 (이 PR 후 Sharpe 0.1 떨어졌나?).
+    - 전략·파라미터 변경 후 회귀 즉시 감지 (이 PR 후 Sharpe 0.1 떨어졌나? PSR 이 0.9→0.6?).
     - 각 폴더의 `report.json` (engine.save_result 가 저장) 만 읽음. 외부 호출 X.
+    - `--fail-on-regression` 으로 CI 가드 가능 (회귀 발견 시 exit 1).
 
     어떻게 확인:
     - `auto-trade backtest --strategy sma_crossover --symbol 005930 --from 2024-01-01 --out data/backtests/baseline`
@@ -1614,12 +1620,14 @@ def backtest_compare(
 
     # 메트릭별 (label, key, higher_is_better, format).
     # higher_is_better=None 이면 색상 X (단순 사실).
+    # 29단계 PR31 후속 — Probabilistic Sharpe (PSR) 비교 행 추가.
     metrics: list[tuple[str, str, bool | None, str]] = [
         ("초기 자본", "initial_equity", None, "{:,.0f}"),
         ("최종 자본", "final_equity", None, "{:,.0f}"),
         ("총 수익률 %", "total_return_pct", True, "{:+.2f}"),
         ("CAGR %", "cagr_pct", True, "{:+.2f}"),
         ("Sharpe", "sharpe", True, "{:.3f}"),
+        ("Probabilistic Sharpe", "probabilistic_sharpe", True, "{:.3f}"),
         ("연환산 변동성 %", "annualized_vol_pct", False, "{:.2f}"),
         ("최대 낙폭 %", "max_drawdown_pct", True, "{:.2f}"),  # 음수라 큰 값(0에 가까움)이 좋음
         ("승률 %", "win_rate_pct", True, "{:.2f}"),
@@ -1633,6 +1641,7 @@ def backtest_compare(
     table.add_column(run2.name, justify="right")
     table.add_column("차이", justify="right")
 
+    regressions: list[str] = []
     for label, key, higher_better, fmt in metrics:
         v1 = d1.get(key)
         v2 = d2.get(key)
@@ -1641,12 +1650,16 @@ def backtest_compare(
         diff = float(v2) - float(v1)
         # 부호 명시 — 음수면 fmt 가 자동으로 '-' 붙임, 양수는 '+' 수동 prefix.
         diff_str = ("+" if diff > 0 else "") + fmt.format(diff)
+        is_regression = False
         if higher_better is None or abs(diff) < 1e-9:
             color = "white"
         elif (diff > 0) == higher_better:
             color = "green"
         else:
             color = "red"
+            is_regression = True
+        if is_regression:
+            regressions.append(label)
         table.add_row(
             label,
             fmt.format(float(v1)),
@@ -1655,6 +1668,14 @@ def backtest_compare(
         )
 
     console.print(table)
+
+    if regressions:
+        joined = ", ".join(regressions)
+        console.print(f"[red]회귀 {len(regressions)}건:[/red] {joined}")
+        if fail_on_regression:
+            raise typer.Exit(code=1)
+    else:
+        console.print("[green]✓ 회귀 0건[/green]")
 
 
 orders_app = typer.Typer(help="주문 저널 진단·복구 도구.")
