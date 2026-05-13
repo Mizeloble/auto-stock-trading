@@ -212,6 +212,68 @@ def balance() -> None:
     asyncio.run(_run())
 
 
+@app.command("verify-symbol")
+def verify_symbol(
+    symbol: str = typer.Argument(..., help="종목코드 예: 005930"),
+    lookback_days: int = typer.Option(
+        30, "--days", "-d", help="검사할 최근 일봉 개수 (시간 정순으로 정렬 후 마지막 N개)."
+    ),
+    gap_threshold: float = typer.Option(
+        0.5, "--gap-threshold", help="비정상 갭 임계 (0=비활성, 0.5=±50%). PR29 기본과 동일."
+    ),
+    fail_on_issues: bool = typer.Option(
+        False, "--fail-on-issues", help="issue 1건+이면 exit 1 (cron/CI 가드용)."
+    ),
+) -> None:
+    """키움 일봉 fetch + OHLCV 정합성 검사 — 29단계 PR34 (#19 후속).
+
+    무엇/왜:
+    - PR29 의 validate_bars 를 운영에서 직접 호출. 매일 cron 으로 universe 종목의
+      데이터 무결성을 자동 점검 가능.
+    - 외부 데이터 소스가 깨지면 백테스트가 *거짓 양호* 하게 나옴 → 손실은 실거래에서
+      드러남. 사전 자동 점검이 안전망.
+
+    어떻게 확인:
+    - `auto-trade verify-symbol 005930 --days 60` → 표 + issue 0건이면 ✓
+    - 일부러 broken 데이터로 fetch mock 시 → 각 issue kind/index/detail 표시
+    """
+    from ._common import Bar
+    from .market.validate import validate_bars
+
+    bars: list[Bar] = _fetch_daily_bars(symbol, max_pages=1)
+    # 키움 일봉은 최신→과거 순 — 시간 정순으로 뒤집고 lookback 마지막 N개.
+    bars = list(reversed(bars))[-lookback_days:]
+    if not bars:
+        console.print("[red]일봉 데이터가 비어있습니다.[/red]")
+        raise typer.Exit(code=1)
+
+    issues = validate_bars(bars, symbol=symbol, gap_threshold=gap_threshold)
+
+    summary = Table(title=f"정합성 검사 · {symbol} · 최근 {len(bars)}일")
+    summary.add_column("항목")
+    summary.add_column("값", justify="right")
+    summary.add_row("검사 bar 수", f"{len(bars)}")
+    summary.add_row("발견 이슈", f"{len(issues)}")
+    summary.add_row("첫 ts", bars[0].ts.isoformat())
+    summary.add_row("마지막 ts", bars[-1].ts.isoformat())
+    console.print(summary)
+
+    if not issues:
+        console.print("[green]✓ 정합성 검사 통과 — 이슈 0건[/green]")
+        return
+
+    detail = Table(title="발견된 이슈")
+    detail.add_column("kind")
+    detail.add_column("index", justify="right")
+    detail.add_column("detail")
+    for issue in issues:
+        detail.add_row(issue.kind.value, str(issue.index), issue.detail)
+    console.print(detail)
+    console.print(f"[red]✗ 이슈 {len(issues)}건 — 데이터 소스 점검 필요.[/red]")
+    if fail_on_issues:
+        raise typer.Exit(code=1)
+
+
 def _parse_walk_forward_spec(spec: str) -> tuple[int, int]:
     """\"90/30\" 또는 \"90d/30d\" → (window_days=90, step_days=30)."""
     parts = spec.replace("d", "").split("/")
