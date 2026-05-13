@@ -143,3 +143,82 @@ def test_compare_sharpe_regression_marked_red(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "-0.600" in result.output
+
+
+# ---- 29단계 PR32 — PSR 행 + --fail-on-regression --------------------------
+
+
+def test_compare_includes_probabilistic_sharpe_row(tmp_path: Path) -> None:
+    """PR31 의 PSR 도 비교표에 나타난다 (양쪽 report 에 있을 때)."""
+    _seed_report(tmp_path / "old", probabilistic_sharpe=0.85)
+    _seed_report(tmp_path / "new", probabilistic_sharpe=0.92)
+
+    result = CliRunner().invoke(
+        app,
+        ["backtest-compare", str(tmp_path / "old"), str(tmp_path / "new")],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Probabilistic Sharpe" in result.output
+    assert "+0.070" in result.output
+
+
+def test_compare_reports_summary_no_regressions_when_clean(tmp_path: Path) -> None:
+    """모든 메트릭 동일 → "회귀 0건" 표시 + exit 0."""
+    _seed_report(tmp_path / "old")
+    _seed_report(tmp_path / "new")
+
+    result = CliRunner().invoke(
+        app,
+        ["backtest-compare", str(tmp_path / "old"), str(tmp_path / "new")],
+    )
+    assert result.exit_code == 0
+    assert "회귀 0건" in result.output
+
+
+def test_compare_reports_regression_count_when_sharpe_drops(tmp_path: Path) -> None:
+    """Sharpe 떨어지면 회귀 N건 요약 — 기본은 표시만 (exit 0)."""
+    _seed_report(tmp_path / "old", sharpe=1.5)
+    _seed_report(tmp_path / "new", sharpe=0.9)
+
+    result = CliRunner().invoke(
+        app,
+        ["backtest-compare", str(tmp_path / "old"), str(tmp_path / "new")],
+    )
+    assert result.exit_code == 0
+    assert "회귀 1건" in result.output
+    assert "Sharpe" in result.output
+
+
+def test_compare_fail_on_regression_exits_one(tmp_path: Path) -> None:
+    """--fail-on-regression: 회귀 1건 이상이면 exit 1 (CI 가드)."""
+    _seed_report(tmp_path / "old", max_drawdown_pct=-3.0)
+    _seed_report(tmp_path / "new", max_drawdown_pct=-9.0)  # 더 깊은 낙폭 = 회귀
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "backtest-compare",
+            str(tmp_path / "old"),
+            str(tmp_path / "new"),
+            "--fail-on-regression",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "회귀" in result.output
+
+
+def test_compare_fail_on_regression_exits_zero_when_clean(tmp_path: Path) -> None:
+    """--fail-on-regression: 회귀 0건이면 exit 0 (flag 켜져도)."""
+    _seed_report(tmp_path / "old")
+    _seed_report(tmp_path / "new")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "backtest-compare",
+            str(tmp_path / "old"),
+            str(tmp_path / "new"),
+            "--fail-on-regression",
+        ],
+    )
+    assert result.exit_code == 0
