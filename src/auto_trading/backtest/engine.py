@@ -50,6 +50,9 @@ class Backtester:
     commission_rate: float = 0.00015
     tax_rate_sell: float = 0.0020  # 2026 인상 반영
     slippage_bps: float = 5.0  # 0.05% 보수적 기본
+    # 29단계 PR35 (#4) — 시장 충격 슬리피지. "fixed" (기본) / "impact".
+    slippage_model: str = "fixed"
+    impact_coefficient: float = 2.0
 
     _broker: SimulatedBroker = field(init=False)
     _equity: list[tuple[datetime, float]] = field(init=False, default_factory=list)
@@ -64,6 +67,8 @@ class Backtester:
             commission_rate=self.commission_rate,
             tax_rate_sell=self.tax_rate_sell,
             slippage_bps=self.slippage_bps,
+            slippage_model=self.slippage_model,
+            impact_coefficient=self.impact_coefficient,
         )
 
     def run(self, symbol: str, df: pd.DataFrame) -> BacktestResult:
@@ -107,6 +112,7 @@ class Backtester:
                         side=sig.side,
                         quantity=qty,
                         bar_open=bar.open,
+                        bar_volume=bar.volume,
                         ts=ts,
                     )
                 pending = []
