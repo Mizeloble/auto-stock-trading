@@ -161,6 +161,11 @@ def apply_profile_to_runner(profile: DaytradeProfile, runner: PaperRunner) -> No
     limits.max_order_value = risk.max_order_value
     limits.daily_notional_limit = risk.daily_notional_limit
     limits.daily_loss_kill = risk.daily_loss_kill
+    # 29단계 PR43 — 신규 안전망 옵션 매핑 (PR9/10 #14 + PR27/28 #15).
+    # 기본 비활성(0) 이면 RiskLimits 기본 그대로 → 기존 동작 보존.
+    limits.max_consecutive_losses = risk.max_consecutive_losses
+    limits.consecutive_loss_pause_sec = risk.consecutive_loss_pause_sec
+    limits.max_position_correlation = risk.max_position_correlation
 
 
 def build_profile_factory(
