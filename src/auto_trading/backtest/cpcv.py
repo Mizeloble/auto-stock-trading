@@ -24,6 +24,7 @@ import statistics
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import combinations
 
 import pandas as pd
 
@@ -35,6 +36,9 @@ __all__ = [
     "CPCVFold",
     "CPCVResult",
     "CPCVSummary",
+    "CombinatorialFold",
+    "CombinatorialResult",
+    "combinatorial_purged_kfold",
     "purged_kfold",
 ]
 
@@ -172,17 +176,21 @@ def _percentile(sorted_values: list[float], pct: float) -> float:
 
 
 def _summarize(folds: list[CPCVFold]) -> CPCVSummary:
-    if not folds:
+    return _summarize_reports([f.report for f in folds])
+
+
+def _summarize_reports(reports: list[PerformanceReport]) -> CPCVSummary:
+    if not reports:
         return _empty_summary()
-    sharpes = [f.report.sharpe for f in folds]
-    psrs = [f.report.probabilistic_sharpe for f in folds]
-    mdds = [f.report.max_drawdown * 100.0 for f in folds]
-    win_rates = [f.report.win_rate * 100.0 for f in folds]
+    sharpes = [r.sharpe for r in reports]
+    psrs = [r.probabilistic_sharpe for r in reports]
+    mdds = [r.max_drawdown * 100.0 for r in reports]
+    win_rates = [r.win_rate * 100.0 for r in reports]
     sorted_sharpes = sorted(sharpes)
     positive = sum(1 for s in sharpes if s > 0)
 
     return CPCVSummary(
-        n_folds=len(folds),
+        n_folds=len(reports),
         sharpe_mean=round(statistics.fmean(sharpes), 3),
         sharpe_std=round(statistics.pstdev(sharpes) if len(sharpes) > 1 else 0.0, 3),
         sharpe_p05=round(_percentile(sorted_sharpes, 5), 3),
@@ -207,4 +215,146 @@ def _empty_summary() -> CPCVSummary:
         psr_mean=0.0,
         mdd_worst_pct=0.0,
         win_rate_mean_pct=0.0,
+    )
+
+
+# ---- Phase 2: Combinatorial Purged K-Fold (29단계 PR38) ---------------------
+
+
+@dataclass(frozen=True)
+class CombinatorialFold:
+    """N개 fold 중 k 개 조합 1개의 백테스트 결과.
+
+    Phase 1 의 CPCVFold 는 단일 fold(고립). Phase 2 는 *조합* — 여러 fold 를
+    시간순 concat 해 한 번에 백테스트.
+    """
+
+    combination: tuple[int, ...]  # 포함된 fold 인덱스 (정렬됨)
+    n_bars: int
+    start: datetime
+    end: datetime
+    report: PerformanceReport
+
+
+@dataclass(frozen=True)
+class CombinatorialResult:
+    """combinatorial_purged_kfold() 결과."""
+
+    folds: list[CombinatorialFold]
+    summary: CPCVSummary
+    n_folds: int  # 분할 N
+    n_test_folds: int  # 조합 크기 k
+    n_combinations: int  # C(N, k) — 실제로 평가된 개수와 같음
+
+
+def combinatorial_purged_kfold(
+    strategy_factory: Callable[[], Strategy],
+    symbol: str,
+    df: pd.DataFrame,
+    *,
+    n_folds: int = 10,
+    n_test_folds: int = 2,
+    embargo_bars: int = 0,
+    initial_cash: float = 10_000_000.0,
+    position_sizing: str = "all_in",
+    atr_period: int = 14,
+    atr_risk_pct: float = 0.01,
+    commission_rate: float = 0.00015,
+    tax_rate_sell: float = 0.0020,
+    slippage_bps: float = 5.0,
+    slippage_model: str = "fixed",
+    impact_coefficient: float = 2.0,
+) -> CombinatorialResult:
+    """Combinatorial Purged K-Fold (Phase 2) — 29단계 PR38.
+
+    Phase 1 의 ``purged_kfold`` 가 N 개 fold 각각을 *독립* 평가했다면, 이 함수는
+    N choose k 조합 모두에 대해 *해당 k 개 fold 들을 시간순 concat* 해서 백테스트.
+
+    결과 표본:
+    - ``n_folds=10, n_test_folds=1`` → 10개 (Phase 1 과 동일)
+    - ``n_folds=10, n_test_folds=2`` → C(10,2) = 45개
+    - ``n_folds=10, n_test_folds=3`` → 120개
+    - ``n_folds=10, n_test_folds=5`` → 252개 (분포 평가에 충분)
+
+    조합 시 fold 들은 시간순으로 정렬·연결 (전략의 시간 순서 가정 유지).
+    각 fold 양 끝 ``embargo_bars`` 만큼 purge.
+
+    경고: C(N,k) 가 큰 조합은 실행 시간 ↑ — 사용자가 의식적으로 선택.
+    """
+    if n_folds <= 1:
+        raise ValueError(f"n_folds 는 2 이상이어야 함: {n_folds}")
+    if n_test_folds <= 0 or n_test_folds > n_folds:
+        raise ValueError(
+            f"n_test_folds 는 1..n_folds 범위여야 함: {n_test_folds} (n_folds={n_folds})"
+        )
+    if embargo_bars < 0:
+        raise ValueError(f"embargo_bars 는 음수 불가: {embargo_bars}")
+    if df.empty:
+        return CombinatorialResult(
+            folds=[],
+            summary=_empty_summary(),
+            n_folds=n_folds,
+            n_test_folds=n_test_folds,
+            n_combinations=0,
+        )
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("df.index 는 DatetimeIndex 여야 합니다")
+
+    n = len(df)
+    fold_size = n // n_folds
+    if fold_size <= 2 * embargo_bars + 4:
+        raise ValueError(
+            f"fold 크기({fold_size}) 가 embargo*2+4({2 * embargo_bars + 4}) 보다 작음 — "
+            f"n_folds 줄이거나 embargo_bars 줄여라"
+        )
+
+    # 각 fold 의 (slice_df) 미리 계산해서 캐시 — 같은 fold 가 여러 조합에 재등장.
+    fold_slices: list[pd.DataFrame] = []
+    for i in range(n_folds):
+        start_idx = i * fold_size
+        end_idx = n if i == n_folds - 1 else (i + 1) * fold_size
+        slice_start = start_idx + embargo_bars
+        slice_end = end_idx - embargo_bars
+        fold_slices.append(df.iloc[slice_start:slice_end])
+
+    folds_out: list[CombinatorialFold] = []
+    for combo in combinations(range(n_folds), n_test_folds):
+        # 조합의 fold 들을 시간순 concat (combinations() 가 이미 오름차순).
+        parts = [fold_slices[i] for i in combo]
+        # 빈 fold 가 끼면 skip 그 조합.
+        if any(len(p) < 2 for p in parts):
+            continue
+        combined = pd.concat(parts)
+        if len(combined) < 4:
+            continue
+
+        bt = Backtester(
+            strategy=strategy_factory(),
+            initial_cash=initial_cash,
+            position_sizing=position_sizing,
+            atr_period=atr_period,
+            atr_risk_pct=atr_risk_pct,
+            commission_rate=commission_rate,
+            tax_rate_sell=tax_rate_sell,
+            slippage_bps=slippage_bps,
+            slippage_model=slippage_model,
+            impact_coefficient=impact_coefficient,
+        )
+        result = bt.run(symbol, combined)
+        folds_out.append(
+            CombinatorialFold(
+                combination=combo,
+                n_bars=len(combined),
+                start=combined.index[0].to_pydatetime(),
+                end=combined.index[-1].to_pydatetime(),
+                report=result.report,
+            )
+        )
+
+    return CombinatorialResult(
+        folds=folds_out,
+        summary=_summarize_reports([f.report for f in folds_out]),
+        n_folds=n_folds,
+        n_test_folds=n_test_folds,
+        n_combinations=len(folds_out),
     )
