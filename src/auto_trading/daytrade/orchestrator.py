@@ -113,7 +113,9 @@ async def discover_and_arm(
     factory = strategy_factory or _default_strategy_factory(weight=1.0 / max(1, top_n))
     symbols = [c.symbol for c in chosen]
     strategies = {c.symbol: factory(c.symbol, market=c.market) for c in chosen}
-    runner.set_universe(symbols, strategies)
+    # 코드+종목명을 텔레그램 메시지에서 같이 보이려면 set_universe 가 이름까지 받아야 함.
+    chosen_names = {c.symbol: c.name for c in chosen if c.name}
+    runner.set_universe(symbols, strategies, names=chosen_names)
     log.info(
         "daytrade.universe_chosen",
         symbols=symbols,

@@ -20,13 +20,46 @@ log = structlog.get_logger(__name__)
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
 
+def _with_name(symbol: str, name: object) -> str:
+    """`005930 삼성전자` 형식. 이름이 없거나 빈 문자열이면 코드만.
+
+    5/14 사용자 피드백 — 텔레그램에서 종목 코드만 보이면 종목을 인지하기 어렵다.
+    notify 콜 사이트가 `name=` 을 채워주면 빌더가 코드 옆에 합쳐 노출.
+    """
+    if isinstance(name, str) and name.strip():
+        return f"{symbol} {name.strip()}"
+    return symbol
+
+
+def _format_symbol_list(raw: object, names: object) -> str:
+    """`runner.started` 의 'symbols' (콤마/리스트) + symbol_names dict → '005930 삼성전자, …'.
+
+    `symbols` 는 콤마 문자열(`"005930,403550"`) 또는 list 둘 다 지원. 비어있거나 None
+    이면 '?' 로 폴백.
+    """
+    if isinstance(raw, list):
+        items = [str(s) for s in raw if str(s)]
+    elif isinstance(raw, str) and raw:
+        items = [s for s in raw.split(",") if s]
+    else:
+        return "?"
+    if not items:
+        return "?"
+    name_map: dict[str, str] = {}
+    if isinstance(names, dict):
+        for k, v in names.items():
+            if isinstance(k, str) and isinstance(v, str):
+                name_map[k] = v
+    return ", ".join(_with_name(s, name_map.get(s)) for s in items)
+
+
 def _format_message(event: str, fields: dict[str, Any]) -> str:
     """이벤트명 + kwargs 를 사람이 읽을 한 줄 메시지로."""
     if event == "runner.started":
         strategy = fields.get("strategy", "?")
-        symbols = fields.get("symbols", "?")
+        symbol_label = _format_symbol_list(fields.get("symbols"), fields.get("symbol_names"))
         dry = " (dry-run)" if fields.get("dry_run") else ""
-        return f"▶️ paper 시작{dry}\n전략: {strategy}\n종목: {symbols}"
+        return f"▶️ paper 시작{dry}\n전략: {strategy}\n종목: {symbol_label}"
     if event == "runner.stopped":
         reason = fields.get("reason", "정상")
         msg = f"⏹ paper 정지 ({reason})"
@@ -37,14 +70,16 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
             msg += "\n💡 다음 시동(평일 09:00)까지 텔레그램 명령 비활성"
         return msg
     if event == "runner.order_accepted":
+        sym_label = _with_name(str(fields.get("symbol", "?")), fields.get("name"))
         return (
-            f"✅ 체결 접수 {fields.get('symbol', '?')} {str(fields.get('side', '?')).upper()}"
+            f"✅ 체결 접수 {sym_label} {str(fields.get('side', '?')).upper()}"
             f" {fields.get('qty', '?')}주"
             f" (ord:{fields.get('order_no', '-')})"
         )
     if event == "runner.order_failed":
+        sym_label = _with_name(str(fields.get("symbol", "?")), fields.get("name"))
         return (
-            f"❌ 주문 실패 {fields.get('symbol', '?')} {str(fields.get('side', '?')).upper()}"
+            f"❌ 주문 실패 {sym_label} {str(fields.get('side', '?')).upper()}"
             f" {fields.get('qty', '?')}주: {fields.get('error', 'unknown')}"
         )
     if event == "runner.balance_failed_fatal":
@@ -74,7 +109,7 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
 
     if event == "position_guard.fired":
         # 23단계 Phase C — PositionGuard SELL 발화. stop/trailing/partial 한국어.
-        symbol = fields.get("symbol", "?")
+        sym_label = _with_name(str(fields.get("symbol", "?")), fields.get("name"))
         reason = str(fields.get("reason", ""))
         qty = fields.get("qty", "?")
         price = fields.get("price")
@@ -85,7 +120,7 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
             "partial_take": "💵 부분 익절",
         }.get(reason, "🛟 가드")
         price_part = f" @ {int(float(price)):,}원" if price is not None else ""
-        return f"{reason_ko} {symbol} {qty}주{price_part}{dry}"
+        return f"{reason_ko} {sym_label} {qty}주{price_part}{dry}"
 
     # ---- 21단계 day-trade 이벤트 ----------------------------------------
 
@@ -93,11 +128,24 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         chosen = fields.get("chosen") or []
         blocked = fields.get("blocked") or []
         note = fields.get("note") or ""
-        chosen_str = ", ".join(str(s) for s in chosen) if chosen else "없음"
+        names_raw = fields.get("names") or {}
+        name_map: dict[str, str] = {}
+        if isinstance(names_raw, dict):
+            for k, v in names_raw.items():
+                if isinstance(k, str) and isinstance(v, str):
+                    name_map[k] = v
+        chosen_str = (
+            ", ".join(_with_name(str(s), name_map.get(str(s))) for s in chosen)
+            if chosen
+            else "없음"
+        )
         head = f"🔎 발굴 완료 · 매수 후보 {len(chosen)}건"
         body = f"\n선정: {chosen_str}"
         if blocked:
-            blocked_summary = ", ".join(f"{sym}({reason})" for sym, reason in blocked[:5])
+            blocked_summary = ", ".join(
+                f"{_with_name(str(sym), name_map.get(str(sym)))}({reason})"
+                for sym, reason in blocked[:5]
+            )
             if len(blocked) > 5:
                 blocked_summary += f" 외 {len(blocked) - 5}"
             body += f"\n차단: {blocked_summary}"
@@ -119,9 +167,9 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         return f"🧹 청산 완료{dry} · {success}종목 ({reason})"
 
     if event == "runner.liquidate_failed":
+        sym_label = _with_name(str(fields.get("symbol", "?")), fields.get("name"))
         return (
-            f"❌ 청산 실패 {fields.get('symbol', '?')} {fields.get('qty', '?')}주: "
-            f"{fields.get('error', 'unknown')}"
+            f"❌ 청산 실패 {sym_label} {fields.get('qty', '?')}주: {fields.get('error', 'unknown')}"
         )
 
     # ---- 22단계 일일 리포트 ---------------------------------------------

@@ -175,6 +175,10 @@ class PaperRunner:
     _holding_correlations: dict[tuple[str, str], float] = field(default_factory=dict, init=False)
     _correlations_refresh_date: _date | None = field(default=None, init=False)
     _correlations_refresh_symbols: frozenset[str] = field(default_factory=frozenset, init=False)
+    # 종목 코드→이름 매핑. 발굴(set_universe) · 잔고 스냅샷의 holdings.name · 호출자
+    # 명시 등록을 통해 채워지고, notifier 가 메시지 빌더에 `name=` 으로 같이 전달.
+    # 5/14 사용자 피드백: 텔레그램에서 코드만 보면 어떤 종목인지 모르겠다.
+    _symbol_names: dict[str, str] = field(default_factory=dict, init=False)
     # 5/14 회귀 — SELL 발주 후 키움 잔고 응답에 체결이 반영되기까지 race.
     # _snapshot_account 가 raw 잔고를 받을 때 이 dict 의 수량만큼 차감해 가드·전략이
     # 잔량을 부풀려 보고 다시 SELL 시도하는(insufficient_balance 800033) 패턴 차단.
@@ -272,10 +276,15 @@ class PaperRunner:
                 return
 
         strat_names = sorted({type(s).__name__ for s in self.strategies.values()})
+        # symbol_names 는 텔레그램 메시지에서 코드 옆에 종목명을 합쳐 표시하기 위함.
+        # 발굴 단계에 set_universe(names=…) 로 채워졌거나, swing 모드라 비어 있을 수 있음.
         await self.notifier.notify(
             "runner.started",
             strategy=",".join(strat_names),
             symbols=",".join(self.symbols),
+            symbol_names={
+                s: self._symbol_names[s] for s in self.symbols if s in self._symbol_names
+            },
             dry_run=self.dry_run,
         )
 
@@ -423,6 +432,11 @@ class PaperRunner:
         self._balance_failures = 0
         positions = {h.symbol: h.quantity for h in snap.holdings}
         avg_prices = {h.symbol: float(h.avg_price) for h in snap.holdings}
+        # 잔고 응답에 포함된 종목명을 흡수 — set_universe 발굴 단계에 없던 종목(이전일
+        # 보유 잔재 등) 도 텔레그램 메시지에서 코드+이름으로 표시 가능.
+        for h in snap.holdings:
+            if h.name and h.name.strip():
+                self._symbol_names.setdefault(h.symbol, h.name)
         # 5/14 회귀 — 미체결 SELL 만큼 raw 잔고에서 차감. _pending_sells 의 TTL 지난
         # 항목은 만료 (다음 호출에서 키움 응답을 그대로 신뢰).
         self._reap_pending_sells()
@@ -529,6 +543,7 @@ class PaperRunner:
             await self.notifier.notify(
                 "position_guard.fired",
                 symbol=action.symbol,
+                name=self._name_of(action.symbol),
                 reason=action.reason.value,
                 qty=action.quantity,
                 price=action.price,
@@ -543,6 +558,7 @@ class PaperRunner:
         await self.notifier.notify(
             "position_guard.fired",
             symbol=action.symbol,
+            name=self._name_of(action.symbol),
             reason=action.reason.value,
             qty=action.quantity,
             price=action.price,
@@ -738,6 +754,7 @@ class PaperRunner:
                 "runner.order_accepted",
                 order_no=result.order_no,
                 symbol=order.symbol,
+                name=self._name_of(order.symbol),
                 side=order.side.value,
                 qty=order.quantity,
             )
@@ -816,11 +833,24 @@ class PaperRunner:
                     "runner.order_failed",
                     error=str(exc),
                     symbol=order.symbol,
+                    name=self._name_of(order.symbol),
                     side=order.side.value,
                     qty=order.quantity,
                     category=category.value,
                     skip_seconds=skip_seconds,
                 )
+
+    def register_symbol_names(self, names: dict[str, str]) -> None:
+        """발굴 결과 등 외부에서 코드→이름 매핑을 주입. 빈 값/공백은 무시."""
+        for sym, name in names.items():
+            if sym and isinstance(name, str) and name.strip():
+                self._symbol_names[sym] = name
+
+    def _name_of(self, symbol: str | None) -> str | None:
+        """종목 코드 → 종목명. 없으면 None (notifier 가 코드만 표시)."""
+        if not symbol:
+            return None
+        return self._symbol_names.get(symbol)
 
     def _register_pending_sell(self, symbol: str, quantity: int) -> None:
         """SELL 발주 직후 _pending_sells 에 미체결 수량 누적. 같은 종목 다회 발주 합산."""
@@ -889,6 +919,7 @@ class PaperRunner:
             liquidate_at_label=(
                 self.liquidate_at.strftime("%H:%M") if self.liquidate_at is not None else ""
             ),
+            symbol_names=dict(self._symbol_names),
         )
 
     # ---- 텔레그램 v3 외부 제어 (모두 동기. async loop 가 폴링) -------------
@@ -937,6 +968,8 @@ class PaperRunner:
         self,
         symbols: list[str],
         strategies: dict[str, Strategy],
+        *,
+        names: dict[str, str] | None = None,
     ) -> None:
         """orchestrator 가 발굴 결과를 주입할 때 호출.
 
@@ -944,6 +977,7 @@ class PaperRunner:
         - day-trade 모드는 시작 시점에 매수 대상이 미정 — 09:00:30 발굴 후 주입.
         - 호출되면 run() 내부의 `_wait_universe_or_stop()` 가 깨어나 ws.start 진행.
         - 시작 후(ws 활성) 변경은 PR-B 범위 밖 — 시작 전 1회만 허용.
+        - names 는 코드→종목명 매핑(옵션) — 텔레그램 알림에서 코드+이름 표시용.
         """
         if self._ws is not None:
             raise RuntimeError("set_universe() 는 run() 진입 전, ws.start() 이전에만 호출하세요.")
@@ -954,6 +988,8 @@ class PaperRunner:
             raise ValueError(f"전략이 지정되지 않은 종목: {missing}")
         self.symbols = list(symbols)
         self.strategies = dict(strategies)
+        if names:
+            self.register_symbol_names(names)
         self._universe_ready.set()
         log.info(
             "runner.universe_set",
@@ -1043,6 +1079,7 @@ class PaperRunner:
                 await self.notifier.notify(
                     "runner.liquidate_failed",
                     symbol=symbol,
+                    name=self._name_of(symbol),
                     qty=qty,
                     error=str(exc),
                 )

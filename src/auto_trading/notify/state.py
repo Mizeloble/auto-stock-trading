@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
@@ -37,6 +37,9 @@ class RunnerStateSnapshot:
     runner_mode: str = "swing"
     # day-trade 모드일 때만 의미 — "HH:MM" KST. swing 은 빈 문자열.
     liquidate_at_label: str = ""
+    # 종목 코드→이름 매핑. 텔레그램 메시지에서 코드 옆에 종목명을 합쳐 표시 (5/14
+    # 사용자 피드백). swing 모드나 잔고 없는 신규 시작 시점엔 빈 dict 가 정상.
+    symbol_names: dict[str, str] = field(default_factory=dict)
 
 
 # ---- 포맷터 ----------------------------------------------------------------
@@ -312,12 +315,17 @@ def format_status(state: RunnerStateSnapshot, *, now: datetime | None = None) ->
             if state.liquidate_at_label
             else " · day-trade"
         )
+    symbols_label = (
+        ", ".join(_with_name(s, state.symbol_names.get(s)) for s in state.symbols)
+        if state.symbols
+        else "-"
+    )
     lines = [
         f"📊 러너 상태{dry}",
         f"제어: {control_label}",
         f"모드: {state.mode}{mode_extra}",
         f"가동: {_uptime(state.started_at, now)}",
-        f"종목: {', '.join(state.symbols) if state.symbols else '-'}",
+        f"종목: {symbols_label}",
         f"전략: {strat_str}",
     ]
     if state.balance_failures > 0:
@@ -370,7 +378,9 @@ def format_positions(state: RunnerStateSnapshot) -> str:
         return "포지션 없음"
     lines = ["📦 보유 포지션"]
     for h in state.snapshot.holdings:
-        lines.append(f"• {h.symbol} {h.quantity}주 @ 평균 {_won(h.avg_price)}")
+        # 잔고 응답의 h.name 을 먼저 쓰되, 빈 경우 runner._symbol_names 폴백.
+        name = h.name if h.name else state.symbol_names.get(h.symbol)
+        lines.append(f"• {_with_name(h.symbol, name)} {h.quantity}주 @ 평균 {_won(h.avg_price)}")
     return "\n".join(lines)
 
 
@@ -398,7 +408,10 @@ def format_last_signal(state: RunnerStateSnapshot) -> str:
         ts = sig.ts.strftime("%H:%M") if sig.ts else "-"
         hint = f" @ {_won(sig.price_hint)}" if sig.price_hint is not None else ""
         reason = f" — {sig.reason}" if sig.reason else ""
-        lines.append(f"• {sym} {sig.side.value.upper()} (w={sig.weight:.2f}){hint}{reason} [{ts}]")
+        sym_label = _with_name(sym, state.symbol_names.get(sym))
+        lines.append(
+            f"• {sym_label} {sig.side.value.upper()} (w={sig.weight:.2f}){hint}{reason} [{ts}]"
+        )
     return "\n".join(lines)
 
 

@@ -86,6 +86,59 @@ def test_handle_status_uses_format_status() -> None:
     assert "005930" in msg
 
 
+def test_handle_status_renders_symbols_with_names() -> None:
+    """5/14 사용자 피드백 — `/status` 종목 줄도 코드+이름 ("005930 삼성전자")."""
+    msg = handle_status(
+        _state(
+            symbols=["005930", "403550"],
+            strategies={"005930": "Sma", "403550": "Intra"},
+            symbol_names={"005930": "삼성전자", "403550": "쏘카"},
+        )
+    )
+    assert "종목: 005930 삼성전자, 403550 쏘카" in msg
+
+
+def test_handle_positions_renders_symbols_with_names() -> None:
+    """`/positions` — h.name 이 없어도 state.symbol_names 폴백으로 이름 표시."""
+    from decimal import Decimal
+
+    from auto_trading.account.balance import AccountSnapshot, Holding
+
+    snap = AccountSnapshot(
+        deposit=Decimal("1000000"),
+        total_evaluation=Decimal("1000000"),
+        total_pnl=Decimal("0"),
+        holdings=[
+            Holding(
+                symbol="005930",
+                name="",  # 빈 응답이라도
+                quantity=5,
+                avg_price=Decimal("70000"),
+                current_price=Decimal("70000"),
+                market_value=Decimal("350000"),
+                pnl=Decimal("0"),
+                pnl_pct=Decimal("0"),
+            )
+        ],
+    )
+    msg = handle_positions(_state(snapshot=snap, symbol_names={"005930": "삼성전자"}))
+    assert "005930 삼성전자" in msg
+
+
+def test_handle_last_signal_renders_symbols_with_names() -> None:
+    """`/last_signal` — symbol_names 가 있으면 코드+이름."""
+    from decimal import Decimal
+
+    from auto_trading._common import Side
+    from auto_trading.strategy.base import Signal
+
+    sig = Signal(symbol="005930", side=Side.BUY, weight=1.0, price_hint=Decimal("70000"))
+    msg = handle_last_signal(
+        _state(recent_signals={"005930": sig}, symbol_names={"005930": "삼성전자"})
+    )
+    assert "005930 삼성전자" in msg
+
+
 def test_handle_balance_no_snapshot_shows_pending_message() -> None:
     msg = handle_balance(_state(snapshot=None))
     assert "잔고 조회 전" in msg
