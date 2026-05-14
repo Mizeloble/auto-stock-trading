@@ -36,6 +36,11 @@ class DaytradeRiskLimits(BaseModel):
     max_order_value: float = Field(default=0.0, ge=0.0)
     daily_notional_limit: float = Field(default=0.0, ge=0.0)
     daily_loss_kill: bool = False
+    # 29단계 PR9/10 (#14) — 연속 손절 자동 일시중지. 0 이면 비활성.
+    max_consecutive_losses: int = Field(default=0, ge=0, le=20)
+    consecutive_loss_pause_sec: int = Field(default=86_400, ge=60, le=604_800)
+    # 29단계 PR27/28 (#15) — 보유 종목 페어 상관 가드 (0.7 권장). 0 이면 비활성.
+    max_position_correlation: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class DaytradeProfile(BaseModel):
