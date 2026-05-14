@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import contextlib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from ..state import HELP_TEXT, RunnerStateSnapshot
@@ -21,6 +22,8 @@ from .status import (
 StateProvider = Callable[[], RunnerStateSnapshot]
 ControlAction = Callable[[], None]
 UnpauseAction = Callable[[], bool]
+# 5/14 회귀 — /balance 응답 직전 잔고 강제 갱신 콜백. True=성공, False=실패/비활성.
+BalanceRefreshAction = Callable[[], Awaitable[bool]]
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,8 @@ class CommandContext:
     on_stop: ControlAction | None = None
     # 29단계 PR11 (#14 마무리) — 연속 손절 자동 일시중지 수동 해제.
     on_unpause: UnpauseAction | None = None
+    # 5/14 회귀 — /balance 호출 시 사전 강제 잔고 갱신. None 이면 비활성(기존 동작).
+    on_balance_refresh: BalanceRefreshAction | None = None
 
 
 def dispatch_sync(cmd: str, ctx: CommandContext) -> str:
@@ -66,3 +71,16 @@ def dispatch_sync(cmd: str, ctx: CommandContext) -> str:
     if cmd == "/last_signal":
         return handle_last_signal(state)
     return HELP_TEXT
+
+
+async def dispatch_async(cmd: str, ctx: CommandContext) -> str:
+    """`/balance` 처럼 사전에 비동기 갱신이 필요한 명령을 위한 async dispatch.
+
+    /balance 만 on_balance_refresh 콜백을 await 한 뒤 dispatch_sync 와 동일하게 응답.
+    다른 명령은 dispatch_sync 로 위임 — 호출자가 `/insight` 외 모든 명령에 사용.
+    """
+    if cmd == "/balance" and ctx.on_balance_refresh is not None:
+        # refresh 실패는 stale 안내로 폴백 — 명령 자체는 끊지 않음.
+        with contextlib.suppress(Exception):
+            await ctx.on_balance_refresh()
+    return dispatch_sync(cmd, ctx)

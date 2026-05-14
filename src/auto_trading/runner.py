@@ -175,6 +175,16 @@ class PaperRunner:
     _holding_correlations: dict[tuple[str, str], float] = field(default_factory=dict, init=False)
     _correlations_refresh_date: _date | None = field(default=None, init=False)
     _correlations_refresh_symbols: frozenset[str] = field(default_factory=frozenset, init=False)
+    # 5/14 회귀 — SELL 발주 후 키움 잔고 응답에 체결이 반영되기까지 race.
+    # _snapshot_account 가 raw 잔고를 받을 때 이 dict 의 수량만큼 차감해 가드·전략이
+    # 잔량을 부풀려 보고 다시 SELL 시도하는(insufficient_balance 800033) 패턴 차단.
+    # symbol → (남은 미체결 SELL 수량, 등록 시각). _pending_sell_ttl_sec 이 지나면
+    # 자연 만료(키움 잔고를 다시 신뢰). 발주 실패(except) 시에는 등록 안 함.
+    _pending_sells: dict[str, tuple[int, datetime]] = field(default_factory=dict, init=False)
+    _pending_sell_ttl_sec: int = field(default=180, init=False)
+    # 활성 REST 클라이언트 참조 — force_balance_refresh() 가 별도 인스턴스 안 만들고
+    # 메인 루프와 같은 토큰·세션을 재사용하기 위함. run() 의 async with 범위에서만 살아있음.
+    _rest_client: KiwoomRestClient | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         # 23단계 Phase C — 명시 주입 안 했으면 risk.limits 를 그대로 따르는 PositionGuard 자동 생성.
@@ -274,6 +284,8 @@ class PaperRunner:
         heartbeat_task: asyncio.Task[None] | None = None
         try:
             async with KiwoomRestClient(settings=self._settings) as rest:
+                # force_balance_refresh() 가 같은 세션을 재사용할 수 있도록 보관.
+                self._rest_client = rest
                 ws = KiwoomWebSocket(
                     settings=self._settings,
                     token_provider=rest.token_provider,
@@ -323,6 +335,17 @@ class PaperRunner:
                 finally:
                     self._ws = None
                     await ws.stop()
+                    # 5/14 회귀 — 청산이 발사된 채로 main loop 가 종료되면 self._snapshot 이
+                    # 청산 직전 상태로 굳어 텔레그램 일일 리포트가 "보유 N주" 로 stale 표시.
+                    # ws 정지 후 짧게 대기하고 한 번 더 잔고를 받아옴. 키움이 미반영 응답을
+                    # 줘도 _pending_sells 차감이 보정하므로 holdings 가 0 이 되는 게 정상.
+                    if self._liquidation_done:
+                        try:
+                            await asyncio.sleep(1.0)
+                            await self._snapshot_account(rest, previous=account)
+                        except Exception as exc:
+                            log.warning("runner.final_balance_refresh_failed", error=str(exc))
+                    self._rest_client = None
         except KeyboardInterrupt:
             stop_reason = "KeyboardInterrupt"
             raise
@@ -400,6 +423,14 @@ class PaperRunner:
         self._balance_failures = 0
         positions = {h.symbol: h.quantity for h in snap.holdings}
         avg_prices = {h.symbol: float(h.avg_price) for h in snap.holdings}
+        # 5/14 회귀 — 미체결 SELL 만큼 raw 잔고에서 차감. _pending_sells 의 TTL 지난
+        # 항목은 만료 (다음 호출에서 키움 응답을 그대로 신뢰).
+        self._reap_pending_sells()
+        for sym, (pending_qty, _ts) in self._pending_sells.items():
+            if pending_qty <= 0:
+                continue
+            current = positions.get(sym, 0)
+            positions[sym] = max(0, current - pending_qty)
         # 29단계 회귀(2026-05-11) — total_equity 는 "예수금 + 보유 평가금" 으로 명시 계산.
         # 키움 `tot_evlt_amt` 는 모드/응답 버전에 따라 보유 평가금만 담는 경우가 있어
         # 이를 그대로 day_start_equity 분모로 쓰면 일부 매도 직후 분자만 줄어든 것처럼
@@ -717,6 +748,10 @@ class PaperRunner:
                 account.avg_prices[order.symbol] = ref_price
                 # 23단계 Phase B — 일일 매수대금 누적. 실패 시(except 분기) 누적 X.
                 account.today_notional_used += ref_price * order.quantity
+            elif order.side is Side.SELL:
+                # 5/14 회귀 — 다음 _snapshot_account 가 키움 raw 잔고를 받았을 때
+                # 체결 미반영분(800033 insufficient_balance) 만큼 빼주도록 등록.
+                self._register_pending_sell(order.symbol, order.quantity)
             # 29단계 PR10 (#14 2차) — SELL 시 라운드트립 PnL 산출 → 트래커 갱신.
             # 평균가는 BUY 시에만 갱신되므로 SELL 직전 avg_prices 가 매수가.
             # 부분 매도 시점에도 평균가 그대로 유지 — 누적 라운드트립 측정에 적합.
@@ -760,23 +795,67 @@ class PaperRunner:
                     self._skipped_until[order.symbol] = datetime.now(KST) + timedelta(
                         seconds=skip_seconds
                     )
+            # 5/14 회귀 — SELL 발주가 매도가능수량 부족으로 실패하는 케이스는
+            # in-flight race(아직 _pending_sells 가 적용 안 된 봉) 가 절대다수.
+            # 로그는 정상 분류해 남기되 텔레그램 ❌ 알림은 생략 — 사용자에게는
+            # 실제 자금/포지션 손실이 아닌 정상 흐름의 잔재.
+            silence_notify = (
+                category is RejectCategory.INSUFFICIENT_BALANCE and order.side is Side.SELL
+            )
             log.error(
                 "runner.order_failed",
                 error=str(exc),
                 symbol=order.symbol,
                 category=category.value,
                 skip_seconds=skip_seconds,
+                notify_silenced=silence_notify,
                 exc_info=exc,
             )
-            await self.notifier.notify(
-                "runner.order_failed",
-                error=str(exc),
-                symbol=order.symbol,
-                side=order.side.value,
-                qty=order.quantity,
-                category=category.value,
-                skip_seconds=skip_seconds,
-            )
+            if not silence_notify:
+                await self.notifier.notify(
+                    "runner.order_failed",
+                    error=str(exc),
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    qty=order.quantity,
+                    category=category.value,
+                    skip_seconds=skip_seconds,
+                )
+
+    def _register_pending_sell(self, symbol: str, quantity: int) -> None:
+        """SELL 발주 직후 _pending_sells 에 미체결 수량 누적. 같은 종목 다회 발주 합산."""
+        if quantity <= 0:
+            return
+        prev, _ = self._pending_sells.get(symbol, (0, datetime.now()))
+        self._pending_sells[symbol] = (prev + quantity, datetime.now())
+
+    def _reap_pending_sells(self) -> None:
+        """TTL 지난 _pending_sells 엔트리 제거. _pending_sell_ttl_sec 기준."""
+        if not self._pending_sells:
+            return
+        now = datetime.now()
+        ttl = timedelta(seconds=self._pending_sell_ttl_sec)
+        stale = [sym for sym, (_qty, ts) in self._pending_sells.items() if now - ts > ttl]
+        for sym in stale:
+            self._pending_sells.pop(sym, None)
+
+    async def force_balance_refresh(self) -> bool:
+        """텔레그램 `/balance` 등 외부에서 캐시를 즉시 갱신하도록 트리거.
+
+        5/14 회귀: 운영 중 `/balance` 가 빈 보유종목·총평가 0 으로 떨어진 케이스 —
+        키움 mock 잔고 응답의 일시적 race. 핸들러가 응답 직전 호출하면 다음
+        포맷 시점에 최신 스냅샷을 사용. 활성 REST 가 없거나(러너 정지 후) 갱신
+        실패하면 False — 호출자는 stale 안내로 폴백.
+        """
+        rest = self._rest_client
+        if rest is None:
+            return False
+        try:
+            await self._snapshot_account(rest, previous=self._account)
+            return True
+        except Exception as exc:
+            log.warning("runner.force_balance_refresh_failed", error=str(exc))
+            return False
 
     def _mark_exit(self, symbol: str, ts: datetime) -> None:
         """SELL 로 잔량 0 이 됐을 때의 정리 — 23단계 Phase D.

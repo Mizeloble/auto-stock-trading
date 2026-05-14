@@ -25,13 +25,14 @@ import structlog
 
 from .._common import mask_secret
 from .commands import (
+    BalanceRefreshAction,
     CommandContext,
     ControlAction,
     InsightAction,
     InsightCooldown,
     StateProvider,
     UnpauseAction,
-    dispatch_sync,
+    dispatch_async,
 )
 from .telegram import TELEGRAM_API_BASE
 
@@ -63,6 +64,7 @@ class TelegramCommandHandler:
         on_stop: ControlAction | None = None,
         on_unpause: UnpauseAction | None = None,
         on_insight: InsightAction | None = None,
+        on_balance_refresh: BalanceRefreshAction | None = None,
         insight_cooldown_sec: int = 300,
     ) -> None:
         if not token:
@@ -83,6 +85,7 @@ class TelegramCommandHandler:
             on_resume=on_resume,
             on_stop=on_stop,
             on_unpause=on_unpause,
+            on_balance_refresh=on_balance_refresh,
         )
         self._insight = InsightCooldown(on_insight, cooldown_sec=insight_cooldown_sec)
 
@@ -178,7 +181,9 @@ class TelegramCommandHandler:
             if cmd == "/insight":
                 reply = await self._insight.handle()
             else:
-                reply = dispatch_sync(cmd, self._ctx)
+                # /balance 는 on_balance_refresh 가 있으면 사전 갱신 — 그 외 명령은
+                # dispatch_async 안쪽에서 dispatch_sync 로 위임돼 동일 분기.
+                reply = await dispatch_async(cmd, self._ctx)
         except Exception as exc:
             log.warning(
                 "notify.cmd_dispatch_failed",
