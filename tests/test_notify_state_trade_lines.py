@@ -82,6 +82,36 @@ def test_format_pair_line_includes_pnl_and_simulated_marker() -> None:
     assert "(시뮬)" in line
 
 
+def test_format_pair_line_uses_liquidation_qty_and_buy_price() -> None:
+    """5/14 회귀 — buy 11주 @283,250원 + liq 6주 @시장가 (buy_price=291,000원).
+
+    이전 회귀에선 페어 라인 qty/buy_p 가 buy.quantity / buy.price 라 사용자에게
+    `11주 @283,250원 → @시장가` 로 표시됐다. 새 동작은 liq.quantity 우선 + buy_price
+    는 liq.buy_price(청산 시점 평균가) 우선이라 `6주 @291,000원 → @시장가`.
+    """
+    buy = {
+        "symbol": "005930",
+        "name": "삼성전자",
+        "quantity": 11,
+        "price": 283_250.0,
+        "simulated": False,
+    }
+    liq = {
+        "symbol": "005930",
+        "name": "삼성전자",
+        "quantity": 6,
+        "sell_price": None,
+        "buy_price": 291_000.0,
+        "simulated": False,
+    }
+    line = _format_pair_line(buy, liq)
+    assert "6주" in line
+    assert "11주" not in line
+    assert "@291,000원" in line
+    assert "@283,250원" not in line
+    assert "@시장가" in line  # sell_price=None
+
+
 def test_format_pair_line_market_price_no_pnl() -> None:
     """price 없으면 @시장가 + 손익 표기 생략."""
     buy = {"symbol": "A", "quantity": 5, "price": None}

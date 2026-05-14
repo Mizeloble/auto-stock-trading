@@ -11,20 +11,24 @@
 """
 
 from ._dispatch import (
+    BalanceRefreshAction,
     CommandContext,
     ControlAction,
     StateProvider,
     UnpauseAction,
+    dispatch_async,
     dispatch_sync,
 )
 from .insight import InsightAction, InsightCooldown
 
 __all__ = [
+    "BalanceRefreshAction",
     "CommandContext",
     "ControlAction",
     "InsightAction",
     "InsightCooldown",
     "StateProvider",
     "UnpauseAction",
+    "dispatch_async",
     "dispatch_sync",
 ]

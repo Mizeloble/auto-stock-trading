@@ -119,16 +119,22 @@ def _pair_buy_liq_records(
 
 
 def _format_pair_line(buy: dict, liq: dict) -> str:
-    """`- 005930 삼성전자  10주 @5,000원 → @5,500원  +5,000원/+10.00% (시뮬)`."""
+    """`- 005930 삼성전자  10주 @5,000원 → @5,500원  +5,000원/+10.00% (시뮬)`.
+
+    5/14 회귀 — 매수 11주·청산 6주(시장가 청산은 sell_price=None) 흐름에서 매수 수량과
+    매수 가격이 그대로 페어 라인에 노출되어 사용자가 "11주가 시장가로 청산됐다" 로 오해.
+    페어는 *청산 1건* 단위라 수량은 liq.quantity, 매수가는 liq.buy_price(청산 시점의
+    평균가) 를 우선으로 한다.
+    """
     sym = str(buy.get("symbol") or liq.get("symbol") or "")
     name_raw = buy.get("name") or liq.get("name")
     head = _with_name(sym, name_raw if isinstance(name_raw, str) else None)
-    qty = int(buy.get("quantity") or 0)
+    qty = int(liq.get("quantity") or buy.get("quantity") or 0)
     sim = " (시뮬)" if buy.get("simulated") or liq.get("simulated") else ""
-    buy_p = buy.get("price")
-    sell_p = liq.get("sell_price")
+    buy_p = liq.get("buy_price")
     if buy_p is None:
-        buy_p = liq.get("buy_price")
+        buy_p = buy.get("price")
+    sell_p = liq.get("sell_price")
     buy_part = f"@{_won(buy_p)}" if buy_p is not None else "@시장가"
     sell_part = f"@{_won(sell_p)}" if sell_p is not None else "@시장가"
     pnl_part = ""
@@ -323,6 +329,17 @@ def format_balance(state: RunnerStateSnapshot) -> str:
     if state.snapshot is None:
         return "잔고 조회 전 — 첫 스냅샷이 도착하면 다시 시도하세요."
     snap = state.snapshot
+    # 5/14 회귀 — 키움 mock 잔고 응답이 일시적으로 holdings 빈 채로 옴.
+    # 그 시점에 러너 account.positions 가 보유 인지하고 있다면 사용자에게 race 안내.
+    if (
+        not snap.holdings
+        and state.account is not None
+        and any(q > 0 for q in state.account.positions.values())
+    ):
+        return (
+            "잔고 응답이 일시적으로 비어 있습니다 — 체결 반영 race로 추정.\n"
+            "잠시 후 다시 시도하거나 다음 봉의 자동 갱신을 기다려주세요."
+        )
     # 29단계 PR27 — 평가손익 합계는 holdings.pnl 의 로컬 합산을 신뢰 (mock 응답에
     # `tot_evltv_prft` 가 비어 0 으로 들어오는 회귀 차단). 종목별로 ±값이 보이는데
     # 상단 합계가 0 으로 표기되던 5/12 사용자 혼란을 막는다.

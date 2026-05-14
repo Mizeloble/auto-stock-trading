@@ -14,6 +14,7 @@ import pytest
 from auto_trading.notify.commands import (
     CommandContext,
     InsightCooldown,
+    dispatch_async,
     dispatch_sync,
 )
 from auto_trading.notify.commands.control import (
@@ -88,6 +89,32 @@ def test_handle_status_uses_format_status() -> None:
 def test_handle_balance_no_snapshot_shows_pending_message() -> None:
     msg = handle_balance(_state(snapshot=None))
     assert "잔고 조회 전" in msg
+
+
+def test_handle_balance_empty_holdings_with_positions_shows_race_warning() -> None:
+    """5/14 회귀 — 키움이 일시적으로 holdings 빈 응답을 줬는데 러너 로컬은
+    포지션을 인지하고 있으면 사용자에게 race 안내 (잔고가 0원으로 보이지 않게).
+    """
+    from decimal import Decimal
+
+    from auto_trading.account.balance import AccountSnapshot
+    from auto_trading.risk.manager import AccountState
+
+    snap = AccountSnapshot(
+        deposit=Decimal("49230116"),
+        total_evaluation=Decimal("0"),
+        total_pnl=Decimal("0"),
+        holdings=[],
+    )
+    acct = AccountState(
+        deposit=49_230_116.0,
+        total_equity=49_230_116.0,
+        positions={"005930": 11},
+        avg_prices={"005930": 283_250.0},
+    )
+    msg = handle_balance(_state(snapshot=snap, account=acct))
+    assert "일시적으로 비어" in msg
+    assert "보유 종목: 없음" not in msg
 
 
 def test_handle_positions_empty_returns_no_position_label() -> None:
@@ -273,3 +300,57 @@ def test_command_context_is_frozen_dataclass() -> None:
     ctx = _ctx()
     with pytest.raises(dataclasses.FrozenInstanceError):
         ctx.on_pause = lambda: None  # type: ignore[misc]
+
+
+# -- /balance force refresh (5/14 회귀) --
+
+
+@pytest.mark.asyncio
+async def test_dispatch_async_balance_calls_refresh_callback() -> None:
+    """`/balance` 응답 직전에 on_balance_refresh 가 await 됨."""
+    calls = 0
+
+    async def _refresh() -> bool:
+        nonlocal calls
+        calls += 1
+        return True
+
+    ctx = _ctx(on_balance_refresh=_refresh)
+    msg = await dispatch_async("/balance", ctx)
+    assert calls == 1
+    # snapshot=None 인 픽스처라 안내 메시지로 떨어지지만 호출 자체는 발생.
+    assert "잔고" in msg
+
+
+@pytest.mark.asyncio
+async def test_dispatch_async_balance_swallows_refresh_exception() -> None:
+    """refresh 실패가 명령 dispatch 를 죽이면 안 됨 — stale 안내로 폴백."""
+
+    async def _refresh() -> bool:
+        raise RuntimeError("boom")
+
+    ctx = _ctx(on_balance_refresh=_refresh)
+    msg = await dispatch_async("/balance", ctx)
+    assert "잔고" in msg  # 어떤 잔고 응답이든 돌아와야 함
+
+
+@pytest.mark.asyncio
+async def test_dispatch_async_other_commands_skip_refresh() -> None:
+    """`/balance` 외 명령은 on_balance_refresh 를 호출하지 않음."""
+    calls = 0
+
+    async def _refresh() -> bool:
+        nonlocal calls
+        calls += 1
+        return True
+
+    ctx = _ctx(on_balance_refresh=_refresh)
+    await dispatch_async("/status", ctx)
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_async_balance_no_callback_falls_back_to_sync() -> None:
+    """on_balance_refresh=None 이면 기존 동작과 동일."""
+    msg = await dispatch_async("/balance", _ctx(on_balance_refresh=None))
+    assert "잔고" in msg

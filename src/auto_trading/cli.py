@@ -804,6 +804,7 @@ def paper(
         on_resume=runner.resume,
         on_stop=runner.request_stop,
         on_unpause=runner.unpause_loss_tracker,
+        on_balance_refresh=runner.force_balance_refresh,
     )
     try:
         if handler is None:
@@ -963,6 +964,7 @@ def paper_day(
         on_stop=runner.request_stop,
         on_unpause=runner.unpause_loss_tracker,
         on_insight=on_insight,
+        on_balance_refresh=runner.force_balance_refresh,
     )
 
     exclude_etf = not cfg.include_etf

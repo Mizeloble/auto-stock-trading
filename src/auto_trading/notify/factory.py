@@ -6,6 +6,7 @@ from ..config import Settings, get_settings
 from .base import NoopNotifier, Notifier
 from .telegram import TelegramNotifier
 from .telegram_commands import (
+    BalanceRefreshAction,
     ControlAction,
     InsightAction,
     StateProvider,
@@ -33,6 +34,7 @@ def build_command_handler(
     on_stop: ControlAction | None = None,
     on_unpause: UnpauseAction | None = None,
     on_insight: InsightAction | None = None,
+    on_balance_refresh: BalanceRefreshAction | None = None,
 ) -> TelegramCommandHandler | None:
     """텔레그램 인커밍 명령 핸들러. 화이트리스트 미설정이면 None 리턴.
 
@@ -57,4 +59,5 @@ def build_command_handler(
         on_stop=on_stop,
         on_unpause=on_unpause,
         on_insight=on_insight,
+        on_balance_refresh=on_balance_refresh,
     )
