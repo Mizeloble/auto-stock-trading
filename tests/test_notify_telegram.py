@@ -280,3 +280,134 @@ async def test_position_guard_partial_take_korean_format(notifier: TelegramNotif
     assert "💵 부분 익절" in text
     assert "010170" in text
     assert "(시뮬)" not in text
+
+
+# ---- 5/14 사용자 피드백 — 종목 코드 옆에 종목명 합쳐 표시 ----------------------
+
+
+async def test_order_accepted_renders_symbol_with_name(notifier: TelegramNotifier) -> None:
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.order_accepted",
+            order_no="X",
+            symbol="005930",
+            name="삼성전자",
+            side="buy",
+            qty=11,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "005930 삼성전자" in text
+    assert "BUY 11주" in text
+
+
+async def test_order_accepted_without_name_keeps_code_only(notifier: TelegramNotifier) -> None:
+    """name 이 None/빈 문자열이면 기존처럼 코드만 — 회귀 보호."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.order_accepted",
+            order_no="X",
+            symbol="005930",
+            name=None,
+            side="sell",
+            qty=5,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "005930 " in text  # 코드 + 공백
+    assert "005930 삼성전자" not in text
+
+
+async def test_order_failed_renders_symbol_with_name(notifier: TelegramNotifier) -> None:
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.order_failed",
+            symbol="403550",
+            name="쏘카",
+            side="sell",
+            qty=44,
+            error="모의투자 매도가능수량이 부족합니다",
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "403550 쏘카" in text
+    assert "주문 실패" in text
+
+
+async def test_position_guard_fired_renders_symbol_with_name(notifier: TelegramNotifier) -> None:
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "position_guard.fired",
+            symbol="005930",
+            name="삼성전자",
+            reason="trailing",
+            qty=11,
+            price=296_000.0,
+            dry_run=False,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "📉 트레일링" in text
+    assert "005930 삼성전자" in text
+
+
+async def test_runner_liquidate_failed_renders_symbol_with_name(
+    notifier: TelegramNotifier,
+) -> None:
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.liquidate_failed",
+            symbol="005930",
+            name="삼성전자",
+            qty=12,
+            error="[7] 종목 정보가 없습니다",
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "❌ 청산 실패 005930 삼성전자 12주" in text
+
+
+async def test_daytrade_discovery_done_renders_symbols_with_names(
+    notifier: TelegramNotifier,
+) -> None:
+    """발굴 알림이 코드+이름으로. blocked 도 이름 표시."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "daytrade.discovery_done",
+            chosen=["005930", "403550"],
+            blocked=[("319400", "KOSDAQ_below_sma")],
+            names={"005930": "삼성전자", "403550": "쏘카"},
+            note="매수 후보 2/3",
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "005930 삼성전자" in text
+    assert "403550 쏘카" in text
+
+
+async def test_runner_started_renders_symbols_with_names(notifier: TelegramNotifier) -> None:
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.started",
+            strategy="IntradayMomentum",
+            symbols="005930,403550",
+            symbol_names={"005930": "삼성전자", "403550": "쏘카"},
+            dry_run=False,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "종목: 005930 삼성전자, 403550 쏘카" in text
