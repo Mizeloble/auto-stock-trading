@@ -161,7 +161,10 @@ async def test_snapshot_account_does_not_go_negative() -> None:
 def test_reap_pending_sells_drops_expired_entries() -> None:
     """_pending_sell_ttl_sec 지난 엔트리는 자연 만료 — 키움 응답을 다시 신뢰."""
     r = _runner()
-    r._pending_sells["005930"] = (10, datetime.now() - timedelta(seconds=r._pending_sell_ttl_sec + 5))
+    r._pending_sells["005930"] = (
+        10,
+        datetime.now() - timedelta(seconds=r._pending_sell_ttl_sec + 5),
+    )
     r._pending_sells["000660"] = (5, datetime.now())  # 최근 — 유지
 
     r._reap_pending_sells()
