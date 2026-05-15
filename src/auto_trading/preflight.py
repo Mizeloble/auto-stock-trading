@@ -33,7 +33,7 @@ import yaml
 
 from .account.order_journal import OrderJournal
 from .account.recovery import find_suspect_orders
-from .heartbeat import check_heartbeat
+from .heartbeat import DEFAULT_STOPPED_PATH, check_heartbeat
 from .llm.cost_tracker import CostTracker
 from .risk.manager import AccountState, RiskLimits, RiskManager
 
@@ -132,8 +132,21 @@ def check_heartbeat_recent(heartbeat_path: Path, max_age_sec: int = 86_400) -> G
     기준. 운영 검증 단계에서 더 엄격하게 잡으려면 ``max_age_sec=3600`` 으로.
     """
     name = "heartbeat_recent"
-    status = check_heartbeat(heartbeat_path, max_age_sec)
+    # cli.py 의 heartbeat-check 와 동일하게 sentinel 을 heartbeat 와 같은
+    # 디렉터리로 한정한다. 기본 stopped_path(cwd 상대경로) 를 쓰면 검사 대상과
+    # 무관한 전역 stopped.txt 가 결과를 오염시킨다.
+    status = check_heartbeat(
+        heartbeat_path,
+        max_age_sec,
+        stopped_path=heartbeat_path.parent / DEFAULT_STOPPED_PATH.name,
+    )
     if status.ok:
+        if status.reason == "stopped":
+            return GateResult(
+                name=name,
+                ok=True,
+                detail="정상 종료 sentinel — 러너 stop 직후",
+            )
         return GateResult(
             name=name,
             ok=True,
