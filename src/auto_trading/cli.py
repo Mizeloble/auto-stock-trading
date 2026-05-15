@@ -289,24 +289,33 @@ def _parse_walk_forward_spec(spec: str) -> tuple[int, int]:
     return window, step
 
 
-def _parse_cpcv_spec(spec: str) -> tuple[int, int]:
-    """\"10\" 또는 \"10/2\" → (n_folds=10, embargo_bars=2 or 0).
+def _parse_cpcv_spec(spec: str) -> tuple[int, int, int]:
+    """\"10\" / \"10/2\" / \"10/2/3\" → (n_folds, embargo_bars, n_test_folds).
 
-    29단계 PR37 — purged k-fold CPCV CLI 결합.
+    - 'N'       → (N, 0, 1)   단순 purged k-fold (PR37, Phase 1)
+    - 'N/E'     → (N, E, 1)   embargo 추가
+    - 'N/E/k'   → (N, E, k)   combinatorial (PR38, Phase 2) — C(N,k) 조합
+
+    29단계 PR37 (Phase 1) + PR44 (combinatorial CLI).
     """
     parts = spec.split("/")
-    if len(parts) not in (1, 2):
-        raise typer.BadParameter("--cpcv 는 'N' 또는 'N/E' 형식 (예: '10' 또는 '10/2').")
+    if len(parts) not in (1, 2, 3):
+        raise typer.BadParameter(
+            "--cpcv 는 'N' / 'N/E' / 'N/E/k' 형식 (예: '10', '10/2', '10/2/3')."
+        )
     try:
         n_folds = int(parts[0])
-        embargo = int(parts[1]) if len(parts) == 2 else 0
+        embargo = int(parts[1]) if len(parts) >= 2 else 0
+        n_test_folds = int(parts[2]) if len(parts) == 3 else 1
     except ValueError as exc:
         raise typer.BadParameter(f"숫자 파싱 실패: {spec}") from exc
     if n_folds < 2:
         raise typer.BadParameter("--cpcv N 은 2 이상이어야 합니다.")
     if embargo < 0:
         raise typer.BadParameter("--cpcv embargo 는 음수 불가.")
-    return n_folds, embargo
+    if not (1 <= n_test_folds <= n_folds):
+        raise typer.BadParameter(f"--cpcv k 는 1..N 범위여야 합니다 (N={n_folds}).")
+    return n_folds, embargo, n_test_folds
 
 
 @app.command()
@@ -395,9 +404,9 @@ def backtest(
         )
         return
 
-    # 29단계 PR37 — CPCV (purged k-fold) 분기
+    # 29단계 PR37/PR44 — CPCV (purged k-fold / combinatorial) 분기
     if cpcv_spec is not None:
-        n_folds, embargo_bars = _parse_cpcv_spec(cpcv_spec)
+        n_folds, embargo_bars, n_test_folds = _parse_cpcv_spec(cpcv_spec)
         _run_cpcv(
             strategy_name=strategy_name,
             strategy_params=strategy_params,
@@ -405,6 +414,7 @@ def backtest(
             df=df,
             n_folds=n_folds,
             embargo_bars=embargo_bars,
+            n_test_folds=n_test_folds,
             cash=cash,
             out_dir=out_dir,
         )
@@ -571,58 +581,83 @@ def _run_cpcv(
     df,  # pd.DataFrame
     n_folds: int,
     embargo_bars: int,
+    n_test_folds: int,
     cash: float,
     out_dir: Path | None,
 ) -> None:
-    """purged k-fold CV 실행 + 표 출력 + 결과 저장 — 29단계 PR37 (#2 Phase 1).
+    """CPCV 실행 + 표 + 저장 — 29단계 PR37 (Phase 1) / PR44 (combinatorial).
 
-    저장 형식:
-    - folds.csv: fold 별 메트릭 행 (index, start, end, n_bars, Sharpe, PSR, MDD, win_rate, trades).
-    - summary.json: CPCVSummary as_dict.
+    n_test_folds == 1 → purged_kfold (단순 N-fold).
+    n_test_folds  > 1 → combinatorial_purged_kfold (C(N,k) 조합 — 더 큰 분포 표본).
+
+    저장:
+    - folds.csv: fold/조합 별 메트릭 행.
+    - summary.json: CPCVSummary + 요청 파라미터.
     """
     import csv as _csv
     import json as _json
     from dataclasses import asdict as _asdict
 
-    from .backtest.cpcv import purged_kfold
+    from .backtest.cpcv import combinatorial_purged_kfold, purged_kfold
 
     def _factory():
         return registry.get(strategy_name, **strategy_params)
 
-    result = purged_kfold(
-        _factory,
-        symbol,
-        df,
-        n_folds=n_folds,
-        embargo_bars=embargo_bars,
-        initial_cash=cash,
-    )
+    combinatorial = n_test_folds > 1
+    if combinatorial:
+        combo_result = combinatorial_purged_kfold(
+            _factory,
+            symbol,
+            df,
+            n_folds=n_folds,
+            n_test_folds=n_test_folds,
+            embargo_bars=embargo_bars,
+            initial_cash=cash,
+        )
+        summary = combo_result.summary
+        # (label, n_bars, report) 로 정규화.
+        rows = [
+            ("+".join(str(i) for i in f.combination), f.n_bars, f.report)
+            for f in combo_result.folds
+        ]
+        sample_count = combo_result.n_combinations
+        title_extra = f"n_folds={n_folds} / k={n_test_folds} / C(N,k)={sample_count}"
+    else:
+        kfold_result = purged_kfold(
+            _factory,
+            symbol,
+            df,
+            n_folds=n_folds,
+            embargo_bars=embargo_bars,
+            initial_cash=cash,
+        )
+        summary = kfold_result.summary
+        rows = [(str(f.index), f.n_bars, f.report) for f in kfold_result.folds]
+        sample_count = summary.n_folds
+        title_extra = f"n_folds={n_folds} / embargo={embargo_bars}"
 
-    if result.summary.n_folds == 0:
+    if sample_count == 0:
         console.print(
-            f"[yellow]CPCV fold 0건 — 데이터 부족 또는 분할 실패 (n_folds={n_folds}).[/yellow]"
+            f"[yellow]CPCV 표본 0건 — 데이터 부족 또는 분할 실패 (n_folds={n_folds}).[/yellow]"
         )
         raise typer.Exit(code=1)
 
-    # Fold 표.
-    table = Table(
-        title=f"CPCV · {strategy_name} · {symbol} (n_folds={n_folds} / embargo={embargo_bars})"
-    )
-    table.add_column("#", justify="right")
-    table.add_column("기간")
+    # Fold/조합 표 — combinatorial 은 행이 많아 상위 20개만 콘솔에 (CSV 는 전체).
+    label_col = "조합" if combinatorial else "#"
+    table = Table(title=f"CPCV · {strategy_name} · {symbol} ({title_extra})")
+    table.add_column(label_col, justify="right")
     table.add_column("봉", justify="right")
     table.add_column("Sharpe", justify="right")
     table.add_column("PSR", justify="right")
     table.add_column("MDD%", justify="right")
     table.add_column("WinRate%", justify="right")
     table.add_column("거래", justify="right")
-    for f in result.folds:
-        rep = f.report
+    display_rows = rows[:20] if combinatorial else rows
+    for label, n_bars, rep in display_rows:
         s_color = "green" if rep.sharpe > 0 else "red"
         table.add_row(
-            str(f.index),
-            f"{f.start.date()} → {f.end.date()}",
-            str(f.n_bars),
+            label,
+            str(n_bars),
             f"[{s_color}]{rep.sharpe:.3f}[/{s_color}]",
             f"{rep.probabilistic_sharpe:.3f}",
             f"{rep.max_drawdown * 100:.2f}",
@@ -630,13 +665,15 @@ def _run_cpcv(
             str(rep.num_trades),
         )
     console.print(table)
+    if combinatorial and len(rows) > 20:
+        console.print(f"[dim]… 콘솔은 상위 20개만. 전체 {len(rows)}개는 folds.csv 참고.[/dim]")
 
-    # Summary.
-    s = result.summary
+    # Summary (Phase 1/2 공통 CPCVSummary).
+    s = summary
     summary_table = Table(title="CPCV Summary (분포)")
     summary_table.add_column("지표")
     summary_table.add_column("값", justify="right")
-    summary_table.add_row("fold 개수", str(s.n_folds))
+    summary_table.add_row("표본 개수", str(s.n_folds))
     summary_table.add_row("Sharpe 평균", f"{s.sharpe_mean:.3f}")
     summary_table.add_row("Sharpe 표준편차", f"{s.sharpe_std:.3f}")
     summary_table.add_row(
@@ -660,9 +697,7 @@ def _run_cpcv(
         writer = _csv.writer(csv_file)
         writer.writerow(
             [
-                "index",
-                "start",
-                "end",
+                "fold" if combinatorial else "index",
                 "n_bars",
                 "sharpe",
                 "probabilistic_sharpe",
@@ -671,14 +706,11 @@ def _run_cpcv(
                 "num_trades",
             ]
         )
-        for fold in result.folds:
-            rep = fold.report
+        for label, n_bars, rep in rows:
             writer.writerow(
                 [
-                    fold.index,
-                    fold.start.isoformat(),
-                    fold.end.isoformat(),
-                    fold.n_bars,
+                    label,
+                    n_bars,
                     rep.sharpe,
                     rep.probabilistic_sharpe,
                     rep.max_drawdown * 100.0,
@@ -691,9 +723,11 @@ def _run_cpcv(
     summary_path.write_text(
         _json.dumps(
             {
-                **_asdict(result.summary),
+                **_asdict(summary),
                 "n_folds_requested": n_folds,
                 "embargo_bars": embargo_bars,
+                "n_test_folds": n_test_folds,
+                "combinatorial": combinatorial,
             },
             indent=2,
         ),
