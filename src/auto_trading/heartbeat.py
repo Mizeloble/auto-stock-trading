@@ -127,13 +127,18 @@ def check_heartbeat(
     mark_stopped() 한 다음에는 cron 이 missing/stale 알림을 30분마다 쏘지 않게.
     """
     current = time.time() if now is None else now
-    stopped = stopped_path if stopped_path is not None else DEFAULT_STOPPED_PATH
 
     hb_mtime = path.stat().st_mtime if path.exists() else None
-    if stopped.exists():
-        stopped_mtime = stopped.stat().st_mtime
-        # heartbeat 가 stopped 보다 더 최근이면 sentinel 은 stale — 무시 (러너 재시동 후
-        # clear 가 누락된 보호용). 그 외에는 ok="stopped".
+    # 정상 종료 sentinel 은 *특정* heartbeat 파일에 한정된 개념이므로 호출자가
+    # stopped_path 를 명시했을 때만 본다. 기본값(cwd 상대 DEFAULT_STOPPED_PATH)을
+    # 쓰면 검사 대상과 무관한 전역 stopped.txt 가 missing/stale 판정을 조용히
+    # "stopped" 로 둔갑시킨다 — 가장 위험한 침묵 실패. 모든 운영 호출부
+    # (cli.py heartbeat-check, preflight)는 heartbeat 와 같은 디렉터리의
+    # sentinel 을 명시 주입한다.
+    if stopped_path is not None and stopped_path.exists():
+        stopped_mtime = stopped_path.stat().st_mtime
+        # heartbeat 가 stopped 보다 더 최근이면 sentinel 은 stale — 무시 (러너
+        # 재시동 후 clear 가 누락된 보호용). 그 외에는 ok="stopped".
         if hb_mtime is None or stopped_mtime >= hb_mtime:
             return HeartbeatStatus(ok=True, reason="stopped", age_sec=None)
 
