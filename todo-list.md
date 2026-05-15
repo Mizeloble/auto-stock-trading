@@ -211,6 +211,11 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.news-prefetch  # 실 cr
   - 4개 미구현 placeholder (skipped=True): kill-switch 시뮬 / 다채널 알림 ack / LLM 비용 누적 / corporate action 캐시. 향후 PR 에서 활성.
   - 새 CLI `auto-trade preflight --profile … --journal … --heartbeat … --reports-root … --backtests-root …` — rich 표 출력, 모두 통과 시 exit 0 + `--allow-real` 가이드, 하나라도 실패 시 exit 1. `daytrade-current.yaml` 없으면 `daytrade-default.yaml` fallback.
   - 테스트 24건 (preflight 게이트 20 + CLI 4). 616 전체 통과.
+- [x] **refactor · `refactor(runner): 1140줄 단일 runner.py 를 패키지로 분리 (cli.py 선례 후속)`**
+  - `runner.py` → `runner/` 패키지. 순수 독립 단위만 분리: `runner/control.py` (`RunnerControlState` enum), `runner/aggregator.py` (`_BarAggregator`·`_floor_bucket`).
+  - `PaperRunner` 와 모든 mock 패치 대상 글로벌(`get_balance`/`place_order`/`datetime`/`refresh_correlations`/`asyncio` 등)은 `runner/__init__.py` 에 그대로 유지 → `patch.object(auto_trading.runner, …)` 류 테스트 40여 건 전부 무수정 통과. import 표면(`from auto_trading.runner import PaperRunner, RunnerControlState, _BarAggregator`) 보존.
+  - 동작·테스트 변경 0. 1009 전체 통과, ruff·mypy 클린.
+  - **남은 구조 부채**: `__init__.py` 가 여전히 ~1010줄(`PaperRunner` god-class). 추가 분해는 테스트의 모듈-네임스페이스 패치와 강결합이라 별도 위험 평가 후 진행 (아래 "남은 과제" 참조).
 
 ---
 

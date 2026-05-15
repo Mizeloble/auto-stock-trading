@@ -22,96 +22,34 @@ from dataclasses import dataclass, field
 from datetime import date as _date
 from datetime import datetime, time, timedelta
 from decimal import Decimal
-from enum import StrEnum
 
 import structlog
 
-from ._common import KST, Bar, Side
-from .account.balance import AccountSnapshot, get_balance
-from .account.order_journal import OrderJournal
-from .account.orders import Order, OrderType, place_order
-from .account.recovery import find_suspect_orders
-from .account.reject_classifier import RejectCategory, classify_reject
-from .config import Settings, get_settings
-from .heartbeat import Heartbeat
-from .kiwoom.rest import KiwoomRestClient
-from .kiwoom.schemas import KiwoomError
-from .kiwoom.ws import KiwoomWebSocket, Subscription
-from .market.feed import Tick, ticks
-from .monitor.latency import LatencyTracker, get_default_latency_tracker
-from .notify.base import NoopNotifier, Notifier
-from .notify.state import RunnerStateSnapshot
-from .risk.consecutive_loss import ConsecutiveLossTracker
-from .risk.correlation_collector import refresh_correlations
-from .risk.manager import AccountState, Decision, RiskManager
-from .risk.position_guard import GuardAction, PositionGuard
-from .strategy.base import Signal, Strategy
+from .._common import KST, Bar, Side
+from ..account.balance import AccountSnapshot, get_balance
+from ..account.order_journal import OrderJournal
+from ..account.orders import Order, OrderType, place_order
+from ..account.recovery import find_suspect_orders
+from ..account.reject_classifier import RejectCategory, classify_reject
+from ..config import Settings, get_settings
+from ..heartbeat import Heartbeat
+from ..kiwoom.rest import KiwoomRestClient
+from ..kiwoom.schemas import KiwoomError
+from ..kiwoom.ws import KiwoomWebSocket, Subscription
+from ..market.feed import ticks
+from ..monitor.latency import LatencyTracker, get_default_latency_tracker
+from ..notify.base import NoopNotifier, Notifier
+from ..notify.state import RunnerStateSnapshot
+from ..risk.consecutive_loss import ConsecutiveLossTracker
+from ..risk.correlation_collector import refresh_correlations
+from ..risk.manager import AccountState, Decision, RiskManager
+from ..risk.position_guard import GuardAction, PositionGuard
+from ..strategy.base import Signal, Strategy
+from .aggregator import _BarAggregator
+from .aggregator import _floor_bucket as _floor_bucket
+from .control import RunnerControlState
 
 log = structlog.get_logger(__name__)
-
-
-class RunnerControlState(StrEnum):
-    """텔레그램 v3 (/pause /resume /stop) 으로 외부에서 토글 가능한 러너 제어 상태.
-
-    - RUNNING : 정상 — 시그널·리스크·주문 전체 실행
-    - PAUSED  : 시그널 기록·리스크 평가는 그대로, 실제 주문 전송만 건너뜀
-                (텔레그램 /last_signal 정확도 유지하면서 일시 안전 모드)
-    - STOPPING: 다음 tick 경계에서 graceful break, finally 블록으로 정리
-    """
-
-    RUNNING = "running"
-    PAUSED = "paused"
-    STOPPING = "stopping"
-
-
-@dataclass
-class _BarAggregator:
-    """Tick 들을 분(또는 설정된 길이)봉으로 집계."""
-
-    minutes: int = 1
-    _current: dict[str, Bar] = field(default_factory=dict)
-    _bucket_end: dict[str, datetime] = field(default_factory=dict)
-
-    def ingest(self, tick: Tick) -> Bar | None:
-        """Bar 가 확정되면 그 Bar 를 반환. 진행 중이면 None."""
-        bucket_end = _floor_bucket(tick.ts, self.minutes) + timedelta(minutes=self.minutes)
-        prev_bar = self._current.get(tick.symbol)
-        prev_end = self._bucket_end.get(tick.symbol)
-
-        finalized: Bar | None = None
-        if prev_bar is not None and prev_end is not None and tick.ts >= prev_end:
-            finalized = prev_bar
-            prev_bar = None
-
-        price = float(tick.price)
-        volume = max(0, tick.volume)
-        if prev_bar is None:
-            self._current[tick.symbol] = Bar(
-                symbol=tick.symbol,
-                ts=bucket_end - timedelta(minutes=self.minutes),
-                open=price,
-                high=price,
-                low=price,
-                close=price,
-                volume=volume,
-            )
-            self._bucket_end[tick.symbol] = bucket_end
-        else:
-            self._current[tick.symbol] = Bar(
-                symbol=prev_bar.symbol,
-                ts=prev_bar.ts,
-                open=prev_bar.open,
-                high=max(prev_bar.high, price),
-                low=min(prev_bar.low, price),
-                close=price,
-                volume=prev_bar.volume + volume,
-            )
-        return finalized
-
-
-def _floor_bucket(ts: datetime, minutes: int) -> datetime:
-    base = ts.replace(second=0, microsecond=0)
-    return base - timedelta(minutes=base.minute % minutes)
 
 
 @dataclass
