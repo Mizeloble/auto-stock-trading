@@ -48,24 +48,34 @@ def _make_bars(n: int, base: float = 10_000.0) -> list[Bar]:
 
 
 def test_parse_cpcv_spec_n_only() -> None:
-    assert _parse_cpcv_spec("10") == (10, 0)
+    # PR44 — 3-tuple (n_folds, embargo, n_test_folds). k 기본 1.
+    assert _parse_cpcv_spec("10") == (10, 0, 1)
 
 
 def test_parse_cpcv_spec_n_slash_embargo() -> None:
-    assert _parse_cpcv_spec("10/2") == (10, 2)
+    assert _parse_cpcv_spec("10/2") == (10, 2, 1)
+
+
+def test_parse_cpcv_spec_n_embargo_k_combinatorial() -> None:
+    """PR44 — 'N/E/k' → combinatorial."""
+    assert _parse_cpcv_spec("10/2/3") == (10, 2, 3)
 
 
 def test_parse_cpcv_spec_rejects_invalid() -> None:
     import typer
 
     with pytest.raises(typer.BadParameter):
-        _parse_cpcv_spec("10/2/3")  # 너무 많은 부분
+        _parse_cpcv_spec("10/2/3/4")  # 너무 많은 부분
     with pytest.raises(typer.BadParameter):
         _parse_cpcv_spec("abc")
     with pytest.raises(typer.BadParameter):
         _parse_cpcv_spec("1")  # n_folds < 2
     with pytest.raises(typer.BadParameter):
         _parse_cpcv_spec("10/-1")  # 음수 embargo
+    with pytest.raises(typer.BadParameter):
+        _parse_cpcv_spec("10/2/0")  # k < 1
+    with pytest.raises(typer.BadParameter):
+        _parse_cpcv_spec("10/2/11")  # k > N
 
 
 # ---- CLI 통합 ---------------------------------------------------------------
@@ -199,3 +209,63 @@ def test_backtest_cpcv_zero_folds_exits_one(isolated_cwd: Path) -> None:
             ],
         )
     assert result.exit_code != 0
+
+
+# ---- PR44 combinatorial CLI ------------------------------------------------
+
+
+def test_backtest_cpcv_combinatorial_outputs_table(isolated_cwd: Path) -> None:
+    """--cpcv N/E/k → combinatorial. 조합 표 + C(N,k) 표시."""
+    bars = _make_bars(180)
+    fake = AsyncMock(return_value=bars)
+    with patch("auto_trading.cli.get_daily_bars", fake):
+        result = CliRunner().invoke(
+            app,
+            [
+                "backtest",
+                "--strategy",
+                "sma_crossover",
+                "--symbol",
+                "005930",
+                "--from",
+                bars[0].ts.date().isoformat(),
+                "--cpcv",
+                "6/0/2",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    assert "CPCV" in result.output
+    assert "k=2" in result.output
+    assert "C(N,k)=15" in result.output  # C(6,2)
+
+
+def test_backtest_cpcv_combinatorial_saves_summary(isolated_cwd: Path) -> None:
+    bars = _make_bars(180)
+    out = isolated_cwd / "cpcv-combo-out"
+    fake = AsyncMock(return_value=bars)
+    with patch("auto_trading.cli.get_daily_bars", fake):
+        result = CliRunner().invoke(
+            app,
+            [
+                "backtest",
+                "--strategy",
+                "sma_crossover",
+                "--symbol",
+                "005930",
+                "--from",
+                bars[0].ts.date().isoformat(),
+                "--cpcv",
+                "6/0/2",
+                "--out",
+                str(out),
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    assert (out / "summary.json").exists()
+    assert (out / "folds.csv").exists()
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert summary["combinatorial"] is True
+    assert summary["n_test_folds"] == 2
+    # folds.csv 행 수 = C(6,2) = 15 (+ 헤더 1)
+    lines = (out / "folds.csv").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 + 15
