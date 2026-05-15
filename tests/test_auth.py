@@ -287,9 +287,12 @@ async def test_cache_file_has_owner_only_permissions(settings: Settings, tmp_pat
     assert mode == 0o600
 
 
-def test_settings_kiwoom_token_cache_path_default_none() -> None:
-    """env 미설정 시 default None — 디스크 영속화 비활성 (기존 동작 호환)."""
-    s = Settings(kiwoom_app_key="k", kiwoom_app_secret="s")
+def test_settings_kiwoom_token_cache_path_default_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """env·.env 모두 미설정 시 default None — 디스크 영속화 비활성 (기존 동작 호환)."""
+    monkeypatch.delenv("KIWOOM_TOKEN_CACHE_PATH", raising=False)
+    s = Settings(kiwoom_app_key="k", kiwoom_app_secret="s", _env_file=None)
     assert s.kiwoom_token_cache_path is None
 
 

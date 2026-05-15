@@ -86,6 +86,46 @@ async def test_401_triggers_token_refresh(settings: Settings) -> None:
         assert data["cur_prc"] == "5"
 
 
+async def test_body_level_invalid_token_triggers_reissue(settings: Settings) -> None:
+    """키움이 무효 토큰을 HTTP 200 + return_code 로 돌려줄 때(8005) 한 번 재발급·재시도.
+
+    죽은 캐시 토큰 하나로 발굴이 통째로 비어 하루를 날린 사고(2026-05-15) 회귀 방지.
+    """
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(side_effect=[_token_resp(), _token_resp()])
+        mock.post(PATH_MARKET).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "return_code": 3,
+                        "return_msg": "인증에 실패했습니다[8005:Token이 유효하지 않습니다]",
+                    },
+                ),
+                httpx.Response(200, json={"return_code": 0, "cur_prc": "9"}),
+            ]
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            data = await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {"stk_cd": "A"})
+        assert data["cur_prc"] == "9"
+
+
+async def test_body_level_invalid_token_reissue_only_once(settings: Settings) -> None:
+    """재발급 후에도 8005 면 무한루프 없이 KiwoomError 로 올린다."""
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(side_effect=[_token_resp(), _token_resp()])
+        mock.post(PATH_MARKET).mock(
+            return_value=httpx.Response(
+                200,
+                json={"return_code": 3, "return_msg": "[8005:Token이 유효하지 않습니다]"},
+            )
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            with pytest.raises(KiwoomError) as exc:
+                await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {"stk_cd": "A"})
+        assert exc.value.code == "3"
+
+
 async def test_paginate_follows_cont_yn(settings: Settings) -> None:
     async with respx.mock(base_url=settings.rest_base_url) as mock:
         mock.post(PATH_TOKEN).mock(return_value=_token_resp())

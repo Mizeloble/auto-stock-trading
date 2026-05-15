@@ -7,6 +7,19 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_token_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """테스트가 운영 토큰 캐시(.env 의 data/auth/token.json)를 덮어쓰지 못하게.
+
+    Settings 가 테스트에서도 .env 를 읽어 kiwoom_token_cache_path 가 실제 경로로
+    잡혔고, 가짜 'tkn' 토큰을 발급하는 단위 테스트가 _save_cache 로 운영 캐시를
+    오염시켜 다음 시동을 통째로 날린 사고(2026-05-15)가 있었다. env_ignore_empty
+    =True 라 빈 문자열은 무시되므로 반드시 실재하는 임시 경로로 덮는다.
+    """
+
+    monkeypatch.setenv("KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "token.json"))
+
+
 @pytest.fixture
 def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """CLI 가 상대 경로로 logs/data 를 만들지 않게 cwd 를 임시 폴더로.

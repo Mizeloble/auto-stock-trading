@@ -26,6 +26,16 @@ log = structlog.get_logger(__name__)
 
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 
+# 키움은 무효/만료 토큰을 HTTP 401 이 아니라 HTTP 200 + return_code 로 돌려준다.
+# 관측된 형태: [3] 인증에 실패했습니다[8005:Token이 유효하지 않습니다]. 이 신호가 보이면
+# 캐시 토큰을 버리고 한 번 재발급해 재시도 — 죽은 캐시 하나로 하루를 날리는 사고 방지.
+_AUTH_ERROR_HINTS = ("8005", "8004", "인증에 실패", "유효하지 않")
+
+
+def _is_token_auth_error(code: object, message: str) -> bool:
+    text = f"{code} {message}"
+    return any(hint in text for hint in _AUTH_ERROR_HINTS)
+
 
 class KiwoomRestClient:
     """키움 REST 호출 래퍼. async with 로 사용 권장."""
@@ -82,6 +92,7 @@ class KiwoomRestClient:
             "Content-Type": "application/json;charset=UTF-8",
         }
         attempt = 0
+        auth_retried = False
         while True:
             resp = await self._client.post(path, headers=headers, json=body or {})
             if resp.status_code == 401:
@@ -114,9 +125,22 @@ class KiwoomRestClient:
             data: dict[str, Any] = resp.json()
             rc = data.get("return_code")
             if rc is not None and rc != 0:
+                msg = str(data.get("return_msg") or "unknown")
+                if not auth_retried and _is_token_auth_error(rc, msg):
+                    log.warning(
+                        "kiwoom.token_invalid_reissue",
+                        tr_id=tr_id,
+                        code=rc,
+                        message=msg,
+                    )
+                    await self._token_provider.invalidate()
+                    token = await self._token_provider.get_token()
+                    headers["Authorization"] = f"Bearer {token}"
+                    auth_retried = True
+                    continue
                 raise KiwoomError(
                     code=str(rc),
-                    message=str(data.get("return_msg") or "unknown"),
+                    message=msg,
                     payload={"tr_id": tr_id, "path": path},
                 )
 
