@@ -434,10 +434,28 @@ class PaperRunner:
         qty = account.positions.get(bar.symbol, 0)
         if qty <= 0:
             return
+        # 5/14 회귀 후속(2026-05-16) — 직전 봉들에서 발주돼 아직 키움 잔고에 반영
+        # 안 된 SELL 수량을 차감. _snapshot_account 가 raw 잔고는 보정하지만 캐시된
+        # account 를 그대로 받은 봉에서는 stale qty 로 guard 가 또 발화 → 같은
+        # 포지션을 중복 청산(800033 insufficient_balance) 했다. 미체결 SELL 이 잔량
+        # 전체를 덮으면 발화 자체를 막는다(오버셀 방지).
+        self._reap_pending_sells()
+        pending_qty, _ = self._pending_sells.get(bar.symbol, (0, None))
+        net_qty = qty - max(0, pending_qty)
+        if net_qty <= 0:
+            log.info(
+                "position_guard.skipped_inflight_sell",
+                symbol=bar.symbol,
+                position_qty=qty,
+                pending_sell_qty=pending_qty,
+            )
+            return
         avg = account.avg_prices.get(bar.symbol, 0.0)
         if avg <= 0:
             return
-        action = guard.check(symbol=bar.symbol, price=bar.close, quantity=qty, avg_price=avg)
+        action = guard.check(
+            symbol=bar.symbol, price=bar.close, quantity=net_qty, avg_price=avg
+        )
         if action is None:
             return
         await self._place_guard_action(rest, action, bar, account)
@@ -703,6 +721,11 @@ class PaperRunner:
                 account.avg_prices[order.symbol] = ref_price
                 # 23단계 Phase B — 일일 매수대금 누적. 실패 시(except 분기) 누적 X.
                 account.today_notional_used += ref_price * order.quantity
+                # 5/14 회귀 후속(2026-05-16) — 재진입. 직전 라운드트립의 미체결
+                # SELL 잔재는 새 포지션과 무관하다. 그대로 두면 _snapshot_account 가
+                # 새 보유분까지 차감하고 guard 가 새 포지션을 보호 못 한다(TTL 180s >
+                # 일중 회전 주기). 같은 종목 BUY 체결 시 stale pending 을 폐기.
+                self._pending_sells.pop(order.symbol, None)
             elif order.side is Side.SELL:
                 # 5/14 회귀 — 다음 _snapshot_account 가 키움 raw 잔고를 받았을 때
                 # 체결 미반영분(800033 insufficient_balance) 만큼 빼주도록 등록.

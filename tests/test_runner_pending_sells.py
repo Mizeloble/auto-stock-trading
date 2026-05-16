@@ -22,12 +22,22 @@ from auto_trading._common import KST, Bar, Side
 from auto_trading.account.balance import AccountSnapshot, Holding
 from auto_trading.account.orders import Order, OrderResult, OrderType
 from auto_trading.kiwoom.schemas import KiwoomError
+from auto_trading.risk.manager import RiskLimits, RiskManager
 from auto_trading.runner import PaperRunner
 from auto_trading.strategy.sma_crossover import SmaCrossover
 
 
 def _runner() -> PaperRunner:
     return PaperRunner(strategy=SmaCrossover(), symbols=["005930"])
+
+
+def _guard_runner() -> PaperRunner:
+    """stop_loss 활성 — PositionGuard 가 발화 가능한 상태."""
+    return PaperRunner(
+        strategy=SmaCrossover(),
+        symbols=["005930"],
+        risk=RiskManager(limits=RiskLimits(stop_loss_pct=0.01)),
+    )
 
 
 def _bar(symbol: str = "005930", close: float = 70_000.0) -> Bar:
@@ -210,3 +220,54 @@ async def test_buy_insufficient_balance_still_notifies() -> None:
     fake_notifier.notify.assert_awaited_once()
     args, _ = fake_notifier.notify.call_args
     assert args[0] == "runner.order_failed"
+
+
+# ---- 5/14 회귀 후속(2026-05-16): 미체결 SELL 이 잔량 전체를 덮으면 guard 발화 차단 ----
+
+
+async def test_position_guard_skipped_when_pending_sell_covers_position() -> None:
+    """89주 보유 + 미체결 SELL 89주 → stop_loss 조건이어도 재청산 발주 안 함."""
+    r = _guard_runner()
+    r.notifier = AsyncMock()
+    r._pending_sells["005930"] = (89, datetime.now())
+    placed = AsyncMock()
+    with patch.object(r, "_place_guard_action", placed):
+        # close 60,000 (avg 70,000 대비 -14%) → stop_loss 조건이지만 net=0.
+        await r._run_position_guard(
+            rest=object(),  # type: ignore[arg-type]
+            bar=_bar(close=60_000.0),
+            account=_account({"005930": 89}),
+        )
+    placed.assert_not_awaited()
+
+
+async def test_position_guard_fires_on_net_uncovered_quantity() -> None:
+    """89주 보유 + 미체결 SELL 40주 → 잔여 49주에 대해 정상 발화."""
+    r = _guard_runner()
+    r.notifier = AsyncMock()
+    r._pending_sells["005930"] = (40, datetime.now())
+    placed = AsyncMock()
+    with patch.object(r, "_place_guard_action", placed):
+        await r._run_position_guard(
+            rest=object(),  # type: ignore[arg-type]
+            bar=_bar(close=60_000.0),
+            account=_account({"005930": 89}),
+        )
+    placed.assert_awaited_once()
+    action = placed.call_args.args[1]
+    assert action.quantity == 49  # stop_loss = 전량(=net 49)
+
+
+async def test_buy_accept_clears_pending_sells_for_symbol() -> None:
+    """재진입 — 같은 종목 BUY 체결 시 직전 라운드트립의 stale pending 폐기."""
+    r = _runner()
+    r.notifier = AsyncMock()
+    r._pending_sells["005930"] = (89, datetime.now())
+    order = Order(symbol="005930", side=Side.BUY, quantity=50, order_type=OrderType.MARKET)
+    with patch.object(
+        runner_module,
+        "place_order",
+        AsyncMock(return_value=OrderResult(order_no="B1", raw={}, client_id="c")),
+    ):
+        await r._place_and_track(rest=object(), order=order, bar=_bar(), account=_account())  # type: ignore[arg-type]
+    assert "005930" not in r._pending_sells

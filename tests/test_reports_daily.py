@@ -617,3 +617,54 @@ def test_cost_fields_none_when_buy_price_missing() -> None:
     assert report.total_fees is None
     assert report.total_taxes is None
     assert report.total_slippage is None
+
+
+# 2026-05-16 회귀 — 장중 SELL(stop/trailing/partial) 이 리포트에서 통째로 버려져
+# realized_pnl 이 항상 None 이던 버그. side=="sell" 체결을 sells 로 잡고 FIFO 로
+# 라운드트립 손익을 산출해야 한다.
+
+
+def test_intraday_sells_captured_and_realized_pnl_via_fifo() -> None:
+    """실거래 accepted SELL(부분 익절+트레일링) → sells 채워지고 FIFO realized."""
+    events = LogEvents(
+        orders_accepted=[
+            {"symbol": "403550", "side": "buy", "qty": 100, "price": 19_640.0},
+            {"symbol": "403550", "side": "sell", "qty": 50, "price": 20_250.0},
+            {"symbol": "403550", "side": "sell", "qty": 50, "price": 20_050.0},
+        ],
+    )
+    report = build_daily_report(date="2026-05-14", events=events, snapshot=None)
+    assert len(report.buys) == 1
+    assert len(report.sells) == 2
+    assert all(s.side == "sell" for s in report.sells)
+    # FIFO: 50주 @+610, 50주 @+410 = 51,000원.
+    expected = (20_250.0 - 19_640.0) * 50 + (20_050.0 - 19_640.0) * 50
+    assert report.realized_pnl == expected
+    assert report.realized_pnl_pct is not None
+    assert "매도 2건" in report.note_ko
+
+
+def test_sells_only_day_without_buys_has_no_realized_but_is_recorded() -> None:
+    """전일 이월분만 매도한 날 — 매수가 모르면 손익 None, 그래도 sells 는 기록."""
+    events = LogEvents(
+        orders_accepted=[{"symbol": "005930", "side": "sell", "qty": 6, "price": 294_500.0}],
+    )
+    report = build_daily_report(date="2026-05-14", events=events, snapshot=None)
+    assert len(report.sells) == 1
+    assert report.realized_pnl is None  # 매수가 미상 → 추정 안 함
+    assert "매도 1건" in report.note_ko
+
+
+def test_sells_survive_json_roundtrip(tmp_path: Path) -> None:
+    events = LogEvents(
+        orders_accepted=[
+            {"symbol": "A", "side": "buy", "qty": 10, "price": 100.0},
+            {"symbol": "A", "side": "sell", "qty": 10, "price": 110.0},
+        ],
+    )
+    report = build_daily_report(date="2026-05-14", events=events, snapshot=None)
+    path = save_daily_report(report, root=tmp_path)
+    loaded = load_daily_report(path)
+    assert [s.symbol for s in loaded.sells] == ["A"]
+    assert loaded.sells[0].side == "sell"
+    assert loaded.realized_pnl == (110.0 - 100.0) * 10

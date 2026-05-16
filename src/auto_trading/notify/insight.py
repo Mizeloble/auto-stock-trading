@@ -115,6 +115,7 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
     chosen_freq: dict[str, int] = {}
     blocked_count = 0
     buys_total = 0
+    sells_total = 0
     liqs_total = 0
     err_total = 0
     realized_pnls: list[float] = []
@@ -127,6 +128,7 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
             chosen_freq[sym] = chosen_freq.get(sym, 0) + 1
         blocked_count += len(r.discovery_blocked)
         buys_total += len(r.buys)
+        sells_total += len(r.sells)
         liqs_total += len(r.liquidations)
         err_total += r.error_count
         if r.realized_pnl is not None:
@@ -144,6 +146,11 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
         "modes": list({r.mode for r in items}),
         "dry_run_days": dry_run_days,
         "buys_total": buys_total,
+        # 장중 청산(stop/trailing/partial) SELL 체결 수. 2026-05-16 이전엔 리포트가
+        # SELL 을 버려 0 으로 보였고, 인사이트가 "청산 회전 낮음" 으로 오판했다.
+        "sells_total": sells_total,
+        # EOD 강제청산 + 장중 매도 합 — 실제 회전 지표.
+        "exits_total": sells_total + liqs_total,
         "liquidations_total": liqs_total,
         "error_total": err_total,
         "blocked_total": blocked_count,

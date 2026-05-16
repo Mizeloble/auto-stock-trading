@@ -118,6 +118,11 @@ class DailyReport:
     # 메타. 누적 손익(가능한 경우만 채워진다 — 시장가 매수/매도 가격이 둘 다 있을 때).
     realized_pnl: float | None = None
     realized_pnl_pct: float | None = None
+    # 장중 청산(stop-loss / trailing / partial-take) SELL 체결. EOD 강제청산은
+    # liquidations 가 따로 담는다 — 두 경로의 이벤트명이 달라 중복 집계되지 않는다.
+    # 2026-05-16: 이전엔 side=="buy" 만 추출하고 SELL 을 통째로 버려 realized_pnl 이
+    # 항상 None 이었음(주간 인사이트가 "성과 검증 불가" 로 오판). 이 필드로 복구.
+    sells: list[TradeRecord] = field(default_factory=list)
     excluded_etf_count: int = 0
     rank_candidates: list[str] = field(default_factory=list)
     # 코드→종목명. discovery 로그의 names 필드에서 흡수. 없는 종목은 키 자체가 없음.
@@ -157,7 +162,7 @@ def build_daily_report(
     discovery_chosen, discovery_blocked = _extract_discovery(events)
     market_gates = _extract_gates(events)
     names = dict(events.symbol_names)
-    buys, liquidations = _extract_trades(events, names)
+    buys, sells, liquidations = _extract_trades(events, names)
     error_count = (
         len(events.orders_failed)
         + len(events.liquidations_failed)
@@ -173,7 +178,7 @@ def build_daily_report(
         mode = "day-trade" if (events.discovery is not None or events.rank is not None) else "swing"
         dry_run = bool(events.orders_simulated or events.liquidations_simulated)
 
-    realized_pnl, realized_pnl_pct = _aggregate_pnl(liquidations)
+    realized_pnl, realized_pnl_pct = _aggregate_realized(buys, sells, liquidations)
     closing_cash, closing_equity, closing_total_pnl, closing_holdings = _extract_closing(snapshot)
     # snapshot.holdings 의 name 도 흡수 — discovery 에 없던 종목(swing 등) 보강.
     if snapshot is not None and snapshot.snapshot is not None:
@@ -181,7 +186,7 @@ def build_daily_report(
             if h.name and h.symbol not in names:
                 names[h.symbol] = h.name
     chosen_names = {sym: names[sym] for sym in discovery_chosen if sym in names}
-    total_fees, total_taxes, total_slippage = _estimate_costs(buys, liquidations)
+    total_fees, total_taxes, total_slippage = _estimate_costs(buys, sells, liquidations)
     realized_pnl_after_cost = (
         realized_pnl - (total_fees + total_taxes + total_slippage)
         if realized_pnl is not None
@@ -194,6 +199,7 @@ def build_daily_report(
     note_ko = _summary_ko(
         chosen=discovery_chosen,
         buys=buys,
+        sells=sells,
         blocked=discovery_blocked,
         liquidations=liquidations,
         realized_pnl=realized_pnl,
@@ -230,6 +236,7 @@ def build_daily_report(
         note_ko=note_ko,
         realized_pnl=realized_pnl,
         realized_pnl_pct=realized_pnl_pct,
+        sells=sells,
         excluded_etf_count=excluded,
         rank_candidates=rank_candidates,
         discovery_chosen_names=chosen_names,
@@ -280,50 +287,51 @@ def _extract_gates(events: LogEvents) -> list[MarketGateInfo]:
 
 def _extract_trades(
     events: LogEvents, names: dict[str, str]
-) -> tuple[list[TradeRecord], list[LiquidationRecord]]:
+) -> tuple[list[TradeRecord], list[TradeRecord], list[LiquidationRecord]]:
+    """로그 → (매수, 장중매도, EOD청산).
+
+    2026-05-16: side=="sell" 주문(stop-loss / trailing / partial-take)을 sells 로
+    별도 추출. 이전엔 buy 만 보고 SELL 을 버려 realized_pnl 이 항상 None 이었다.
+    EOD 강제청산(runner.liquidate_*)은 이벤트명이 달라 sells 와 겹치지 않는다.
+    """
     buys: list[TradeRecord] = []
+    sells: list[TradeRecord] = []
     buy_prices: dict[str, float] = {}  # symbol -> last buy price (시뮬·실거래 공통)
     for rec in events.orders_simulated:
         side = str(rec.get("side", ""))
-        if side != "buy":
-            continue
         symbol = str(rec.get("symbol", ""))
         qty = _as_int(rec.get("qty")) or 0
         price = _as_float(rec.get("price"))
-        if symbol and qty > 0:
+        if not symbol or qty <= 0:
+            continue
+        if side == "buy":
             buys.append(
-                TradeRecord(
-                    symbol=symbol,
-                    side="buy",
-                    quantity=qty,
-                    price=price,
-                    simulated=True,
-                    name=names.get(symbol),
-                )
+                TradeRecord(symbol, "buy", qty, price, True, names.get(symbol))
             )
             if price is not None:
                 buy_prices[symbol] = price
+        elif side == "sell":
+            sells.append(
+                TradeRecord(symbol, "sell", qty, price, True, names.get(symbol))
+            )
     for rec in events.orders_accepted:
         side = str(rec.get("side", ""))
-        if side != "buy":
-            continue
         symbol = str(rec.get("symbol", ""))
         qty = _as_int(rec.get("qty")) or 0
-        # 신규: 러너가 봉 종가로 근사한 매수가를 함께 로깅 (시장가 체결가 사후 보정 X).
+        # 신규: 러너가 봉 종가로 근사한 체결가를 함께 로깅 (시장가 체결가 사후 보정 X).
         price = _as_float(rec.get("price"))
-        if symbol and qty > 0:
+        if not symbol or qty <= 0:
+            continue
+        if side == "buy":
             buys.append(
-                TradeRecord(
-                    symbol=symbol,
-                    side="buy",
-                    quantity=qty,
-                    price=price,
-                    simulated=False,
-                    name=names.get(symbol),
-                )
+                TradeRecord(symbol, "buy", qty, price, False, names.get(symbol))
             )
             if price is not None:
                 buy_prices[symbol] = price
+        elif side == "sell":
+            sells.append(
+                TradeRecord(symbol, "sell", qty, price, False, names.get(symbol))
+            )
 
     liqs: list[LiquidationRecord] = []
     for rec in events.liquidations_simulated:
@@ -356,7 +364,7 @@ def _extract_trades(
                     name=names.get(symbol),
                 )
             )
-    return buys, liqs
+    return buys, sells, liqs
 
 
 def _extract_closing(
@@ -392,6 +400,7 @@ def _extract_closing(
 
 def _estimate_costs(
     buys: list[TradeRecord],
+    sells: list[TradeRecord],
     liqs: list[LiquidationRecord],
 ) -> tuple[float | None, float | None, float | None]:
     """매수·청산 가격이 모두 있을 때 수수료·거래세·슬리피지 추정치를 합산.
@@ -403,7 +412,7 @@ def _estimate_costs(
 
     어떻게 확인: tests/test_reports_daily.py 의 비용 차감 PnL 케이스에서 정확한 값 검증.
     """
-    if not buys and not liqs:
+    if not buys and not sells and not liqs:
         return None, None, None
 
     fees = 0.0
@@ -415,6 +424,14 @@ def _estimate_costs(
             return None, None, None
         notional = trade.price * trade.quantity
         fees += notional * COST_COMMISSION_RATE
+        slippage += notional * (COST_SLIPPAGE_BPS / 10_000.0)
+
+    for trade in sells:
+        if trade.price is None:
+            return None, None, None
+        notional = trade.price * trade.quantity
+        fees += notional * COST_COMMISSION_RATE
+        taxes += notional * COST_TAX_RATE_SELL
         slippage += notional * (COST_SLIPPAGE_BPS / 10_000.0)
 
     for li in liqs:
@@ -431,18 +448,84 @@ def _estimate_costs(
     return fees, taxes, slippage
 
 
-def _aggregate_pnl(liqs: list[LiquidationRecord]) -> tuple[float | None, float | None]:
-    """가격 정보가 있는 청산만 집계. 하나라도 가격 없으면 None."""
-    if not liqs:
-        return None, None
+def _aggregate_realized(
+    buys: list[TradeRecord],
+    sells: list[TradeRecord],
+    liqs: list[LiquidationRecord],
+) -> tuple[float | None, float | None]:
+    """종목별 FIFO 로 매수↔(장중매도+EOD청산) 라운드트립 실현손익 집계.
+
+    무엇/왜:
+    - 2026-05-16: 이전 `_aggregate_pnl` 은 EOD liquidations 만 봤고, 게다가
+      "하나라도 가격 없으면 전부 None" 이라 EOD 청산의 sell_price 가 None(시장가)
+      이면 그날 실현손익이 통째로 사라졌다. 장중 stop/trailing/partial 매도는
+      아예 집계 대상도 아니었음 → 주간 인사이트가 매번 "성과 검증 불가" 로 오판.
+    - 새 규칙: 매수를 종목별 FIFO 큐로 쌓고 매도/청산이 순서대로 소진. 매수가·
+      매도가가 **둘 다** 있는 체결분만 손익에 합산하고, 한쪽 가격이 없는 분량은
+      재고만 소진하고 손익에서 제외(부분 가시성 — 전부 버리지 않음). 가격이
+      잡힌 매칭이 0이면 (None, None).
+    - 청산가 우선순위: li.sell_price → 없으면 손익 미산정(매수가만으론 불가).
+      매수가 우선순위: FIFO 큐의 매수가 → 큐가 비면 li.buy_price(로그 필드).
+
+    리포트는 사후 추정이라 정확 체결가가 아닌 봉 종가 근사를 쓸 수 있다(주석 범위).
+    """
+    queues: dict[str, list[list[float | None]]] = {}  # symbol -> [[qty, price], ...]
+    for b in buys:
+        if b.quantity > 0:
+            queues.setdefault(b.symbol, []).append([float(b.quantity), b.price])
+
     total_pnl = 0.0
     total_cost = 0.0
+    matched_any = False
+
+    def _drain(symbol: str, qty: float) -> None:
+        """FIFO 큐에서 qty 만큼 재고만 소진(손익 계산 없이) — 명시 buy_price 사용 시."""
+        q = queues.get(symbol) or []
+        remaining = qty
+        while remaining > 0 and q:
+            lot = q[0]
+            lot_qty = lot[0] or 0.0
+            take = min(remaining, lot_qty)
+            remaining -= take
+            lot[0] = lot_qty - take
+            if (lot[0] or 0.0) <= 0:
+                q.pop(0)
+
+    def _consume(symbol: str, qty: int, sell_price: float | None, liq_buy: float | None) -> None:
+        nonlocal total_pnl, total_cost, matched_any
+        # EOD 청산이 자체 매수단가(브로커 평균원가)를 명시하면 그것을 권위로 삼고
+        # FIFO 큐는 재고만 소진 — buys 매핑보다 우선(문서화된 precedence 유지).
+        if liq_buy is not None:
+            if sell_price is not None:
+                total_pnl += (sell_price - liq_buy) * qty
+                total_cost += liq_buy * qty
+                matched_any = True
+            _drain(symbol, float(qty))
+            return
+        remaining = float(qty)
+        q = queues.get(symbol) or []
+        while remaining > 0 and q:
+            lot = q[0]
+            lot_qty = lot[0] or 0.0
+            take = min(remaining, lot_qty)
+            buy_price = lot[1]
+            if buy_price is not None and sell_price is not None:
+                total_pnl += (sell_price - buy_price) * take
+                total_cost += buy_price * take
+                matched_any = True
+            remaining -= take
+            lot[0] = lot_qty - take
+            if (lot[0] or 0.0) <= 0:
+                q.pop(0)
+
+    for s in sells:
+        if s.quantity > 0:
+            _consume(s.symbol, s.quantity, s.price, None)
     for li in liqs:
-        if li.sell_price is None or li.buy_price is None:
-            return None, None
-        total_pnl += li.pnl or 0.0
-        total_cost += li.buy_price * li.quantity
-    if total_cost == 0:
+        if li.quantity > 0:
+            _consume(li.symbol, li.quantity, li.sell_price, li.buy_price)
+
+    if not matched_any or total_cost == 0:
         return None, None
     return total_pnl, total_pnl / total_cost * 100.0
 
@@ -451,6 +534,7 @@ def _summary_ko(
     *,
     chosen: list[str],
     buys: list[TradeRecord],
+    sells: list[TradeRecord],
     blocked: list[tuple[str, str]],
     liquidations: list[LiquidationRecord],
     realized_pnl: float | None,
@@ -464,7 +548,7 @@ def _summary_ko(
     - 새 동작: `매수 N건` 의 N 은 실제 체결된 `buys` 기준. 발굴은 됐는데 체결 0건이면
       "발굴 N건 (체결 0)" 로 분리 표기 → buys 배열이 비어있다는 사실을 메모와 일치시킴.
     """
-    if not chosen and not liquidations and not buys:
+    if not chosen and not liquidations and not buys and not sells:
         if blocked:
             return f"매수 후보 {len(blocked)}건 모두 게이트 차단 — 거래 없음."
         return "거래 없음."
@@ -483,6 +567,8 @@ def _summary_ko(
     elif chosen:
         # 발굴은 됐지만 실제 매수 0건 — 메모와 buys 배열의 정합성 유지.
         parts.append(f"발굴 {len(chosen)}건 (체결 0)")
+    if sells:
+        parts.append(f"매도 {len(sells)}건")
     if liquidations:
         parts.append(f"청산 {len(liquidations)}건")
     if realized_pnl is not None:
@@ -714,6 +800,7 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
         note_ko=str(payload.get("note_ko") or ""),
         realized_pnl=payload.get("realized_pnl"),
         realized_pnl_pct=payload.get("realized_pnl_pct"),
+        sells=[TradeRecord(**t) for t in payload.get("sells") or []],
         excluded_etf_count=int(payload.get("excluded_etf_count") or 0),
         rank_candidates=list(payload.get("rank_candidates") or []),
         discovery_chosen_names=chosen_names,
