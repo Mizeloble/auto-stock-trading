@@ -20,7 +20,7 @@ from typing import Any
 import structlog
 
 from ..market import calendar as krx_calendar
-from ..reports.daily import DailyReport
+from ..reports.daily import DailyReport, merge_symbol_names
 from ..strategy.scanner import RegimeReport
 from .collector import NewsItem
 from .profile_writer import ApplyResult, apply_and_persist, format_apply_message
@@ -100,7 +100,9 @@ def run_weekly_proposal_cycle(
         target_path=target_path or current_path,
         fallback_path=fallback_path,
     )
-    msg = format_apply_message(result, proposal)
+    msg = format_apply_message(
+        result, proposal, symbol_names=merge_symbol_names(inputs.reports)
+    )
     return proposal, result, msg
 
 

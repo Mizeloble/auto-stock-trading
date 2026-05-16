@@ -106,8 +106,10 @@ def test_summarize_aggregates_chosen_freq_and_pnl_stats() -> None:
     assert payload["days"] == 2
     assert payload["date_range"] == ["2026-05-01", "2026-05-02"]
     # A 가 2회, B 가 1회.
-    chosen = dict(payload["chosen_freq_top"])
+    chosen = {e["symbol"]: e["days"] for e in payload["chosen_freq_top"]}
     assert chosen["A"] == 2 and chosen["B"] == 1
+    # 종목명 맵 키 존재 (이름 미지정 리포트면 빈 dict).
+    assert "symbol_names" in payload
     assert payload["realized_pnl"]["samples"] == 1
     assert payload["realized_pnl"]["sum"] == 10.0
 

@@ -23,6 +23,7 @@ import structlog
 
 from .._common import KST
 from ..daytrade.profile import DaytradeProfile
+from ..reports.daily import with_symbol_name
 from .proposal import DaytradeProposal
 
 log = structlog.get_logger(__name__)
@@ -215,8 +216,18 @@ def _load_or_default(current_path: Path, fallback_path: Path | None) -> Daytrade
     return DaytradeProfile(name="auto")
 
 
-def format_apply_message(result: ApplyResult, proposal: DaytradeProposal) -> str:
-    """텔레그램 푸시용 한국어. accepted=[] + rejected=[] 도 안전 처리."""
+def format_apply_message(
+    result: ApplyResult,
+    proposal: DaytradeProposal,
+    *,
+    symbol_names: dict[str, str] | None = None,
+) -> str:
+    """텔레그램 푸시용 한국어. accepted=[] + rejected=[] 도 안전 처리.
+
+    `symbol_names` — 회피 종목 코드를 "코드 종목명" 으로 표시할 코드→이름 맵.
+    이름이 없는 코드는 코드만(폴백).
+    """
+    names = symbol_names or {}
     lines = ["🗞 다음 주 day-trade 프로파일 갱신", "", proposal.summary_ko]
     if result.accepted:
         lines.append("")
@@ -235,7 +246,10 @@ def format_apply_message(result: ApplyResult, proposal: DaytradeProposal) -> str
         lines.append("")
         lines.append("📡 주목 테마: " + ", ".join(proposal.themes_to_watch))
     if proposal.symbols_to_avoid:
-        lines.append("⛔ 회피 종목: " + ", ".join(proposal.symbols_to_avoid))
+        lines.append(
+            "⛔ 회피 종목: "
+            + ", ".join(with_symbol_name(s, names.get(s)) for s in proposal.symbols_to_avoid)
+        )
     lines.append("")
     lines.append("📝 근거")
     lines.append(proposal.rationale_ko)

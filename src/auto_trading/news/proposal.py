@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from ..llm import extract_tool_use_input
 from ..llm.cost import check_budget_or_raise, get_default_tracker, record_response
-from ..reports.daily import DailyReport
+from ..reports.daily import DailyReport, merge_symbol_names, with_symbol_name
 from ..strategy.scanner import RegimeReport
 from .collector import NewsItem
 
@@ -80,8 +80,9 @@ regime 별 일반 가이드:
 - 변경할 필드만 채우고, 유지할 필드는 비워두세요(필드 자체를 응답에 포함하지 말 것).
 - summary_ko: 한국어 1~3문장 — 다음 주 핵심 변경.
 - rationale_ko: 한국어 4~10문장 — 데이터·뉴스·regime 근거.
+- summary_ko·rationale_ko 에서 종목을 언급할 때는 "코드 종목명" 형식(예: "005930 삼성전자")으로. 입력의 reports.symbol_names 와 chosen_freq_top.name 참고.
 - themes_to_watch: 다음 주 주목할 섹터/테마 (최대 10).
-- symbols_to_avoid: 다음 주 피할 종목 코드 (최대 20).
+- symbols_to_avoid: 다음 주 피할 종목 코드 (최대 20). 이 필드는 코드만(예: "005930") — 종목명은 시스템이 표시 단계에서 붙임.
 - confidence: 0.0~1.0, 데이터 충실도·일관성 기반.
 - 추가 텍스트 응답 없이 propose_daytrade_profile 도구 호출만 하세요.
 """
@@ -134,6 +135,7 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
     pnls_after_cost = [
         r.realized_pnl_after_cost for r in items if r.realized_pnl_after_cost is not None
     ]
+    symbol_names = merge_symbol_names(items)
     chosen_freq: dict[str, int] = {}
     for r in items:
         for sym in r.discovery_chosen:
@@ -154,7 +156,11 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
             "sum": sum(pnls_after_cost) if pnls_after_cost else None,
             "avg": (sum(pnls_after_cost) / len(pnls_after_cost) if pnls_after_cost else None),
         },
-        "chosen_freq_top": sorted(chosen_freq.items(), key=lambda kv: -kv[1])[:8],
+        "symbol_names": symbol_names,
+        "chosen_freq_top": [
+            {"symbol": sym, "name": symbol_names.get(sym), "days": cnt}
+            for sym, cnt in sorted(chosen_freq.items(), key=lambda kv: -kv[1])[:8]
+        ],
     }
 
 
@@ -278,8 +284,17 @@ def propose_daytrade_profile(
 # ---- 포맷터 -------------------------------------------------------------
 
 
-def format_proposal_message(proposal: DaytradeProposal) -> str:
-    """텔레그램 / CLI 출력용 한국어 메시지 — Phase C 가 YAML 갱신 후 같이 푸시."""
+def format_proposal_message(
+    proposal: DaytradeProposal,
+    *,
+    symbol_names: dict[str, str] | None = None,
+) -> str:
+    """텔레그램 / CLI 출력용 한국어 메시지 — Phase C 가 YAML 갱신 후 같이 푸시.
+
+    `symbol_names` — 회피 종목 코드를 "코드 종목명" 으로 표시하기 위한 코드→이름 맵.
+    호출자가 `merge_symbol_names(reports)` 로 만들어 전달. 이름 없으면 코드만(폴백).
+    """
+    names = symbol_names or {}
     lines = ["🗞 다음 주 day-trade 프로파일 제안", "", proposal.summary_ko]
     changes: list[tuple[str, Any]] = []
     for k in (
@@ -305,7 +320,10 @@ def format_proposal_message(proposal: DaytradeProposal) -> str:
         lines.append("")
         lines.append("📡 주목 테마: " + ", ".join(proposal.themes_to_watch))
     if proposal.symbols_to_avoid:
-        lines.append("⛔ 회피 종목: " + ", ".join(proposal.symbols_to_avoid))
+        lines.append(
+            "⛔ 회피 종목: "
+            + ", ".join(with_symbol_name(s, names.get(s)) for s in proposal.symbols_to_avoid)
+        )
     lines.append("")
     lines.append("📝 근거")
     lines.append(proposal.rationale_ko)

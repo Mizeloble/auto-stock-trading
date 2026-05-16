@@ -10,6 +10,7 @@ LLM 호출·외부 API 호출 없음. 결정론적 — 같은 입력이면 같�
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC
 from pathlib import Path
@@ -816,6 +817,27 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
     )
 
 
+def merge_symbol_names(reports: Iterable[DailyReport]) -> dict[str, str]:
+    """여러 DailyReport 의 discovery_chosen_names 를 하나로 병합 → 코드→종목명.
+
+    주간 단계(인사이트·프로파일 제안)가 LLM 입력/출력에서 종목을 코드만 보던 문제를
+    고치기 위한 공용 헬퍼. 같은 코드가 여러 날 다른 이름이면 마지막(최신)이 우선.
+    """
+    out: dict[str, str] = {}
+    for r in reports:
+        for sym, name in r.discovery_chosen_names.items():
+            if sym and isinstance(name, str) and name.strip():
+                out[sym] = name.strip()
+    return out
+
+
+def with_symbol_name(symbol: str, name: str | None) -> str:
+    """'005930 삼성전자' 형식 — 이름이 없으면 코드만 (notify/state·telegram 와 동일 폴백)."""
+    if name and name.strip():
+        return f"{symbol} {name.strip()}"
+    return symbol
+
+
 __all__ = [
     "ClosingHolding",
     "DailyReport",
@@ -825,5 +847,7 @@ __all__ = [
     "TradeRecord",
     "build_daily_report",
     "load_daily_report",
+    "merge_symbol_names",
     "save_daily_report",
+    "with_symbol_name",
 ]

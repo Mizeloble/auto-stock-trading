@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from ..llm import extract_tool_use_input
 from ..llm.cost import check_budget_or_raise, get_default_tracker, record_response
-from ..reports.daily import DailyReport, load_daily_report
+from ..reports.daily import DailyReport, load_daily_report, merge_symbol_names
 
 
 class InsightResponse(BaseModel):
@@ -49,6 +49,7 @@ SYSTEM_PROMPT_KO = """\
 - summary_ko: 한국어 2~4문장. 그 주의 핵심 흐름(매매 빈도·승률·시장 게이트 통과 비율 등) 요약.
 - key_findings: 한국어 짧은 문장 3~6개. 데이터 기반의 패턴/이상치만(예: "5일 중 3일 게이트 차단", "특정 종목이 N회 연속 발굴", "에러 카운트 급증").
 - recommendations: 한국어 짧은 문장 1~4개. 구체적인 운영 변경 제안(예: "top_n 을 3 → 2 로 낮춰 매수 가중 키우기", "게이트 SMA 20 → 15 단축 검토"). 없으면 빈 리스트.
+- 종목을 언급할 때는 항상 "코드 종목명" 형식(예: "005930 삼성전자")으로 쓰세요. 입력의 symbol_names 와 chosen_freq_top.name 을 참고. 이름이 없는 코드만 코드 단독 표기 허용.
 - confidence: 0.0~1.0, 데이터 충분도·일관성에 따른 본인 확신도.
 - 추가 텍스트 응답 없이 propose_insight 도구 호출 결과만 내세요.
 """
@@ -112,6 +113,7 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
     if days == 0:
         return {"days": 0}
 
+    symbol_names = merge_symbol_names(items)
     chosen_freq: dict[str, int] = {}
     blocked_count = 0
     buys_total = 0
@@ -154,7 +156,11 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
         "liquidations_total": liqs_total,
         "error_total": err_total,
         "blocked_total": blocked_count,
-        "chosen_freq_top": sorted(chosen_freq.items(), key=lambda kv: -kv[1])[:8],
+        "symbol_names": symbol_names,
+        "chosen_freq_top": [
+            {"symbol": sym, "name": symbol_names.get(sym), "days": cnt}
+            for sym, cnt in sorted(chosen_freq.items(), key=lambda kv: -kv[1])[:8]
+        ],
         "gate_pass_rate": {m: round(gate_pass.get(m, 0) / gate_total[m], 3) for m in gate_total},
         "realized_pnl": {
             "samples": len(realized_pnls),

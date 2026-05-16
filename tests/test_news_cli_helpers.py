@@ -109,7 +109,7 @@ def test_run_cycle_target_path_defaults_to_current_when_none(tmp_path: Path) -> 
     assert mock_apply.call_args.kwargs["target_path"] == current
     assert mock_apply.call_args.kwargs["current_path"] == current
     assert mock_apply.call_args.kwargs["fallback_path"] == fallback
-    mock_fmt.assert_called_once_with(fake_result, fake_proposal)
+    mock_fmt.assert_called_once_with(fake_result, fake_proposal, symbol_names={})
 
 
 def test_run_cycle_explicit_target_path_used(tmp_path: Path) -> None:
