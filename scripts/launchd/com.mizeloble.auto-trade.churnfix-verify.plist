@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mizeloble.auto-trade.churnfix-verify</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jjmize/Project/auto-stock-trading/scripts/churnfix-verify.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jjmize/Project/auto-stock-trading</string>
+
+    <!-- 1회성 — 2026-05-21 09:30 KST. launchd StartCalendarInterval 은 시스템
+         로컬시간(KST) 기준 (insight-weekly Hour=9 == 09:00 KST 선례).
+         Month/Day 지정이라 미설정 시 매년 재발화하나, 스크립트가 발화 직후
+         launchctl bootout + plist 제거로 스스로 정리해 진짜 1회성. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Month</key><integer>5</integer>
+        <key>Day</key><integer>21</integer>
+        <key>Hour</key><integer>9</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-churnfix-verify.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-churnfix-verify.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
