@@ -35,6 +35,11 @@ from ..market import calendar as krx_calendar
 from ..market.chart import bars_to_dataframe, get_daily_bars
 from ..market.quote import get_quote
 from ..notify.factory import build_command_handler, build_notifier
+from ._profile_io import (
+    load_daytrade_profile_or_exit,
+    load_strategy_profile_or_exit,
+    validate_strategy_source,
+)
 
 app = typer.Typer(help="키움 자동매매 봇 CLI (모의투자 기본)")
 strategy_app = typer.Typer(help="전략 추천·프로파일 관리")
@@ -260,10 +265,13 @@ __all__ = [
     "get_quote",
     "get_settings",
     "krx_calendar",
+    "load_daytrade_profile_or_exit",
+    "load_strategy_profile_or_exit",
     "orders_app",
     "paper_day_main",
     "paper_day_with_commands",
     "strategy_app",
+    "validate_strategy_source",
 ]
 
 

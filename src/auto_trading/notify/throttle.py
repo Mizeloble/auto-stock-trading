@@ -70,6 +70,10 @@ _GUARD_EMOJI: dict[str, str] = {
     "partial_take": "💵 익절",
 }
 
+#: 분당 요약 이벤트가 이 값을 넘으면 과매매 의심 경고를 머리에 붙인다.
+#: 손실 핵심 원인이 장중 과회전이라 사용자가 빈도를 바로 인지하게 한다.
+_OVERTRADE_RATE_PER_MIN = 2.0
+
 
 @dataclass
 class ThrottledNotifier:
@@ -111,7 +115,12 @@ class ThrottledNotifier:
         if not self._buffer:
             self._window_start = None
             return
-        summary = f"🔁 최근 {self.window_min}분 요약\n" + "\n".join(self._buffer)
+        n = len(self._buffer)
+        rate = n / self.window_min if self.window_min else float(n)
+        header = f"🔁 최근 {self.window_min}분 요약 ({n}건 · 약 {rate:.1f}건/분)"
+        if rate > _OVERTRADE_RATE_PER_MIN:
+            header = "⚠️ 과매매 의심 — 회전 과다\n" + header
+        summary = header + "\n" + "\n".join(self._buffer)
         try:
             await self.inner.notify("notify.throttled_summary", text=summary)
         except Exception:

@@ -655,3 +655,17 @@ FastAPI(JSON API) + Jinja2(서버사이드 HTML) + Chart.js/Tailwind/Alpine.js(C
 - [x] refactor — 1140줄 `runner.py` → `runner/` 패키지 (control·aggregator 분리, 동작 0 변경)
 
 ---
+
+## 🪄 UX·기존기능 개선 배치 (2026-05-16)
+
+설계: `~/.claude/plans/piped-sprouting-kitten.md`. 신규 기능 없이 표현·오류 안내만 개선.
+
+- [x] **B 과매매 가시화** — 손실 핵심 원인(장중 과회전)을 처음으로 사용자 눈에 노출.
+  - `reports/daily.py`: `_aggregate_notional` + `DailyReport` 에 `traded_notional`·`turnover_ratio`(분모는 `day_start_equity` 있을 때만, 추정 금지)·에러 4종 분해 필드.
+  - `notify/state.py`: 요약에 거래대금·회전율, 에러 유형별 분해(0 생략), 비용 차감 PnL 값이 같아도 항상 2줄.
+  - `notify/throttle.py`: 요약 헤더에 건수·분당 빈도, 분당 2건 초과 시 `⚠️ 과매매 의심`.
+- [x] **A 프로파일 오류 친화화** — 신규 `cli/_profile_io.py`(독립 모듈, 순환 import·typer 경계 회피). 파일 없음/YAML 문법/비매핑/검증실패를 한국어로 안내 후 `Exit(1)`. 호출부 3곳 교체.
+- [x] **D CLI 일관성** (하위호환 유지·가산만) — `backtest --from` 에 `-f`, `paper --symbols` 에 `--symbol` 별칭, 상호배타 검증을 `validate_strategy_source` 한 곳으로 통합.
+- 검증: `uv run pytest` 1038 passed(신규 ~30), ruff 통과, mypy 신규 에러 0(베이스라인 20 동일).
+
+---

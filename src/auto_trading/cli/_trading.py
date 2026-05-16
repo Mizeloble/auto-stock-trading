@@ -19,7 +19,6 @@ from ..notify import insight as insight_mod
 from ..notify.telegram_commands import TelegramCommandHandler
 from ..runner import PaperRunner
 from ..strategy import registry
-from ..strategy.profile import StrategyProfile
 
 
 @cli.app.command()
@@ -156,6 +155,7 @@ def paper(
     symbols: str | None = typer.Option(
         None,
         "--symbols",
+        "--symbol",  # backtest 의 --symbol 과 손가락 호환 (별칭, 이름 변경 아님).
         help=(
             "콤마 구분 종목코드. 종목별 전략 파라미터는 콜론으로 덧붙인다. "
             "예) 005930:short=3:long=15,000660:short=5:long=20. --profile 사용 시 생략."
@@ -179,15 +179,12 @@ def paper(
 ) -> None:
     """실시간 틱을 받아 전략 실행. 모의투자 기본."""
     cli._holiday_guard(force=force, command_label="paper")
-    if profile is not None and (strategy or symbols):
-        raise typer.BadParameter("--profile 과 --strategy/--symbols 은 동시에 줄 수 없습니다.")
-    if profile is None and not (strategy and symbols):
-        raise typer.BadParameter("--profile 또는 (--strategy + --symbols) 둘 중 하나가 필요합니다.")
+    cli.validate_strategy_source(profile=profile, strategy=strategy, symbol=symbols)
 
     strategies: dict[str, object] = {}
     symbol_list: list[str] = []
     if profile is not None:
-        prof = StrategyProfile.load_yaml(profile)
+        prof = cli.load_strategy_profile_or_exit(profile)
         strategies[prof.symbol] = registry.get(prof.strategy, **prof.params)
         symbol_list.append(prof.symbol)
         cli.console.print(
@@ -323,6 +320,11 @@ def paper_day(
     settings = cli.get_settings()
     color = "green" if settings.is_mock else "red"
     cli.console.print(f"[dim]키움 모드:[/dim] [{color}]{settings.kiwoom_mode.value}[/{color}]")
+
+    # 프로파일 오타·범위 오류를 매매 시동 전에 한국어로 안내(트레이스백 차단).
+    # apply_daytrade_profile_overrides 는 cli_helpers(typer-free) 라 여기서 선검증.
+    if profile_path is not None:
+        cli.load_daytrade_profile_or_exit(profile_path)
 
     # 23단계 Phase G — 프로파일 있으면 strategy/top_n/liquidate/discover_delay/exclude_etf 덮어쓰기.
     cfg = cli.apply_daytrade_profile_overrides(

@@ -142,6 +142,17 @@ class DailyReport:
     realized_pnl_after_cost: float | None = None  # realized_pnl - (fees + taxes + slippage)
     # 2026-05-11 회귀 후속 — 시계열 한 줄 요약. 로그에 timestamp 가 없거나 파싱 불가면 빈 리스트.
     timeline: list[TimelineEvent] = field(default_factory=list)
+    # 과매매 가시화 — 손실 핵심 원인이 장중 과회전이라 사용자가 눈으로 보게 한다.
+    # traded_notional: 전 체결 거래대금 합(가격 없는 체결은 제외, 전부 없으면 None).
+    # turnover_ratio: 거래대금 ÷ 당일 시작자본. snapshot.account.day_start_equity 가
+    #   있을 때만 — 분모 추정 금지(없으면 None).
+    traded_notional: float | None = None
+    turnover_ratio: float | None = None
+    # error_count 분해 — "에러 N건" 통짜는 진단 불가. 0 인 항목은 표시단에서 생략.
+    orders_failed_count: int = 0
+    liquidations_failed_count: int = 0
+    balance_failure_count: int = 0
+    fatal_count: int = 0
 
 
 # ---- 빌더 ---------------------------------------------------------------
@@ -164,11 +175,12 @@ def build_daily_report(
     market_gates = _extract_gates(events)
     names = dict(events.symbol_names)
     buys, sells, liquidations = _extract_trades(events, names)
+    orders_failed_count = len(events.orders_failed)
+    liquidations_failed_count = len(events.liquidations_failed)
+    fatal_count = len(events.fatal)
+    balance_failure_count = 1 if events.balance_failures > 0 else 0
     error_count = (
-        len(events.orders_failed)
-        + len(events.liquidations_failed)
-        + len(events.fatal)
-        + (1 if events.balance_failures > 0 else 0)
+        orders_failed_count + liquidations_failed_count + fatal_count + balance_failure_count
     )
 
     # snapshot 우선. 없으면 events 로 mode/dry_run 추정.
@@ -194,6 +206,20 @@ def build_daily_report(
         and total_fees is not None
         and total_taxes is not None
         and total_slippage is not None
+        else None
+    )
+
+    traded_notional = _aggregate_notional(buys, sells, liquidations)
+    day_start_equity = (
+        float(snapshot.account.day_start_equity)
+        if snapshot is not None
+        and snapshot.account is not None
+        and snapshot.account.day_start_equity > 0
+        else None
+    )
+    turnover_ratio = (
+        traded_notional / day_start_equity
+        if traded_notional is not None and day_start_equity
         else None
     )
 
@@ -250,6 +276,12 @@ def build_daily_report(
         total_slippage=total_slippage,
         realized_pnl_after_cost=realized_pnl_after_cost,
         timeline=timeline,
+        traded_notional=traded_notional,
+        turnover_ratio=turnover_ratio,
+        orders_failed_count=orders_failed_count,
+        liquidations_failed_count=liquidations_failed_count,
+        balance_failure_count=balance_failure_count,
+        fatal_count=fatal_count,
     )
 
 
@@ -306,15 +338,11 @@ def _extract_trades(
         if not symbol or qty <= 0:
             continue
         if side == "buy":
-            buys.append(
-                TradeRecord(symbol, "buy", qty, price, True, names.get(symbol))
-            )
+            buys.append(TradeRecord(symbol, "buy", qty, price, True, names.get(symbol)))
             if price is not None:
                 buy_prices[symbol] = price
         elif side == "sell":
-            sells.append(
-                TradeRecord(symbol, "sell", qty, price, True, names.get(symbol))
-            )
+            sells.append(TradeRecord(symbol, "sell", qty, price, True, names.get(symbol)))
     for rec in events.orders_accepted:
         side = str(rec.get("side", ""))
         symbol = str(rec.get("symbol", ""))
@@ -324,15 +352,11 @@ def _extract_trades(
         if not symbol or qty <= 0:
             continue
         if side == "buy":
-            buys.append(
-                TradeRecord(symbol, "buy", qty, price, False, names.get(symbol))
-            )
+            buys.append(TradeRecord(symbol, "buy", qty, price, False, names.get(symbol)))
             if price is not None:
                 buy_prices[symbol] = price
         elif side == "sell":
-            sells.append(
-                TradeRecord(symbol, "sell", qty, price, False, names.get(symbol))
-            )
+            sells.append(TradeRecord(symbol, "sell", qty, price, False, names.get(symbol)))
 
     liqs: list[LiquidationRecord] = []
     for rec in events.liquidations_simulated:
@@ -447,6 +471,33 @@ def _estimate_costs(
         slippage += notional * (COST_SLIPPAGE_BPS / 10_000.0)
 
     return fees, taxes, slippage
+
+
+def _aggregate_notional(
+    buys: list[TradeRecord],
+    sells: list[TradeRecord],
+    liqs: list[LiquidationRecord],
+) -> float | None:
+    """전 체결 거래대금(price*quantity) 합 — 과매매(회전율) 가시화용.
+
+    _estimate_costs 와 달리 가격 없는 체결은 '제외'하고 가능한 만큼만 더한다.
+    거래대금은 절대값 지표라 일부만 있어도 사용자에게 유의미(비용 추정과 성격 다름).
+    더할 수 있는 체결이 하나도 없으면 None.
+    """
+    total = 0.0
+    counted = 0
+    for trade in (*buys, *sells):
+        if trade.price is None:
+            continue
+        total += trade.price * trade.quantity
+        counted += 1
+    for li in liqs:
+        unit = li.sell_price if li.sell_price is not None else li.buy_price
+        if unit is None:
+            continue
+        total += unit * li.quantity
+        counted += 1
+    return total if counted else None
 
 
 def _aggregate_realized(

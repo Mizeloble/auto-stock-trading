@@ -20,6 +20,7 @@ from auto_trading.reports.daily import (
     save_daily_report,
 )
 from auto_trading.reports.log_parser import LogEvents
+from auto_trading.risk.manager import AccountState
 
 
 def _events_with_full_cycle() -> LogEvents:
@@ -668,3 +669,80 @@ def test_sells_survive_json_roundtrip(tmp_path: Path) -> None:
     assert [s.symbol for s in loaded.sells] == ["A"]
     assert loaded.sells[0].side == "sell"
     assert loaded.realized_pnl == (110.0 - 100.0) * 10
+
+
+# ---- 과매매 가시화: 거래대금·회전율·에러 분해 ----------------------------
+
+
+def _snapshot_with_account(day_start: float) -> RunnerStateSnapshot:
+    snap = _snapshot()
+    return RunnerStateSnapshot(
+        mode=snap.mode,
+        dry_run=snap.dry_run,
+        symbols=snap.symbols,
+        strategies=snap.strategies,
+        started_at=snap.started_at,
+        snapshot=None,
+        account=AccountState(deposit=0.0, total_equity=0.0, day_start_equity=day_start),
+        recent_signals={},
+        balance_failures=0,
+        runner_mode=snap.runner_mode,
+    )
+
+
+def test_traded_notional_sums_priced_trades() -> None:
+    events = LogEvents(
+        orders_accepted=[
+            {"symbol": "A", "side": "buy", "qty": 10, "price": 100.0},
+            {"symbol": "A", "side": "sell", "qty": 10, "price": 110.0},
+        ],
+    )
+    report = build_daily_report(date="2026-05-16", events=events, snapshot=None)
+    assert report.traded_notional == 100.0 * 10 + 110.0 * 10  # 2100
+
+
+def test_traded_notional_none_when_no_priced_trades() -> None:
+    report = build_daily_report(date="2026-05-16", events=LogEvents(), snapshot=None)
+    assert report.traded_notional is None
+    assert report.turnover_ratio is None
+
+
+def test_turnover_ratio_uses_day_start_equity() -> None:
+    events = LogEvents(
+        orders_accepted=[
+            {"symbol": "A", "side": "buy", "qty": 10, "price": 100.0},
+            {"symbol": "A", "side": "sell", "qty": 10, "price": 110.0},
+        ],
+    )
+    report = build_daily_report(
+        date="2026-05-16",
+        events=events,
+        snapshot=_snapshot_with_account(day_start=10_500.0),
+    )
+    assert report.traded_notional == 2100.0
+    assert report.turnover_ratio == 2100.0 / 10_500.0  # 0.2배
+
+
+def test_turnover_ratio_none_without_account() -> None:
+    """분모 추정 금지 — day_start_equity 없으면 거래대금만, 회전율 None."""
+    events = LogEvents(
+        orders_accepted=[{"symbol": "A", "side": "buy", "qty": 10, "price": 100.0}],
+    )
+    report = build_daily_report(date="2026-05-16", events=events, snapshot=_snapshot())
+    assert report.traded_notional == 1000.0
+    assert report.turnover_ratio is None
+
+
+def test_error_breakdown_fields_populated() -> None:
+    events = LogEvents(
+        orders_failed=[{"symbol": "A", "side": "buy", "qty": 1, "error": "x"}],
+        liquidations_failed=[{"symbol": "B", "qty": 1, "error": "y"}],
+        balance_failures=3,
+        fatal=[{"consecutive": 5}],
+    )
+    report = build_daily_report(date="2026-05-16", events=events, snapshot=None)
+    assert report.orders_failed_count == 1
+    assert report.liquidations_failed_count == 1
+    assert report.balance_failure_count == 1  # >0 → 1
+    assert report.fatal_count == 1
+    assert report.error_count == 4  # 합은 기존과 동일

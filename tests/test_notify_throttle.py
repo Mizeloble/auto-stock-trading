@@ -86,6 +86,28 @@ async def test_aclose_flushes_remaining_buffer() -> None:
     assert "B BUY 5주" in text
 
 
+async def test_summary_header_shows_count_and_rate() -> None:
+    """요약 머리에 건수·분당 빈도 노출, 저빈도면 경고 없음."""
+    n, inner, _ = _throttled(window_min=5)
+    await n.notify("runner.order_accepted", symbol="A", side="buy", qty=10)
+    await n.notify("runner.order_accepted", symbol="B", side="buy", qty=5)
+    await n.aclose()
+    text = str(next(c for c in inner.calls if c[0] == "notify.throttled_summary")[1]["text"])
+    assert "(2건 · 약 0.4건/분)" in text
+    assert "과매매 의심" not in text
+
+
+async def test_summary_warns_on_overtrading_rate() -> None:
+    """분당 2건 초과면 과매매 의심 경고를 머리에 붙인다."""
+    n, inner, _ = _throttled(window_min=5)
+    for i in range(11):  # 11건 / 5분 = 2.2건/분 > 2.0
+        await n.notify("runner.order_accepted", symbol=f"S{i}", side="buy", qty=1)
+    await n.aclose()
+    text = str(next(c for c in inner.calls if c[0] == "notify.throttled_summary")[1]["text"])
+    assert "⚠️ 과매매 의심" in text
+    assert "(11건 · 약 2.2건/분)" in text
+
+
 async def test_aclose_with_empty_buffer_is_noop() -> None:
     """buffer 비어있으면 throttled_summary 푸시 X."""
     n, inner, _ = _throttled()

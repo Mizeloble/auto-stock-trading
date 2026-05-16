@@ -12,7 +12,6 @@ from auto_trading import cli
 
 from ..backtest.engine import Backtester, save_result
 from ..strategy import registry
-from ..strategy.profile import StrategyProfile
 
 
 @cli.app.command()
@@ -21,7 +20,7 @@ def backtest(
         None, "--strategy", "-s", help="전략 이름 (예: sma_crossover). --profile 과 둘 중 하나."
     ),
     symbol: str | None = typer.Option(None, "--symbol", help="종목코드. --profile 사용 시 생략."),
-    start: str = typer.Option(..., "--from", help="YYYY-MM-DD"),
+    start: str = typer.Option(..., "--from", "-f", help="YYYY-MM-DD"),
     end: str | None = typer.Option(None, "--to", help="YYYY-MM-DD, 생략 시 오늘"),
     cash: float = typer.Option(10_000_000.0, "--cash", help="초기 예수금"),
     out_dir: Path | None = typer.Option(None, "--out", help="결과 저장 폴더"),
@@ -50,17 +49,14 @@ def backtest(
     \\--cpcv 활성 시 균등 N-fold 분할 + embargo purge → fold 별 Sharpe/PSR 분포 +
     p05/p95 신뢰구간. walk-forward 와는 상호 배타.
     """
-    if profile is not None and (strategy or symbol):
-        raise typer.BadParameter("--profile 과 --strategy/--symbol 은 동시에 줄 수 없습니다.")
-    if profile is None and not (strategy and symbol):
-        raise typer.BadParameter("--profile 또는 (--strategy + --symbol) 둘 중 하나가 필요합니다.")
+    cli.validate_strategy_source(profile=profile, strategy=strategy, symbol=symbol)
     if walk_forward_spec is not None and cpcv_spec is not None:
         raise typer.BadParameter("--walk-forward 와 --cpcv 는 동시에 줄 수 없습니다.")
 
     strategy_name: str
     strategy_params: dict[str, object]
     if profile is not None:
-        prof = StrategyProfile.load_yaml(profile)
+        prof = cli.load_strategy_profile_or_exit(profile)
         strategy_name = prof.strategy
         symbol = prof.symbol
         strategy_params = dict(prof.params)

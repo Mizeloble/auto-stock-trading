@@ -97,8 +97,11 @@ def test_format_includes_cost_adjusted_pnl_when_present() -> None:
     assert "+9,650원" in msg
 
 
-def test_format_omits_cost_line_when_equal_to_realized() -> None:
-    """비용 차감치가 realized 와 같으면 노이즈라 라인 생략."""
+def test_format_always_shows_cost_line_even_when_equal() -> None:
+    """비용 0이라 값이 같아도 초보에게 '수수료·세금 반영됨' 을 명시하려 항상 노출.
+
+    이전엔 같으면 생략했으나, 비용 개념이 낯선 사용자가 실현=총이익으로 오해 → 항상 2줄.
+    """
     msg = format_daily_report(
         _payload(
             realized_pnl=10000.0,
@@ -106,7 +109,30 @@ def test_format_omits_cost_line_when_equal_to_realized() -> None:
             realized_pnl_after_cost=10000.0,
         )
     )
-    assert "💸" not in msg
+    assert "💸 비용 차감 PnL" in msg
+    assert "+10,000원" in msg
+
+
+def test_format_shows_traded_notional_and_turnover() -> None:
+    """과매매 가시화 — 거래대금·회전율이 요약 줄에 노출."""
+    msg = format_daily_report(_payload(traded_notional=1_500_000.0, turnover_ratio=3.2))
+    assert "거래대금 1,500,000원" in msg
+    assert "회전 3.2배" in msg
+
+
+def test_format_error_breakdown_replaces_lump_count() -> None:
+    """에러 통짜 대신 유형별 분해(0 인 항목 생략)."""
+    msg = format_daily_report(
+        _payload(
+            error_count=3,
+            orders_failed_count=2,
+            liquidations_failed_count=0,
+            balance_failure_count=1,
+            fatal_count=0,
+        )
+    )
+    assert "에러 주문 2 · 잔고 1" in msg
+    assert "에러 3건" not in msg
 
 
 def test_format_skips_pnl_when_prices_missing() -> None:

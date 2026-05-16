@@ -500,19 +500,38 @@ def format_daily_report(payload: dict) -> str:
         summary_parts.append(f"실현 {_signed_won(realized)}{pct_part}")
     # 2026-05-11 사용자 피드백: "매매 N건" 이 매수·청산 합산이라 헷갈림 → 각각 표기.
     summary_parts.append(f"매수 {len(buys)}건 · 청산 {len(liqs)}건")
+    # 과매매 가시화 — 손실 핵심 원인이 장중 과회전. 거래대금·회전율을 요약에 노출.
+    traded_notional = payload.get("traded_notional")
+    if traded_notional is not None and (buys or liqs):
+        summary_parts.append(f"거래대금 {_won(traded_notional)}")
+    turnover = payload.get("turnover_ratio")
+    if turnover is not None:
+        summary_parts.append(f"회전 {float(turnover):.1f}배")
     if err:
-        summary_parts.append(f"에러 {err}건")
+        # 통짜 "에러 N건" 은 진단 불가 → 유형별 분해(0 인 항목은 생략).
+        o = int(payload.get("orders_failed_count") or 0)
+        liq_f = int(payload.get("liquidations_failed_count") or 0)
+        bal = int(payload.get("balance_failure_count") or 0)
+        fat = int(payload.get("fatal_count") or 0)
+        breakdown = [
+            label
+            for cnt, label in (
+                (o, f"주문 {o}"),
+                (liq_f, f"청산 {liq_f}"),
+                (bal, f"잔고 {bal}"),
+                (fat, f"치명 {fat}"),
+            )
+            if cnt
+        ]
+        summary_parts.append("에러 " + " · ".join(breakdown) if breakdown else f"에러 {err}건")
     if summary_parts:
         lines.append("")
         # 📋 는 매매 결과 섹션이 쓰므로 요약은 다른 이모지로 시각 구분.
         lines.append("📊 " + " · ".join(summary_parts))
 
-    # 비용 차감 PnL — 23단계 Phase A. 같은 값이면 노이즈라 생략.
-    if (
-        realized is not None
-        and realized_after_cost is not None
-        and float(realized_after_cost) != float(realized)
-    ):
+    # 비용 차감 PnL — 23단계 Phase A. 비용이 0이라 값이 같아도 초보에게
+    # "수수료·세금·슬리피지 반영됨" 을 명시하려 거래가 있으면 항상 함께 노출.
+    if realized is not None and realized_after_cost is not None:
         lines.append(f"💸 비용 차감 PnL: {_signed_won(realized_after_cost)}")
 
     note = str(payload.get("note_ko") or "")
