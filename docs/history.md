@@ -620,13 +620,13 @@ FastAPI(JSON API) + Jinja2(서버사이드 HTML) + Chart.js/Tailwind/Alpine.js(C
 - [x] PR6 `notify/commands/` 패키지 분리, telegram_commands 269→208줄 (테스트 21건)
 - [x] PR7 aggregator KST 경계 테스트 보강
 - [x] PR8 runner `run()` 섹션 주석 + `_check_kill_switch` 헬퍼 추출 (테스트 6건)
-- (PR1 conftest `isolated_cwd` 통합은 29단계 테스트 격리 후속과 통합 — 미완으로 todo-list 유지)
+- [x] PR1 conftest `isolated_cwd` 통합 (`e573d9e`) + PR12 토큰 캐시 회귀를 autouse `_isolate_token_cache` 로 차단 (`455a465`) — 1038개 단위 테스트 전체 통과로 검증 완료
 
 ---
 
 ## 🛡 29단계 · 실거래 전환 안전망 — 완료 PR 아카이브
 
-설계: `~/.claude/plans/calm-cooking-pelican.md`. 미완 항목(PR4·테스트 격리 후속)은 `todo-list.md` 에서 추적.
+설계: `~/.claude/plans/calm-cooking-pelican.md`. 테스트 격리 후속은 완료(28단계 PR1 항목 참조). 남은 미완 항목(PR4)은 `todo-list.md` 에서 추적.
 
 - [x] PR1 #9 1차 — `account/order_journal.py` (JSONL append-only) + client UUID (테스트 13건)
 - [x] PR2 #9 2차 — `account/recovery.py` + 시동 시 suspect 알림 (테스트 15건)
@@ -638,7 +638,7 @@ FastAPI(JSON API) + Jinja2(서버사이드 HTML) + Chart.js/Tailwind/Alpine.js(C
 - [x] PR9 #14 1차 — `risk/consecutive_loss.py` 트래커 (테스트 8건)
 - [x] PR10 #14 2차 — 연속 손절 트래커 runner wiring (테스트 12건)
 - [x] PR11 #14 마무리 — `/unpause` 텔레그램 명령 (테스트 6건)
-- [x] PR12 #21 — OAuth 토큰 디스크 캐시 (0o600, 테스트 8건). *PR12 토큰 캐시가 단위 테스트 격리 회귀 유발 → todo-list 후속.*
+- [x] PR12 #21 — OAuth 토큰 디스크 캐시 (0o600, 테스트 8건). *유발한 단위 테스트 격리 회귀는 28단계 PR1 항목에서 해결 완료.*
 - [x] PR13 #16 1차 — `llm/cost_tracker.py` 비용 누적 (월 $5 한도, 테스트 19건)
 - [x] PR14 #13 마무리 — `heartbeat-check` launchd cron (plist + install 라벨)
 - [x] PR15 #16 2차 — `llm/cost.py` wiring + preflight 비용 게이트 활성 (테스트 16건)

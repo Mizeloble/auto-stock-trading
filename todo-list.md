@@ -8,11 +8,6 @@
 
 ## 🔧 진행 중 — 미완 항목
 
-- [ ] **테스트 격리 통합 (28단계 PR1 + 29단계 PR12 회귀)** — 같은 문제라 한 PR 로 묶는다.
-  - **무엇**: `tests/conftest.py` 신규 — 4개 테스트 파일에 중복된 `isolated_cwd` 픽스처 통합 + Kiwoom 사용 테스트용 autouse cwd 격리.
-  - **왜**: PR12 토큰 디스크 캐시(`data/auth/token.json`)가 운영 paper-day 가 만든 토큰 파일을 테스트 cwd 격리 없이 로드 → `oauth2/token` mock 라우트 미호출로 respx 단위 테스트 10여 개가 깨진다.
-  - **영향 파일**: `test_account_balance.py`, `test_account_orders.py`, `test_auth.py`, `test_cli_paper_day.py`, `test_cli_log_setup.py`, `test_market_*.py`, `test_paper_day_full_cycle.py`, `test_rest_client.py`.
-  - **어떻게 확인**: 각 테스트에 `isolated_cwd` 인자 추가 또는 conftest autouse 격리 후 `uv run pytest` 전체 통과.
 - [ ] **29단계 PR4 · `feat(account): 키움 미체결 조회 + suspect 자동 매칭 — #9 3차`**
   - **무엇**: 봇 재시작 시 suspect 주문들을 키움에 재조회해 실제 체결 여부 확인 + 저널 보강 + 로컬 state 동기화.
   - **왜**: PR2 가 *발견* 까지만 구현. 자동 매칭/동기화는 키움 미체결 TR 코드 probe 가 선행이라 분리했다.
