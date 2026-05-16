@@ -46,6 +46,7 @@ class KiwoomRestClient:
         token_provider: TokenProvider | None = None,
         client: httpx.AsyncClient | None = None,
         max_retries: int = 3,
+        min_request_interval_sec: float = 0.15,
     ) -> None:
         self._settings = settings or get_settings()
         self._client = client or httpx.AsyncClient(
@@ -56,6 +57,14 @@ class KiwoomRestClient:
             settings=self._settings, client=self._client
         )
         self._max_retries = max_retries
+        # 클라이언트측 최소 호출 간격. paginate() 가 ka10081 일봉을 최대 10페이지
+        # 연속 발사하고 regime/news 시작 시 다종목을 몰아쳐 키움이 429 로 거절 →
+        # 백오프 재시도로 시작이 느려지고 로그가 시끄러웠다(2026-05-16 관측).
+        # 사후 백오프(아래 RETRY)는 안전망으로 남기고, 여기서 선제적으로 페이싱해
+        # 버스트 자체를 없앤다. 주문은 봉당 드문 단발 호출이라 0.15s 영향 무시 가능.
+        self._min_request_interval = max(0.0, min_request_interval_sec)
+        self._rate_lock = asyncio.Lock()
+        self._last_request_at = 0.0
 
     @property
     def token_provider(self) -> TokenProvider:
@@ -73,6 +82,22 @@ class KiwoomRestClient:
         if self._owns_client:
             await self._client.aclose()
 
+    async def _pace(self) -> None:
+        """선제적 호출 페이싱 — 최소 간격을 두어 키움 429 버스트를 방지.
+
+        lock 으로 직렬화해 동시 코루틴(다종목 동시 조회)도 간격을 지키게 한다.
+        간격 0 이면 no-op (테스트·특수 경로 호환).
+        """
+        if self._min_request_interval <= 0:
+            return
+        async with self._rate_lock:
+            now = asyncio.get_running_loop().time()
+            wait = self._min_request_interval - (now - self._last_request_at)
+            if wait > 0:
+                await asyncio.sleep(wait)
+                now = asyncio.get_running_loop().time()
+            self._last_request_at = now
+
     async def request(
         self,
         tr_id: str,
@@ -83,6 +108,7 @@ class KiwoomRestClient:
         next_key: str = "",
     ) -> dict[str, Any]:
         """단일 페이지 요청. 429/5xx 는 지수 백오프로 재시도."""
+        await self._pace()
         token = await self._token_provider.get_token()
         headers = {
             "Authorization": f"Bearer {token}",

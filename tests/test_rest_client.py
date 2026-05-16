@@ -149,3 +149,47 @@ async def test_paginate_follows_cont_yn(settings: Settings) -> None:
         assert len(pages) == 2
         assert pages[0]["rows"][0]["cur_prc"] == "1"
         assert pages[1]["rows"][0]["cur_prc"] == "2"
+
+
+# 2026-05-16 관측 — 시작 직후 ka10081 버스트 429. 클라이언트측 선제 페이싱으로 차단.
+
+
+async def test_pacing_spaces_consecutive_requests(settings: Settings) -> None:
+    """min_request_interval_sec 설정 시 연속 요청이 최소 간격만큼 떨어진다."""
+    import asyncio
+
+    interval = 0.05
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_MARKET).mock(
+            return_value=httpx.Response(200, json={"return_code": 0, "cur_prc": "1"})
+        )
+        async with KiwoomRestClient(
+            settings=settings, min_request_interval_sec=interval
+        ) as client:
+            loop = asyncio.get_running_loop()
+            await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {})
+            t0 = loop.time()
+            await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {})
+            await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {})
+        # 2번째+3번째 사이 최소 1 interval 이상 (페이싱 누적).
+        assert loop.time() - t0 >= interval
+
+
+async def test_pacing_disabled_when_interval_zero(settings: Settings) -> None:
+    """간격 0 이면 페이싱 no-op — 기존 빠른 경로/테스트 호환."""
+    import asyncio
+
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_MARKET).mock(
+            return_value=httpx.Response(200, json={"return_code": 0, "cur_prc": "1"})
+        )
+        async with KiwoomRestClient(
+            settings=settings, min_request_interval_sec=0.0
+        ) as client:
+            loop = asyncio.get_running_loop()
+            t0 = loop.time()
+            for _ in range(5):
+                await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {})
+        assert loop.time() - t0 < 0.05  # 5회 즉시 — 인위적 지연 없음

@@ -250,7 +250,20 @@ def collect_recent_news(
                 log.warning("news.parse_failed", url=url, exc_info=True)
                 continue
             fetched.extend(items)
-            log.info("news.fetched", url=url, count=len(items))
+            if not items:
+                # 2026-05-16 관측 — yna economy 가 count:0. feedparser 는 일시적
+                # 네트워크 실패도 예외 없이 빈 결과로 삼킨다. bozo 플래그를 함께
+                # 남겨 "일시 실패" 와 "정말 빈 피드" 를 사후 구분 가능하게.
+                bozo = getattr(parsed, "bozo", 0)
+                bozo_exc = getattr(parsed, "bozo_exception", None)
+                log.warning(
+                    "news.feed_empty",
+                    url=url,
+                    bozo=bool(bozo),
+                    bozo_exception=str(bozo_exc) if bozo_exc else None,
+                )
+            else:
+                log.info("news.fetched", url=url, count=len(items))
         # url 기준 dedupe — 기존 캐시 항목을 먼저 넣고 fetched 가 덮어쓰지 않도록
         # dict 순서를 유지(기존 → 신규). 같은 url 이면 처음 본 것을 유지.
         merged: dict[str, NewsItem] = {}
