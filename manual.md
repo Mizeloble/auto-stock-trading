@@ -426,14 +426,20 @@ auto-stock-trading/
 ├── logs/                  ← 운영 로그 (자동 생성)
 ├── scripts/               ← 자동 시작·종료 스크립트
 └── src/auto_trading/      ← 봇의 본체 코드
-    ├── cli.py             ← 명령어 진입점
-    ├── runner.py          ← 실시간 매매 루프
+    ├── cli/               ← 명령어 진입점 (도메인별 분리: _trading/_reporting/_backtest/_ops/_strategy)
+    ├── runner/            ← 실시간 매매 루프 (+ aggregator·control)
     ├── config.py          ← .env 로드
     ├── kiwoom/            ← 키움 API 클라이언트
     ├── market/            ← 시세·거래량 순위·지수 일봉
     ├── account/           ← 잔고·주문
     ├── strategy/          ← 전략 + 추천 + Claude 조언
     ├── daytrade/          ← day-trade 발굴·게이트·universe 주입 오케스트레이터
+    ├── backtest/          ← 백테스트 엔진
+    ├── reports/           ← 일일·주간 리포트
+    ├── llm/               ← Claude API 호출 래퍼
+    ├── news/              ← 뉴스 수집·LLM 프로파일 갱신
+    ├── shadow/            ← 섀도우(미체결 가정) 추적
+    ├── monitor/           ← 헬스·지연 모니터
     ├── risk/              ← 리스크 한도
     └── notify/            ← 텔레그램 알림·명령
 ```

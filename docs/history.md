@@ -595,3 +595,63 @@ FastAPI(JSON API) + Jinja2(서버사이드 HTML) + Chart.js/Tailwind/Alpine.js(C
 **검증**: `uv run auto-trade dashboard` → `http://127.0.0.1:8000`. 빈 데이터 상태에서도 페이지가 죽지 않고 안내 메시지 노출.
 
 ---
+
+## 🗞 27단계 · 주말 LLM 전략수립의 뉴스 입력 보강 — **✅ 완료** (2026-05-10)
+
+24단계 한경 RSS 2개·30건·240자 시작 → 매체 편향 + 잘림 보강.
+
+- [x] RSS 소스 6개 확대 (한경 finance/economy + 연합 economy/market + SBS Biz + 파이낸셜뉴스). 빈 응답 매체(이데일리·머니투데이·서울경제·매경)는 제외.
+- [x] LLM 입력 캡 30→80 + `--max-news-items` 옵션, 본문 truncate 240→400자
+- [x] 캐시 schema v3 + 누적 병합(url dedupe), 신규 `auto-trade fetch-news` (LLM X·비용 0)
+- [x] 토요일 06:00 KST `news-prefetch` cron (plist + 셸 래퍼), README/insight-weekly 주석 갱신
+- [x] 테스트 4건 추가
+
+**비용 영향:** 호출당 ~5k→~25k input, 월 ~$0.32 → ~$2 (합의 상한 $5 이내).
+
+---
+
+## 🧹 28단계 · 코드베이스 리팩토링 — **✅ 완료** (9개 PR, 외부 동작·공개 API 보존)
+
+- [x] PR2 dashboard CSV 로더 가드 → `_safe_csv_load` 데코레이터 (PEP 695 제네릭)
+- [x] PR3 `_build_trade_lines` 페어링·포맷터 분해 (테스트 7건)
+- [x] PR4 `paper_day` 단계별 분해 (overrides + runner wiring 헬퍼, 테스트 5건)
+- [x] PR4b `weekly_proposal` 분해 → `news/cli_helpers.py` (테스트 8건)
+- [x] PR5 `llm/_tool_use.py` 공통 헬퍼 — 3곳 통합 (테스트 6건, -65줄)
+- [x] PR6 `notify/commands/` 패키지 분리, telegram_commands 269→208줄 (테스트 21건)
+- [x] PR7 aggregator KST 경계 테스트 보강
+- [x] PR8 runner `run()` 섹션 주석 + `_check_kill_switch` 헬퍼 추출 (테스트 6건)
+- (PR1 conftest `isolated_cwd` 통합은 29단계 테스트 격리 후속과 통합 — 미완으로 todo-list 유지)
+
+---
+
+## 🛡 29단계 · 실거래 전환 안전망 — 완료 PR 아카이브
+
+설계: `~/.claude/plans/calm-cooking-pelican.md`. 미완 항목(PR4·테스트 격리 후속)은 `todo-list.md` 에서 추적.
+
+- [x] PR1 #9 1차 — `account/order_journal.py` (JSONL append-only) + client UUID (테스트 13건)
+- [x] PR2 #9 2차 — `account/recovery.py` + 시동 시 suspect 알림 (테스트 15건)
+- [x] PR3 #13 — `heartbeat.py` dead-man switch + `heartbeat-check` CLI (테스트 16건)
+- [x] PR5 #10 1차 — `account/reject_classifier.py` 거절 메시지 분류 (테스트 22건)
+- [x] PR6 #10 2차 — reject 분류 → 종목 skip + 알림 카테고리 (테스트 9건)
+- [x] PR7 #22 — `tests/test_paper_day_full_cycle.py` mock 풀 사이클 3시나리오
+- [x] PR8 #17 — `preflight.py` + `auto-trade preflight` (5 활성 게이트, 테스트 24건)
+- [x] PR9 #14 1차 — `risk/consecutive_loss.py` 트래커 (테스트 8건)
+- [x] PR10 #14 2차 — 연속 손절 트래커 runner wiring (테스트 12건)
+- [x] PR11 #14 마무리 — `/unpause` 텔레그램 명령 (테스트 6건)
+- [x] PR12 #21 — OAuth 토큰 디스크 캐시 (0o600, 테스트 8건). *PR12 토큰 캐시가 단위 테스트 격리 회귀 유발 → todo-list 후속.*
+- [x] PR13 #16 1차 — `llm/cost_tracker.py` 비용 누적 (월 $5 한도, 테스트 19건)
+- [x] PR14 #13 마무리 — `heartbeat-check` launchd cron (plist + install 라벨)
+- [x] PR15 #16 2차 — `llm/cost.py` wiring + preflight 비용 게이트 활성 (테스트 16건)
+- [x] PR16 — `orders inspect` 주문 저널 진단 명령 (테스트 6건)
+- [x] PR17 #5 사전 — `detect-regime` 시장국면 진단 CLI (테스트 6건)
+- [x] PR18 #5 일부 — weekly-proposal 에 시장국면 입력 추가 (테스트 6건)
+- [x] PR19 #20 — `monitor/latency.py` 신호→주문 latency 추적 + CLI (테스트 15건)
+- [x] PR20 #86 (2026-05-11) — kill switch `total_equity` 산식 부분익절 오발동 회귀 픽스
+- [x] PR21 #87 (2026-05-11) — heartbeat 정상 종료 sentinel, cron 알림 폭주 차단
+- [x] PR22 #88 (2026-05-11) — 일일 리포트 `note_ko` 매수 N건 실 체결 기준
+- [x] PR27 (2026-05-12) — 운영 회귀 3건: 잔고 합계 / heartbeat 미주입 / 리포트 매수 카운트
+- [x] PR43 (2026-05-14) — 운영 회귀 4건: stale 스냅샷 / 페어 라인 / in-flight SELL 가드 / 알림 강등
+- [x] PR44 (2026-05-14) — 텔레그램 전 메시지 종목코드 옆 종목명 표시 (테스트 18건)
+- [x] refactor — 1140줄 `runner.py` → `runner/` 패키지 (control·aggregator 분리, 동작 0 변경)
+
+---
