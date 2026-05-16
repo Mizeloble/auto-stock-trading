@@ -51,16 +51,18 @@ uv run auto-trade strategy advise …            # (LLM) 프로파일 조정
 | 주제 | manual.md 절 |
 |---|---|
 | 시스템 개요 / 사전 준비 / 설치 | [§0–2](./manual.md) |
-| 명령 한 줄 사용법 | [§3](./manual.md) |
-| Swing 흐름 (단일 종목 학습·검증) | [§4](./manual.md) |
-| 내장 전략 (sma_crossover / rsi_reversion / intraday_momentum) | [§5](./manual.md) |
-| 안전장치 (리스크 매니저) | [§6](./manual.md) |
-| 모드 비교 (paper vs paper-day) | [§7](./manual.md) |
-| 텔레그램 알림 + 원격 명령 | [§8](./manual.md) |
-| Claude 전략 조언 | [§9](./manual.md) |
-| 매일 자동 켜고 끄기 (launchd) | [§10](./manual.md), [scripts/launchd/README.md](./scripts/launchd/README.md) |
-| Day-trade 모드 상세 + 주간 자동화 | [§11](./manual.md) |
-| 트러블슈팅 / 보안 / 폴더 지도 | [§12–14](./manual.md) |
+| 명령 한눈에 보기 | [§3](./manual.md) |
+| **day-trade dry-run 따라하기 (메인)** | [§4](./manual.md) |
+| 일일 리포트 + 주간 자동 갱신 (LLM) | [§5](./manual.md) |
+| 내장 전략 (sma_crossover / rsi_reversion / intraday_momentum / index_momentum_daytrade) | [§6](./manual.md) |
+| 안전장치 (리스크 매니저) | [§7](./manual.md) |
+| 모드 비교 (mock/real, swing/day-trade) | [§8](./manual.md) |
+| (선택) Swing 흐름 (단일 종목 학습·검증) | [§9](./manual.md) |
+| 텔레그램 알림 + 원격 명령 | [§10](./manual.md) |
+| Claude 전략 조언 | [§11](./manual.md) |
+| 매일 자동 켜고 끄기 (launchd) | [§12](./manual.md), [scripts/launchd/README.md](./scripts/launchd/README.md) |
+| 운영 진단·점검 명령 (preflight 등) | [§13](./manual.md) |
+| 트러블슈팅 / 보안 / 폴더 지도 | [§14–16](./manual.md) |
 
 ## 안전장치 (요약)
 
@@ -69,7 +71,7 @@ uv run auto-trade strategy advise …            # (LLM) 프로파일 조정
 - LLM 호출은 사람 명시 트리거 또는 합의된 주 1회 cron 만 (월 상한 $5). 매일·매시간 금지.
 - `paper-day` / `paper` 모두 `--dry-run` 기본. 시크릿은 git 제외 + 로그 마스킹.
 
-> 한도·게이트·LLM 안전 캡의 정확한 값과 동작은 [manual.md §6](./manual.md) 가 정본.
+> 한도·게이트·LLM 안전 캡의 정확한 값과 동작은 [manual.md §7](./manual.md) 가 정본.
 
 ## 테스트
 
