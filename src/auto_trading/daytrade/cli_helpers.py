@@ -352,13 +352,16 @@ async def delayed_discover(
             )
         console.print(f"[cyan]발굴 결과:[/cyan] {result.note_ko}")
         # 종목명도 함께 — 텔레그램이 코드+이름 ("005930 삼성전자") 으로 표시.
-        # result.names 는 chosen·blocked 를 아우른 전체 후보 매핑이라 게이트 차단으로
-        # chosen 이 비어도 차단 종목 이름이 그대로 노출된다.
+        # chosen 뿐 아니라 차단된 후보(blocked)도 포함하기 위해 후보 전체에서 흡수.
+        discovery_names: dict[str, str] = {}
+        for cand in result.chosen:
+            if cand.name:
+                discovery_names[cand.symbol] = cand.name
         await runner.notifier.notify(
             "daytrade.discovery_done",
             chosen=[c.symbol for c in result.chosen],
             blocked=result.blocked,
-            names=result.names,
+            names=discovery_names,
             note=result.note_ko,
         )
         # universe 0 건이면 set_universe() 호출되지 않아 _universe_ready 도 안 set 된다.

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import structlog
 
@@ -36,9 +36,6 @@ class DiscoveryResult:
     blocked: list[tuple[str, str]]  # (symbol, reason) — 게이트 차단 / 후보 부족
     gates: dict[str, IndexGate]  # 시장→게이트 (디버그·로그용)
     note_ko: str  # 사람이 읽는 한 줄 요약
-    # 코드→종목명. chosen 뿐 아니라 blocked 후보까지 포함한 전체 후보 매핑 —
-    # 텔레그램 발굴 알림이 차단 종목도 "005930 삼성전자" 로 보여줄 수 있게.
-    names: dict[str, str] = field(default_factory=dict)
 
 
 def _default_strategy_factory(weight: float) -> Callable[..., Strategy]:
@@ -111,7 +108,7 @@ async def discover_and_arm(
     if not chosen:
         note = f"후보 {len(candidates)}건 모두 지수 게이트 차단 — 매수 없이 청산 시각까지 대기."
         log.info("daytrade.universe_chosen", symbols=[], reason="all_blocked")
-        return DiscoveryResult(chosen=[], blocked=blocked, gates=gates, note_ko=note, names=names)
+        return DiscoveryResult(chosen=[], blocked=blocked, gates=gates, note_ko=note)
 
     factory = strategy_factory or _default_strategy_factory(weight=1.0 / max(1, top_n))
     symbols = [c.symbol for c in chosen]
@@ -129,7 +126,7 @@ async def discover_and_arm(
     note = f"매수 후보 {len(chosen)}/{len(candidates)}: {', '.join(symbols)}"
     if blocked:
         note += f" (차단 {len(blocked)})"
-    return DiscoveryResult(chosen=chosen, blocked=blocked, gates=gates, note_ko=note, names=names)
+    return DiscoveryResult(chosen=chosen, blocked=blocked, gates=gates, note_ko=note)
 
 
 async def _momentum_loop(
