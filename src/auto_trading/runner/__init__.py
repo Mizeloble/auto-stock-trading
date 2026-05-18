@@ -453,9 +453,7 @@ class PaperRunner:
         avg = account.avg_prices.get(bar.symbol, 0.0)
         if avg <= 0:
             return
-        action = guard.check(
-            symbol=bar.symbol, price=bar.close, quantity=net_qty, avg_price=avg
-        )
+        action = guard.check(symbol=bar.symbol, price=bar.close, quantity=net_qty, avg_price=avg)
         if action is None:
             return
         await self._place_guard_action(rest, action, bar, account)

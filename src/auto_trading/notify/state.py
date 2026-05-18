@@ -445,7 +445,7 @@ def format_daily_report(payload: dict) -> str:
         if chosen:
             lines.append(f"선정: {', '.join(_with_name(s, chosen_names.get(s)) for s in chosen)}")
         if blocked:
-            shown = ", ".join(f"{s}({r})" for s, r in blocked[:5])
+            shown = ", ".join(f"{_with_name(s, chosen_names.get(s))}({r})" for s, r in blocked[:5])
             tail = f" 외 {len(blocked) - 5}" if len(blocked) > 5 else ""
             lines.append(f"차단: {shown}{tail}")
 

@@ -198,7 +198,10 @@ def build_daily_report(
         for h in snapshot.snapshot.holdings:
             if h.name and h.symbol not in names:
                 names[h.symbol] = h.name
-    chosen_names = {sym: names[sym] for sym in discovery_chosen if sym in names}
+    # chosen 뿐 아니라 blocked 후보 코드도 매핑 — 리포트 "차단:" 라인이 코드+이름으로
+    # 보이게. daytrade.discovery 로그가 전 후보 names 를 남기므로 events 에 다 있음.
+    discovery_syms = list(discovery_chosen) + [s for s, _ in discovery_blocked]
+    chosen_names = {sym: names[sym] for sym in discovery_syms if sym in names}
     total_fees, total_taxes, total_slippage = _estimate_costs(buys, sells, liquidations)
     realized_pnl_after_cost = (
         realized_pnl - (total_fees + total_taxes + total_slippage)
