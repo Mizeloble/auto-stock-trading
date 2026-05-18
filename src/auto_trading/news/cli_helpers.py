@@ -100,9 +100,7 @@ def run_weekly_proposal_cycle(
         target_path=target_path or current_path,
         fallback_path=fallback_path,
     )
-    msg = format_apply_message(
-        result, proposal, symbol_names=merge_symbol_names(inputs.reports)
-    )
+    msg = format_apply_message(result, proposal, symbol_names=merge_symbol_names(inputs.reports))
     return proposal, result, msg
 
 

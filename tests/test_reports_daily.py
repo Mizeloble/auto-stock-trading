@@ -390,6 +390,19 @@ def test_build_attaches_names_to_records_and_chosen_map() -> None:
     }
 
 
+def test_build_includes_blocked_symbol_names_in_name_map() -> None:
+    """게이트 전종목 차단(chosen 비어있음) 이어도 blocked 코드 이름이 맵에 담긴다."""
+    events = LogEvents(
+        discovery={
+            "chosen": [],
+            "blocked": [["005930", "KOSPI_below_sma"], ["005250", "KOSPI_below_sma"]],
+        },
+        symbol_names={"005930": "삼성전자", "005250": "녹십자"},
+    )
+    report = build_daily_report(date="2026-05-18", events=events, snapshot=None)
+    assert report.discovery_chosen_names == {"005930": "삼성전자", "005250": "녹십자"}
+
+
 def test_liquidation_buy_price_from_log_field_overrides_buy_prices_map() -> None:
     """liquidate_simulated 의 buy_price 필드(러너 로그) 가 buys 매핑보다 우선."""
     events = LogEvents(

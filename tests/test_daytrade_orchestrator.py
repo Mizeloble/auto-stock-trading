@@ -73,6 +73,8 @@ async def test_discover_all_blocked_does_not_set_universe(monkeypatch) -> None:
     assert all("below_sma" in r for _, r in result.blocked)
     assert runner.symbols == []
     assert "차단" in result.note_ko or "대기" in result.note_ko
+    # chosen 이 비어도 차단 후보 이름이 result.names 에 담겨야 텔레그램이 코드+이름 표시.
+    assert result.names == {"005930": "삼성전자", "247540": "에코프로비엠"}
 
 
 async def test_discover_partial_blocked_sets_universe_for_passing_only(monkeypatch) -> None:

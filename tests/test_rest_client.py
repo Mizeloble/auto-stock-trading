@@ -164,9 +164,7 @@ async def test_pacing_spaces_consecutive_requests(settings: Settings) -> None:
         mock.post(PATH_MARKET).mock(
             return_value=httpx.Response(200, json={"return_code": 0, "cur_prc": "1"})
         )
-        async with KiwoomRestClient(
-            settings=settings, min_request_interval_sec=interval
-        ) as client:
+        async with KiwoomRestClient(settings=settings, min_request_interval_sec=interval) as client:
             loop = asyncio.get_running_loop()
             await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {})
             t0 = loop.time()
@@ -185,9 +183,7 @@ async def test_pacing_disabled_when_interval_zero(settings: Settings) -> None:
         mock.post(PATH_MARKET).mock(
             return_value=httpx.Response(200, json={"return_code": 0, "cur_prc": "1"})
         )
-        async with KiwoomRestClient(
-            settings=settings, min_request_interval_sec=0.0
-        ) as client:
+        async with KiwoomRestClient(settings=settings, min_request_interval_sec=0.0) as client:
             loop = asyncio.get_running_loop()
             t0 = loop.time()
             for _ in range(5):
