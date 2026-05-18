@@ -17,7 +17,10 @@ jobs:
           enable-cache: true
 
       - name: Set up Python 3.14
-        run: uv python install 3.14
+        # 정확한 안정 릴리스로 고정 — `3.14` 만 요청하면 일부 uv 버전이
+        # 3.14.0rc2 프리릴리스를 잡아 pydantic 2.13.3 의 typing._eval_type
+        # (prefer_fwd_module) 불일치로 pytest 수집이 실패한다.
+        run: uv python install 3.14.0
 
       - name: Install dependencies
         run: uv sync --all-groups --frozen
