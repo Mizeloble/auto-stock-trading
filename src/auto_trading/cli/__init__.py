@@ -41,12 +41,14 @@ from ._profile_io import (
     validate_strategy_source,
 )
 
-app = typer.Typer(help="키움 자동매매 봇 CLI (모의투자 기본)")
-strategy_app = typer.Typer(help="전략 추천·프로파일 관리")
+# 명시적 typer.Typer 주석 — 서브모듈이 `cli.app` 등을 순환 import 로 참조할 때
+# mypy 가 정의 타입을 못 풀어 `has-type` 캐스케이드(20건)를 내던 문제 차단.
+app: typer.Typer = typer.Typer(help="키움 자동매매 봇 CLI (모의투자 기본)")
+strategy_app: typer.Typer = typer.Typer(help="전략 추천·프로파일 관리")
 app.add_typer(strategy_app, name="strategy")
-data_app = typer.Typer(help="데이터 파일 진단·정합성 검사.")
+data_app: typer.Typer = typer.Typer(help="데이터 파일 진단·정합성 검사.")
 app.add_typer(data_app, name="data")
-orders_app = typer.Typer(help="주문 저널 진단·복구 도구.")
+orders_app: typer.Typer = typer.Typer(help="주문 저널 진단·복구 도구.")
 app.add_typer(orders_app, name="orders")
 console = Console()
 
