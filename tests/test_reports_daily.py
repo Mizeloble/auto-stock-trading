@@ -383,6 +383,19 @@ def test_build_attaches_names_to_records_and_chosen_map() -> None:
     )
     report = build_daily_report(date="2026-05-06", events=events, snapshot=None)
     assert report.discovery_chosen_names == {"005930": "삼성전자", "001500": "한솔홀딩스"}
+
+
+def test_build_includes_blocked_symbol_names_in_name_map() -> None:
+    """게이트 전종목 차단(chosen 비어있음) 이어도 blocked 코드 이름이 맵에 담긴다."""
+    events = LogEvents(
+        discovery={
+            "chosen": [],
+            "blocked": [["005930", "KOSPI_below_sma"], ["005250", "KOSPI_below_sma"]],
+        },
+        symbol_names={"005930": "삼성전자", "005250": "녹십자"},
+    )
+    report = build_daily_report(date="2026-05-18", events=events, snapshot=None)
+    assert report.discovery_chosen_names == {"005930": "삼성전자", "005250": "녹십자"}
     assert {b.symbol: b.name for b in report.buys} == {"005930": "삼성전자", "001500": "한솔홀딩스"}
     assert {li.symbol: li.name for li in report.liquidations} == {
         "005930": "삼성전자",

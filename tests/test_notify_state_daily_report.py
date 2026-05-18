@@ -168,6 +168,21 @@ def test_format_renders_chosen_names_next_to_codes() -> None:
     assert "선정: 018880 한진, 010170 현대건설" in msg
 
 
+def test_format_renders_blocked_names_next_to_codes() -> None:
+    """차단 라인도 이름이 있으면 코드 옆에 붙는다 (게이트 전종목 차단 케이스)."""
+    msg = format_daily_report(
+        _payload(
+            discovery_chosen=[],
+            discovery_blocked=[
+                ["005930", "KOSPI_below_sma"],
+                ["005250", "KOSPI_below_sma"],
+            ],
+            discovery_chosen_names={"005930": "삼성전자", "005250": "녹십자"},
+        )
+    )
+    assert "차단: 005930 삼성전자(KOSPI_below_sma), 005250 녹십자(KOSPI_below_sma)" in msg
+
+
 def test_format_renders_pair_view_when_buy_and_liquidation_match() -> None:
     """같은 종목에 buy + liquidation 있으면 한 줄 페어 렌더로."""
     msg = format_daily_report(
