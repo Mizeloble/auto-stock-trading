@@ -19,8 +19,10 @@ from dataclasses import dataclass, field
 import structlog
 
 from ..kiwoom.rest import KiwoomRestClient
+from ..market.breadth import compute_breadth, evaluate_breadth_gate
 from ..market.index import IndexGate, IndexMomentumTracker, index_gate, update_index_momentum
 from ..market.rank import Market, RankedSymbol, top_volume
+from .profile import DaytradeBreadthGate
 from ..runner import PaperRunner
 from ..strategy.base import Strategy
 from ..strategy.intraday import IntradayMomentum
@@ -63,6 +65,7 @@ async def discover_and_arm(
     strategy_factory: Callable[..., Strategy] | None = None,
     markets: tuple[Market, ...] = ("KOSPI", "KOSDAQ"),
     exclude_etf: bool = True,
+    breadth_gate_config: DaytradeBreadthGate | None = None,
 ) -> DiscoveryResult:
     """발굴 → 게이트 → set_universe 한 번에. 통과 종목 0건이면 set_universe 호출 X.
 
@@ -85,6 +88,40 @@ async def discover_and_arm(
     gates: dict[str, IndexGate] = {}
     for m in needed_markets:
         gates[m] = await index_gate(rest, m)
+
+    # Phase 1 — 시총 200 breadth 게이트. enabled=False (기본) 면 skip → 회귀 0.
+    breadth_blocked: tuple[str, str] | None = None
+    if breadth_gate_config is not None and breadth_gate_config.enabled:
+        from pathlib import Path
+
+        breadth = compute_breadth(Path(breadth_gate_config.snapshot_dir))
+        result = evaluate_breadth_gate(
+            breadth,
+            min_advancing_pct=breadth_gate_config.min_advancing_pct,
+            min_mean_change_pct=breadth_gate_config.min_mean_change_pct,
+        )
+        log.info(
+            "daytrade.breadth_gate",
+            passed=result.passed,
+            reason=result.reason,
+            advancing_pct=round(breadth.advancing_pct, 3),
+            mean_change_pct=breadth.mean_change_pct,
+            sample=breadth.sample_size,
+        )
+        if not result.passed:
+            # 모든 후보 차단 — 명시적 reason 으로 blocked 마킹.
+            note = (
+                f"시총 200 breadth 게이트 차단 ({result.reason}: "
+                f"adv={breadth.advancing_pct:.0%}, mean={breadth.mean_change_pct:+.2f}%) "
+                f"— 매수 없이 청산 시각까지 대기."
+            )
+            blocked_all = [(c.symbol, f"breadth_{result.reason}") for c in candidates]
+            log.info(
+                "daytrade.universe_chosen", symbols=[], reason="breadth_blocked"
+            )
+            return DiscoveryResult(
+                chosen=[], blocked=blocked_all, gates=gates, note_ko=note
+            )
 
     chosen: list[RankedSymbol] = []
     blocked: list[tuple[str, str]] = []
