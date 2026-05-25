@@ -40,6 +40,19 @@
     4. `tail -1 data/snapshots/topcap-YYYY-MM-DD.jsonl | python -m json.tool` 스키마 확인.
   - **수동 1회 트리거**: `launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.marketcap-universe`
 
+- [ ] **`auto-trade ops` — LaunchAgent 자동실행 작업 가시성 (Phase 1) — 사용자 검증** (2026-05-25 구현 완료)
+  - **무엇**: `uv run auto-trade ops` 로 launchd 자동실행 작업 상태(Label / 마지막 실행 / Exit / 비고)를 한 화면 표 출력. `launchctl print` 의 `last exit code` + `logs/launchd-*.{out,err}.log` mtime 두 원천. Exit 표기: `0`=정상, 빨강 정수=비정상, `·`=이번 부팅 후 미실행, `-`=정보 없음.
+  - **왜**: "자동실행 작업이 많고 의도대로 도는지 모르겠다" 페인포인트 해소. 회의적 검토 결과 단순화·통합보다 가시성 먼저 (신뢰 없이 리팩토링하면 회귀 위험). churnfix-verify 같이 만료된 1회성은 비고에 "⚠ 만료된 1회성, 별도 정리" 표시 — 실제 정리는 별도 작업.
+  - **어떻게 확인**:
+    1. `uv run auto-trade ops` → 등록된 plist 수만큼 행 출력. 빈 디렉토리면 안내 메시지.
+    2. heartbeat-check (5분 간격) 가 `0`, 평일 아침에만 도는 잡들이 부팅 직후엔 `·`.
+    3. `uv run pytest tests/test_cli_ops.py -v` → 5 케이스 PASS.
+
+- [ ] **`auto-trade ops` Phase 2 — 추후 보강** (선택, Phase 1 운영 1~2주 후 별도 plan)
+  - **무엇**: ① "다음 예정 시각" 칸(plistlib + launchd 캘린더 시뮬레이션), ② "7일 예상 vs 실제 실행 횟수" 통계, ③ 텔레그램 `/ops` 명령(러너 떠 있을 때만 응답하는 비대칭 인지), ④ `scripts/launchd/schedules.yaml` 단일 출처에서 plist 8개 자동 생성.
+  - **왜**: 가시성 → 신뢰 → 구조 단순화 순서. 한 번에 너무 많이 하면 캘린더 로직 버그·로그 rotate 충돌 등 회귀 위험.
+  - **어떻게 확인**: 본 plan은 Phase 1 운영 안정 후 작성.
+
 ---
 
 ## 🚀 남은 과제 (선택)
