@@ -22,10 +22,10 @@ from ..kiwoom.rest import KiwoomRestClient
 from ..market.breadth import compute_breadth, evaluate_breadth_gate
 from ..market.index import IndexGate, IndexMomentumTracker, index_gate, update_index_momentum
 from ..market.rank import Market, RankedSymbol, top_volume
-from .profile import DaytradeBreadthGate
 from ..runner import PaperRunner
 from ..strategy.base import Strategy
 from ..strategy.intraday import IntradayMomentum
+from .profile import DaytradeBreadthGate
 
 log = structlog.get_logger(__name__)
 
@@ -90,7 +90,6 @@ async def discover_and_arm(
         gates[m] = await index_gate(rest, m)
 
     # Phase 1 — 시총 200 breadth 게이트. enabled=False (기본) 면 skip → 회귀 0.
-    breadth_blocked: tuple[str, str] | None = None
     if breadth_gate_config is not None and breadth_gate_config.enabled:
         from pathlib import Path
 
@@ -116,12 +115,8 @@ async def discover_and_arm(
                 f"— 매수 없이 청산 시각까지 대기."
             )
             blocked_all = [(c.symbol, f"breadth_{result.reason}") for c in candidates]
-            log.info(
-                "daytrade.universe_chosen", symbols=[], reason="breadth_blocked"
-            )
-            return DiscoveryResult(
-                chosen=[], blocked=blocked_all, gates=gates, note_ko=note
-            )
+            log.info("daytrade.universe_chosen", symbols=[], reason="breadth_blocked")
+            return DiscoveryResult(chosen=[], blocked=blocked_all, gates=gates, note_ko=note)
 
     chosen: list[RankedSymbol] = []
     blocked: list[tuple[str, str]] = []

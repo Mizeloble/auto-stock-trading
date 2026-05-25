@@ -239,7 +239,10 @@ async def test_breadth_gate_disabled_skips_check(monkeypatch) -> None:
 
     config = DaytradeBreadthGate(enabled=False)
     result = await orch.discover_and_arm(
-        rest=object(), runner=runner, top_n=1, breadth_gate_config=config  # type: ignore[arg-type]
+        rest=object(),
+        runner=runner,
+        top_n=1,
+        breadth_gate_config=config,  # type: ignore[arg-type]
     )
 
     assert [c.symbol for c in result.chosen] == ["005930"]
@@ -258,16 +261,20 @@ async def test_breadth_gate_blocks_when_weak(monkeypatch) -> None:
         orch, "index_gate", AsyncMock(side_effect=lambda _r, m: _gate(m, above=True))
     )
     weak = bd_mod.Breadth(
-        ts="X", sample_size=200, advancing_pct=0.2, declining_pct=0.7,
+        ts="X",
+        sample_size=200,
+        advancing_pct=0.2,
+        declining_pct=0.7,
         mean_change_pct=-1.0,
     )
     monkeypatch.setattr(orch, "compute_breadth", lambda *_a, **_kw: weak)
 
-    config = DaytradeBreadthGate(
-        enabled=True, min_advancing_pct=0.5, min_mean_change_pct=0.0
-    )
+    config = DaytradeBreadthGate(enabled=True, min_advancing_pct=0.5, min_mean_change_pct=0.0)
     result = await orch.discover_and_arm(
-        rest=object(), runner=runner, top_n=2, breadth_gate_config=config  # type: ignore[arg-type]
+        rest=object(),
+        runner=runner,
+        top_n=2,
+        breadth_gate_config=config,  # type: ignore[arg-type]
     )
 
     assert result.chosen == []
@@ -288,16 +295,20 @@ async def test_breadth_gate_passes_when_strong(monkeypatch) -> None:
         orch, "index_gate", AsyncMock(side_effect=lambda _r, m: _gate(m, above=True))
     )
     strong = bd_mod.Breadth(
-        ts="X", sample_size=200, advancing_pct=0.65, declining_pct=0.30,
+        ts="X",
+        sample_size=200,
+        advancing_pct=0.65,
+        declining_pct=0.30,
         mean_change_pct=0.5,
     )
     monkeypatch.setattr(orch, "compute_breadth", lambda *_a, **_kw: strong)
 
-    config = DaytradeBreadthGate(
-        enabled=True, min_advancing_pct=0.5, min_mean_change_pct=0.0
-    )
+    config = DaytradeBreadthGate(enabled=True, min_advancing_pct=0.5, min_mean_change_pct=0.0)
     result = await orch.discover_and_arm(
-        rest=object(), runner=runner, top_n=1, breadth_gate_config=config  # type: ignore[arg-type]
+        rest=object(),
+        runner=runner,
+        top_n=1,
+        breadth_gate_config=config,  # type: ignore[arg-type]
     )
 
     assert [c.symbol for c in result.chosen] == ["005930"]
@@ -318,7 +329,10 @@ async def test_breadth_gate_fail_open_when_no_data(monkeypatch) -> None:
 
     config = DaytradeBreadthGate(enabled=True)
     result = await orch.discover_and_arm(
-        rest=object(), runner=runner, top_n=1, breadth_gate_config=config  # type: ignore[arg-type]
+        rest=object(),
+        runner=runner,
+        top_n=1,
+        breadth_gate_config=config,  # type: ignore[arg-type]
     )
 
     assert [c.symbol for c in result.chosen] == ["005930"]

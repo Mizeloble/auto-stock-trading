@@ -22,9 +22,17 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 
 def _round(ts: str, items: list[tuple[str, float]]) -> list[dict]:
     return [
-        {"ts": ts, "symbol": sym, "change_pct": pct, "rank": i + 1,
-         "name": f"종목{i}", "market": "KOSPI",
-         "price": 100.0, "change": 0.0, "volume": 0}
+        {
+            "ts": ts,
+            "symbol": sym,
+            "change_pct": pct,
+            "rank": i + 1,
+            "name": f"종목{i}",
+            "market": "KOSPI",
+            "price": 100.0,
+            "change": 0.0,
+            "volume": 0,
+        }
         for i, (sym, pct) in enumerate(items)
     ]
 
@@ -67,36 +75,39 @@ def test_compute_breadth_skips_corrupt_lines(tmp_path: Path) -> None:
 
 def test_gate_passes_when_both_thresholds_met() -> None:
     breadth = bd.Breadth(
-        ts="X", sample_size=200, advancing_pct=0.65, declining_pct=0.30,
+        ts="X",
+        sample_size=200,
+        advancing_pct=0.65,
+        declining_pct=0.30,
         mean_change_pct=0.4,
     )
-    result = bd.evaluate_breadth_gate(
-        breadth, min_advancing_pct=0.5, min_mean_change_pct=0.0
-    )
+    result = bd.evaluate_breadth_gate(breadth, min_advancing_pct=0.5, min_mean_change_pct=0.0)
     assert result.passed is True
     assert result.reason == "ok"
 
 
 def test_gate_blocks_when_advancing_below() -> None:
     breadth = bd.Breadth(
-        ts="X", sample_size=200, advancing_pct=0.30, declining_pct=0.65,
+        ts="X",
+        sample_size=200,
+        advancing_pct=0.30,
+        declining_pct=0.65,
         mean_change_pct=0.4,  # mean 은 통과여도
     )
-    result = bd.evaluate_breadth_gate(
-        breadth, min_advancing_pct=0.5, min_mean_change_pct=0.0
-    )
+    result = bd.evaluate_breadth_gate(breadth, min_advancing_pct=0.5, min_mean_change_pct=0.0)
     assert result.passed is False
     assert result.reason == "advancing_pct_below"
 
 
 def test_gate_blocks_when_mean_below() -> None:
     breadth = bd.Breadth(
-        ts="X", sample_size=200, advancing_pct=0.55, declining_pct=0.40,
+        ts="X",
+        sample_size=200,
+        advancing_pct=0.55,
+        declining_pct=0.40,
         mean_change_pct=-0.2,
     )
-    result = bd.evaluate_breadth_gate(
-        breadth, min_advancing_pct=0.5, min_mean_change_pct=0.0
-    )
+    result = bd.evaluate_breadth_gate(breadth, min_advancing_pct=0.5, min_mean_change_pct=0.0)
     assert result.passed is False
     assert result.reason == "mean_change_pct_below"
 
@@ -104,8 +115,6 @@ def test_gate_blocks_when_mean_below() -> None:
 def test_gate_fail_open_when_unavailable() -> None:
     """데이터 부족이면 게이트 통과(기존 흐름 보존) + reason=no_data."""
     breadth = bd.Breadth.unavailable_instance("no_file")
-    result = bd.evaluate_breadth_gate(
-        breadth, min_advancing_pct=0.5, min_mean_change_pct=0.0
-    )
+    result = bd.evaluate_breadth_gate(breadth, min_advancing_pct=0.5, min_mean_change_pct=0.0)
     assert result.passed is True
     assert result.reason == "no_data"

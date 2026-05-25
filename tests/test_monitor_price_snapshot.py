@@ -21,12 +21,20 @@ from auto_trading.monitor import price_snapshot as ps
 
 
 def _make_universe(n: int = 3) -> list[MarketCapEntry]:
-    syms = [("005930", "삼성전자", "KOSPI"), ("000660", "SK하이닉스", "KOSPI"),
-            ("247540", "에코프로비엠", "KOSDAQ")]
+    syms = [
+        ("005930", "삼성전자", "KOSPI"),
+        ("000660", "SK하이닉스", "KOSPI"),
+        ("247540", "에코프로비엠", "KOSDAQ"),
+    ]
     return [
         MarketCapEntry(
-            rank=i + 1, symbol=sym, name=name, market=market,
-            shares=1_000_000, close=10_000, market_cap=10_000_000_000 - i,
+            rank=i + 1,
+            symbol=sym,
+            name=name,
+            market=market,
+            shares=1_000_000,
+            close=10_000,
+            market_cap=10_000_000_000 - i,
         )
         for i, (sym, name, market) in enumerate(syms[:n])
     ]
@@ -34,12 +42,27 @@ def _make_universe(n: int = 3) -> list[MarketCapEntry]:
 
 async def test_record_round_appends_jsonl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     quotes = {
-        "005930": Quote(symbol="005930", price=Decimal("70000"), change=Decimal("1000"),
-                        change_pct=Decimal("1.45"), volume=10_000_000),
-        "000660": Quote(symbol="000660", price=Decimal("150000"), change=Decimal("-2000"),
-                        change_pct=Decimal("-1.31"), volume=5_000_000),
-        "247540": Quote(symbol="247540", price=Decimal("200000"), change=Decimal("0"),
-                        change_pct=Decimal("0"), volume=2_000_000),
+        "005930": Quote(
+            symbol="005930",
+            price=Decimal("70000"),
+            change=Decimal("1000"),
+            change_pct=Decimal("1.45"),
+            volume=10_000_000,
+        ),
+        "000660": Quote(
+            symbol="000660",
+            price=Decimal("150000"),
+            change=Decimal("-2000"),
+            change_pct=Decimal("-1.31"),
+            volume=5_000_000,
+        ),
+        "247540": Quote(
+            symbol="247540",
+            price=Decimal("200000"),
+            change=Decimal("0"),
+            change_pct=Decimal("0"),
+            volume=2_000_000,
+        ),
     }
 
     async def fake_get_quote(_client, sym):
@@ -74,8 +97,9 @@ async def test_record_round_isolates_single_failure(
     async def fake_get_quote(_client, sym):
         if sym == "000660":
             raise RuntimeError("키움 일시 오류")
-        return Quote(symbol=sym, price=Decimal("1"), change=Decimal("0"),
-                     change_pct=Decimal("0"), volume=1)
+        return Quote(
+            symbol=sym, price=Decimal("1"), change=Decimal("0"), change_pct=Decimal("0"), volume=1
+        )
 
     monkeypatch.setattr(ps, "get_quote", fake_get_quote)
 
@@ -91,8 +115,9 @@ async def test_record_round_swallows_disk_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def fake_get_quote(_client, sym):
-        return Quote(symbol=sym, price=Decimal("1"), change=Decimal("0"),
-                     change_pct=Decimal("0"), volume=1)
+        return Quote(
+            symbol=sym, price=Decimal("1"), change=Decimal("0"), change_pct=Decimal("0"), volume=1
+        )
 
     monkeypatch.setattr(ps, "get_quote", fake_get_quote)
     recorder = ps.PriceSnapshotRecorder(path=tmp_path / "topcap.jsonl")

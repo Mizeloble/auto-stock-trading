@@ -37,8 +37,13 @@ def _fake_entries(n: int = 3) -> list[MarketCapEntry]:
     ]
     return [
         MarketCapEntry(
-            rank=i + 1, symbol=sym, name=name, market=market,
-            shares=1_000_000, close=10_000, market_cap=cap,
+            rank=i + 1,
+            symbol=sym,
+            name=name,
+            market=market,
+            shares=1_000_000,
+            close=10_000,
+            market_cap=cap,
         )
         for i, (sym, name, market, cap) in enumerate(base[:n])
     ]
@@ -47,12 +52,9 @@ def _fake_entries(n: int = 3) -> list[MarketCapEntry]:
 def test_build_marketcap_universe_writes_cache(
     isolated_cwd: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from auto_trading.cli import _ops  # 데코레이터 등록 보장
     from auto_trading.market import marketcap
 
-    monkeypatch.setattr(
-        marketcap, "compute_top_marketcap_universe", lambda **kw: _fake_entries(3)
-    )
+    monkeypatch.setattr(marketcap, "compute_top_marketcap_universe", lambda **kw: _fake_entries(3))
 
     out_dir = isolated_cwd / "snapshots"
     result = CliRunner().invoke(
@@ -96,9 +98,7 @@ def _seed_universe(out_dir: Path, when: date | None = None) -> Path:
     return path
 
 
-def test_snapshot_top200_appends_jsonl(
-    isolated_cwd: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_snapshot_top200_appends_jsonl(isolated_cwd: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from auto_trading import cli as cli_pkg
     from auto_trading.monitor import price_snapshot as ps
 
@@ -116,8 +116,13 @@ def test_snapshot_top200_appends_jsonl(
     monkeypatch.setattr(cli_pkg, "KiwoomRestClient", _FakeClient)
 
     async def fake_get_quote(_client, sym):
-        return Quote(symbol=sym, price=Decimal("70000"), change=Decimal("0"),
-                     change_pct=Decimal("0"), volume=1)
+        return Quote(
+            symbol=sym,
+            price=Decimal("70000"),
+            change=Decimal("0"),
+            change_pct=Decimal("0"),
+            volume=1,
+        )
 
     monkeypatch.setattr(ps, "get_quote", fake_get_quote)
 
@@ -130,8 +135,10 @@ def test_snapshot_top200_appends_jsonl(
         app,
         [
             "snapshot-top200",
-            "--universe-dir", str(universe_dir),
-            "--out-dir", str(universe_dir),
+            "--universe-dir",
+            str(universe_dir),
+            "--out-dir",
+            str(universe_dir),
         ],
     )
     assert result.exit_code == 0, result.output
@@ -156,8 +163,10 @@ def test_snapshot_top200_errors_when_no_universe(isolated_cwd: Path) -> None:
         app,
         [
             "snapshot-top200",
-            "--universe-dir", str(isolated_cwd / "empty"),
-            "--out-dir", str(isolated_cwd / "empty"),
+            "--universe-dir",
+            str(isolated_cwd / "empty"),
+            "--out-dir",
+            str(isolated_cwd / "empty"),
         ],
     )
     assert result.exit_code == 1
@@ -169,10 +178,10 @@ def test_snapshot_top200_falls_back_to_yesterday(
     isolated_cwd: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """오늘 universe 없으면 어제 캐시로 폴백."""
+    from datetime import timedelta as _td
+
     from auto_trading import cli as cli_pkg
     from auto_trading.monitor import price_snapshot as ps
-
-    from datetime import timedelta as _td
 
     universe_dir = isolated_cwd / "snap"
     yesterday = datetime.now(KST).date() - _td(days=1)
@@ -188,8 +197,9 @@ def test_snapshot_top200_falls_back_to_yesterday(
     monkeypatch.setattr(cli_pkg, "KiwoomRestClient", _FakeClient)
 
     async def fake_get_quote(_client, sym):
-        return Quote(symbol=sym, price=Decimal("1"), change=Decimal("0"),
-                     change_pct=Decimal("0"), volume=1)
+        return Quote(
+            symbol=sym, price=Decimal("1"), change=Decimal("0"), change_pct=Decimal("0"), volume=1
+        )
 
     monkeypatch.setattr(ps, "get_quote", fake_get_quote)
 
@@ -202,8 +212,10 @@ def test_snapshot_top200_falls_back_to_yesterday(
         app,
         [
             "snapshot-top200",
-            "--universe-dir", str(universe_dir),
-            "--out-dir", str(universe_dir),
+            "--universe-dir",
+            str(universe_dir),
+            "--out-dir",
+            str(universe_dir),
         ],
     )
     assert result.exit_code == 0, result.output

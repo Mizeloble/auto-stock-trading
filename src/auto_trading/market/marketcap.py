@@ -91,7 +91,7 @@ def _fetch_market(query_date: date, market: Market) -> list[tuple[str, str, int,
             market_cap = int(row.get("Marcap", 0) or 0)
             shares = int(row.get("Stocks", 0) or 0)
             close = int(row.get("Close", 0) or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         if not sym or market_cap <= 0 or shares <= 0 or close <= 0:
             continue

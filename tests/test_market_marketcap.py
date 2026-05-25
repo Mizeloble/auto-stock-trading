@@ -51,10 +51,7 @@ def test_compute_merges_and_sorts_by_marketcap_desc(monkeypatch: pytest.MonkeyPa
 
 
 def test_compute_top_n_truncates(monkeypatch: pytest.MonkeyPatch) -> None:
-    kospi = [
-        (f"00000{i}", f"종목{i}", (10 - i) * 1_000_000_000, 1000, 100)
-        for i in range(10)
-    ]
+    kospi = [(f"00000{i}", f"종목{i}", (10 - i) * 1_000_000_000, 1000, 100) for i in range(10)]
     monkeypatch.setattr(mc, "_fetch_market", _fake_fetch(kospi, []))
 
     entries = mc.compute_top_marketcap_universe(top_n=3, base_date=date(2026, 5, 20))

@@ -150,13 +150,9 @@ def evaluate_breadth_gate(
         return BreadthGateResult(passed=True, breadth=breadth, reason="no_data")
 
     if breadth.advancing_pct < min_advancing_pct:
-        return BreadthGateResult(
-            passed=False, breadth=breadth, reason="advancing_pct_below"
-        )
+        return BreadthGateResult(passed=False, breadth=breadth, reason="advancing_pct_below")
     if breadth.mean_change_pct < min_mean_change_pct:
-        return BreadthGateResult(
-            passed=False, breadth=breadth, reason="mean_change_pct_below"
-        )
+        return BreadthGateResult(passed=False, breadth=breadth, reason="mean_change_pct_below")
     return BreadthGateResult(passed=True, breadth=breadth, reason="ok")
 
 

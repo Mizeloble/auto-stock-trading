@@ -531,9 +531,7 @@ def build_marketcap_universe(
 
     path = universe_path_for(out_dir)
     save_universe(entries, path, top_n=top_n)
-    cli.console.print(
-        f"[green]✓ 시총 마스터 저장:[/green] {path} ({len(entries)}건)"
-    )
+    cli.console.print(f"[green]✓ 시총 마스터 저장:[/green] {path} ({len(entries)}건)")
     cli.console.print(
         f"[dim]1위: {entries[0].symbol} {entries[0].name} · "
         f"시총 {entries[0].market_cap / 1e12:.1f}조[/dim]"
@@ -566,7 +564,7 @@ def snapshot_top200(
     """시총 상위 200 종목 현재가 1라운드 스냅샷 → JSONL append.
 
     무엇/왜:
-    - launchd 가 매 10분 (평일 09:00–15:30 KST) 호출 → 약 30초간 200종목 `ka10001`
+    - launchd 가 매 10분 (평일 09:00-15:30 KST) 호출 → 약 30초간 200종목 `ka10001`
       호출 → `data/snapshots/topcap-YYYY-MM-DD.jsonl` 에 append.
     - universe 가 없으면 어제(또는 그 전 거래일) 캐시로 폴백 — 마스터 잡이 늦거나
       실패한 경우에도 스냅샷은 계속 쌓이도록.
@@ -598,9 +596,7 @@ def snapshot_top200(
             if universe:
                 chosen_path = cand
                 if offset > 0 and not fallback_to_yesterday:
-                    cli.console.print(
-                        f"[yellow]오늘 universe 없음 — 폴백 비활성이라 종료.[/yellow]"
-                    )
+                    cli.console.print("[yellow]오늘 universe 없음 — 폴백 비활성이라 종료.[/yellow]")
                     raise typer.Exit(code=1)
                 break
 
@@ -612,9 +608,7 @@ def snapshot_top200(
         raise typer.Exit(code=1)
 
     if chosen_path and chosen_path.name != f"universe-{today.isoformat()}.json":
-        cli.console.print(
-            f"[yellow]오늘 universe 없음 — 폴백 사용:[/yellow] {chosen_path.name}"
-        )
+        cli.console.print(f"[yellow]오늘 universe 없음 — 폴백 사용:[/yellow] {chosen_path.name}")
 
     out_path = snapshot_path_for(out_dir)
     index_path = index_snapshot_path_for(out_dir)
@@ -628,9 +622,5 @@ def snapshot_top200(
             return len(entries), len(indices)
 
     ok, idx_ok = asyncio.run(_run())
-    cli.console.print(
-        f"[green]✓ 스냅샷 1라운드:[/green] 종목 {ok}/{len(universe)}건 → {out_path}"
-    )
-    cli.console.print(
-        f"[green]✓ 지수 스냅샷:[/green] {idx_ok}/2건 (KOSPI/KOSDAQ) → {index_path}"
-    )
+    cli.console.print(f"[green]✓ 스냅샷 1라운드:[/green] 종목 {ok}/{len(universe)}건 → {out_path}")
+    cli.console.print(f"[green]✓ 지수 스냅샷:[/green] {idx_ok}/2건 (KOSPI/KOSDAQ) → {index_path}")
