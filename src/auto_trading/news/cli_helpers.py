@@ -23,7 +23,12 @@ from ..market import calendar as krx_calendar
 from ..reports.daily import DailyReport, merge_symbol_names
 from ..strategy.scanner import RegimeReport
 from .collector import NewsItem
-from .profile_writer import ApplyResult, apply_and_persist, format_apply_message
+from .profile_writer import (
+    ApplyResult,
+    apply_and_persist,
+    format_apply_message,
+    format_inputs_block,
+)
 from .proposal import DaytradeProposal, propose_daytrade_profile
 
 log = structlog.get_logger(__name__)
@@ -100,7 +105,18 @@ def run_weekly_proposal_cycle(
         target_path=target_path or current_path,
         fallback_path=fallback_path,
     )
-    msg = format_apply_message(result, proposal, symbol_names=merge_symbol_names(inputs.reports))
+    inputs_block = format_inputs_block(
+        reports=inputs.reports,
+        news_total=len(inputs.news),
+        news_to_llm=min(len(inputs.news), max_news_items),
+        regime=regime,
+    )
+    msg = format_apply_message(
+        result,
+        proposal,
+        symbol_names=merge_symbol_names(inputs.reports),
+        inputs_block=inputs_block,
+    )
     return proposal, result, msg
 
 

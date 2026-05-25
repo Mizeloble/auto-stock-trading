@@ -27,11 +27,28 @@ from .collector import NewsItem
 
 
 class DaytradeProposal(BaseModel):
-    """LLM 응답 검증. 모든 변경 필드는 옵션 — None 이면 "유지"."""
+    """LLM 응답 검증. 모든 변경 필드는 옵션 — None 이면 "유지".
+
+    근거 구조 (📝 섹션):
+    - signals_ko: 봇이 입력 데이터에서 본 패턴들. 각 1문장, 정량 단서 포함.
+    - judgment_ko: 시그널을 어떻게 해석했나 (2~3문장).
+    - referenced_headlines_ko: 결정에 영향을 준 뉴스 헤드라인 인용.
+    - weekly_memo_ko: 다음 주에 사용자가 봐줘야 할 1가지 (옵션).
+
+    변경별 이유 (📌):
+    - change_reasons[키]: 그 변경을 "왜 정확히 이 값으로" 바꿨는지 1~2문장. 키는
+      변경 가능 필드명(top_n, stop_loss_pct, …)과 일치. 표시 단에서 매칭 안 되는
+      키는 무시되니 LLM 이 키를 헷갈려도 안전.
+    """
 
     summary_ko: str = Field(min_length=1, max_length=300)
-    rationale_ko: str = Field(min_length=1, max_length=800)
     confidence: float = Field(ge=0.0, le=1.0)
+
+    # 📝 근거 4섹션
+    signals_ko: list[str] = Field(default_factory=list, max_length=5)
+    judgment_ko: str = Field(default="", max_length=400)
+    referenced_headlines_ko: list[str] = Field(default_factory=list, max_length=5)
+    weekly_memo_ko: str | None = Field(default=None, max_length=200)
 
     # 변경 제안 — 23단계 Phase A~G 의 RiskLimits·params 와 1:1 매핑.
     top_n: int | None = Field(default=None, ge=1, le=10)
@@ -43,6 +60,9 @@ class DaytradeProposal(BaseModel):
     partial_take_pct: float | None = Field(default=None, ge=0.0, le=0.10)
     partial_take_qty_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
     daily_loss_kill: bool | None = None
+
+    # 📌 변경별 이유 — 키는 위 변경 필드명, 값은 1~2문장.
+    change_reasons: dict[str, str] = Field(default_factory=dict, max_length=20)
 
     themes_to_watch: list[str] = Field(default_factory=list, max_length=10)
     symbols_to_avoid: list[str] = Field(default_factory=list, max_length=20)
@@ -76,15 +96,26 @@ regime 별 일반 가이드:
 - partial_take_qty_ratio: 0.0~1.0 (부분 익절 비율, 보통 0.5)
 - daily_loss_kill: bool (일일 -3% 손실 시 강제 청산)
 
-규칙:
-- 변경할 필드만 채우고, 유지할 필드는 비워두세요(필드 자체를 응답에 포함하지 말 것).
-- summary_ko: 한국어 1~3문장 — 다음 주 핵심 변경.
-- rationale_ko: 한국어 4~10문장 — 데이터·뉴스·regime 근거.
-- summary_ko·rationale_ko 에서 종목을 언급할 때는 "코드 종목명" 형식(예: "005930 삼성전자")으로. 입력의 reports.symbol_names 와 chosen_freq_top.name 참고.
+규칙 (필드 작성):
+- 변경 가능 파라미터(top_n, cooldown_min, …)는 **바꿀 것만** 채우고 유지할 것은 비워두세요(필드 자체를 응답에 포함하지 말 것).
+- summary_ko: 한국어 1~3문장 — 다음 주 핵심 변경의 한 줄 요약.
+- signals_ko: 입력 데이터에서 본 **정량적 패턴 2~4개**. 각 1문장. 숫자(건수·%·일수) 를 가능한 한 인용. 예) "지난 7일 매수 18건 중 13건이 1.2~1.5% 구간에서 손절, 평균 보유 8분 → 노이즈 손절 우세".
+- judgment_ko: 위 시그널을 어떻게 해석했나 (2~3문장). 결론과 근거를 함께. 예) "ATR(일간 평균 변동폭) 4.27% 환경에서 1.2% 손절은 일중 노이즈와 겹쳐 발동이 잦음. 1.5~1.8% 가 ATR 의 0.35~0.42배로 안전 마진 확보 가능".
+- referenced_headlines_ko: 결정에 직접 영향을 준 뉴스 헤드라인을 짧게 인용 2~3개. 한 줄에 1개. 예) "원·달러 1,500원 고착 — 외환 변동성 장기화".
+- weekly_memo_ko (옵션): 다음 주 사용자가 특별히 봐줘야 할 1가지. 예) "FOMC 결과에 따라 daily_loss_kill 발동 가능성 ↑, 모니터링 권장".
+- change_reasons: 바꾼 파라미터마다 **그 변경의 정확한 이유 1~2문장**. 키는 변경 필드명(top_n, stop_loss_pct 등)과 일치. 예) {"stop_loss_pct": "손절 발동 13건 중 9건이 노이즈(재진입 후 +0.8% 반등). 1.8% 로 넓혀 ATR 안전 마진 확보."}.
 - themes_to_watch: 다음 주 주목할 섹터/테마 (최대 10).
 - symbols_to_avoid: 다음 주 피할 종목 코드 (최대 20). 이 필드는 코드만(예: "005930") — 종목명은 시스템이 표시 단계에서 붙임.
 - confidence: 0.0~1.0, 데이터 충실도·일관성 기반.
+- 어디서든 종목 언급 시 "코드 종목명" 형식(예: "005930 삼성전자"). 입력의 reports.symbol_names 와 chosen_freq_top.name 참고.
 - 추가 텍스트 응답 없이 propose_daytrade_profile 도구 호출만 하세요.
+
+작성 톤 (사용자는 주식 초보자):
+- 영문 약자·지표명(ATR, BB폭, regime, momentum, ADX 등)은 처음 등장할 때 괄호로 한국어 풀이를 붙이세요. 예) "ATR(일간 평균 변동폭) 4.27%".
+- YAML 키(stop_loss_pct, cooldown_min 등)를 본문에 그대로 쓰지 말고 사람말로. 예) "stop_loss_pct" → "손절선", "cooldown_min" → "재진입 대기 시간". 키가 꼭 필요하면 사람말 옆에 괄호로.
+- 한 문장에 전문용어를 2개 이상 동시에 쓰지 마세요. 한 문장에 한 개념씩.
+- 가능하면 일상 비유 1~2개 ("노이즈에 흔들리지 않게", "급등 초기에 못 잡더라도 …" 등) 를 섞어 직관을 돕습니다.
+- change_reasons 본문에서 **수치를 인용** 하세요 — "그래서 왜 이 값인가" 가 숫자로 뒷받침되어야 사용자가 납득합니다.
 """
 
 PROPOSE_TOOL = {
@@ -94,8 +125,30 @@ PROPOSE_TOOL = {
         "type": "object",
         "properties": {
             "summary_ko": {"type": "string", "minLength": 1, "maxLength": 300},
-            "rationale_ko": {"type": "string", "minLength": 1, "maxLength": 800},
             "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "signals_ko": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                "maxItems": 5,
+                "description": "봇이 입력 데이터에서 본 패턴 (각 1문장, 정량 단서 포함).",
+            },
+            "judgment_ko": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400,
+                "description": "시그널을 어떻게 해석했나 (2~3문장).",
+            },
+            "referenced_headlines_ko": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                "maxItems": 5,
+                "description": "결정에 영향을 준 뉴스 헤드라인 인용.",
+            },
+            "weekly_memo_ko": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "다음 주 사용자가 봐줘야 할 1가지 (옵션).",
+            },
             "top_n": {"type": "integer", "minimum": 1, "maximum": 10},
             "cooldown_min": {"type": "integer", "minimum": 0, "maximum": 240},
             "momentum_lookback_min": {"type": "integer", "minimum": 1, "maximum": 60},
@@ -105,6 +158,14 @@ PROPOSE_TOOL = {
             "partial_take_pct": {"type": "number", "minimum": 0.0, "maximum": 0.10},
             "partial_take_qty_ratio": {"type": "number", "minimum": 0.0, "maximum": 1.0},
             "daily_loss_kill": {"type": "boolean"},
+            "change_reasons": {
+                "type": "object",
+                "description": (
+                    "변경 키 → 1~2문장 이유. 키는 변경 가능 필드명(top_n, stop_loss_pct, "
+                    "cooldown_min 등)과 일치해야 표시됨."
+                ),
+                "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 300},
+            },
             "themes_to_watch": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -116,7 +177,7 @@ PROPOSE_TOOL = {
                 "maxItems": 20,
             },
         },
-        "required": ["summary_ko", "rationale_ko", "confidence"],
+        "required": ["summary_ko", "signals_ko", "judgment_ko", "confidence"],
     },
 }
 
@@ -326,7 +387,20 @@ def format_proposal_message(
         )
     lines.append("")
     lines.append("📝 근거")
-    lines.append(proposal.rationale_ko)
+    if proposal.signals_ko:
+        lines.append("📍 시그널")
+        for s in proposal.signals_ko:
+            lines.append(f"  • {s}")
+    if proposal.judgment_ko:
+        lines.append("🎯 판단")
+        lines.append(f"  {proposal.judgment_ko}")
+    if proposal.referenced_headlines_ko:
+        lines.append("🗞 영향 헤드라인")
+        for h in proposal.referenced_headlines_ko:
+            lines.append(f"  • {h}")
+    if proposal.weekly_memo_ko:
+        lines.append("📅 다음 주 메모")
+        lines.append(f"  {proposal.weekly_memo_ko}")
     lines.append("")
     lines.append(f"신뢰도: {proposal.confidence:.2f}")
     return "\n".join(lines)

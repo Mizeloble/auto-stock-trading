@@ -12,13 +12,17 @@ from auto_trading.daytrade.profile import (
     DaytradeStrategyParams,
 )
 from auto_trading.news.profile_writer import (
+    ApplyResult,
     SafetyCaps,
     apply_and_persist,
     apply_proposal,
     format_apply_message,
+    format_inputs_block,
     write_with_backup,
 )
 from auto_trading.news.proposal import DaytradeProposal
+from auto_trading.reports.daily import DailyReport
+from auto_trading.strategy.scanner import MarketRegime, RegimeReport
 
 
 def _base_profile() -> DaytradeProfile:
@@ -192,7 +196,11 @@ def test_format_apply_message_with_changes() -> None:
     result = apply_proposal(prop, base)
     msg = format_apply_message(result, prop)
     assert "✅ 적용된 변경" in msg
-    assert "top_n: 3 → 2" in msg
+    # 새 형식: "• 동시 보유 종목 수 (top_n): 3 → 2" + 풀이 라인.
+    assert "동시 보유 종목 수" in msg
+    assert "(top_n)" in msg
+    assert "3 → 2" in msg
+    assert "👍" in msg  # 글로서리 풀이가 메시지에 들어갔다는 표시
     assert "📡 주목 테마: 반도체" in msg
 
 
@@ -218,3 +226,154 @@ def test_apply_preserves_created_at_and_updates_last_updated_at(tmp_path: Path) 
     out = apply_proposal(prop, base)
     assert out.applied_profile.created_at == datetime(2026, 4, 1, tzinfo=KST)
     assert out.applied_profile.last_updated_at is not None
+
+
+# ---- format_inputs_block (정량 입력 블록) ---------------------------------
+
+
+def _stub_report(
+    iso_date: str,
+    *,
+    buys: int = 0,
+    liqs: int = 0,
+    errors: int = 0,
+    realized_after_cost: float | None = None,
+    turnover: float | None = None,
+) -> DailyReport:
+    """format_inputs_block 만 호출하므로 표시에 안 쓰이는 필드는 안전한 기본값."""
+    return DailyReport(
+        date=iso_date,
+        mode="day-trade",
+        dry_run=False,
+        discovery_chosen=[],
+        discovery_blocked=[],
+        market_gates=[],
+        buys=[None] * buys,  # type: ignore[list-item]
+        liquidations=[None] * liqs,  # type: ignore[list-item]
+        error_count=errors,
+        note_ko="",
+        realized_pnl_after_cost=realized_after_cost,
+        turnover_ratio=turnover,
+    )
+
+
+def test_format_inputs_block_with_reports_and_regime() -> None:
+    reports = [
+        _stub_report(
+            "2026-05-18", buys=3, liqs=0, errors=1, realized_after_cost=20000.0, turnover=0.04
+        ),
+        _stub_report(
+            "2026-05-22", buys=5, liqs=1, errors=2, realized_after_cost=60000.0, turnover=0.07
+        ),
+    ]
+    regime = RegimeReport(
+        regime=MarketRegime.HIGH_VOL,
+        metrics={"atr_pct": 0.0427, "bb_width_pct": 0.336},
+        summary_ko="고변동성 (ATR 4.27% / 봉) — 추세·박스 신호가 휩쓸릴 위험.",
+    )
+    out = format_inputs_block(reports=reports, news_total=190, news_to_llm=80, regime=regime)
+    assert "📊 이번 결정의 입력" in out
+    assert "2026-05-18 ~ 2026-05-22 (2일)" in out
+    assert "매수 8건 / 청산 1건 / 에러 3건" in out
+    assert "실현손익 표본 2일" in out
+    assert "+40,000원" in out  # (20000 + 60000) / 2
+    assert "평균 회전율 5.5%" in out  # (0.04 + 0.07) / 2 * 100
+    assert "high_vol" in out
+    assert "수집 190건 → LLM 에 80건" in out
+
+
+def test_format_inputs_block_no_reports_no_regime() -> None:
+    out = format_inputs_block(reports=[], news_total=0, news_to_llm=0, regime=None)
+    assert "일일 리포트 0건 — 데이터 부족" in out
+    assert "시장국면: 정보 없음" in out
+    assert "입력 뉴스: 수집 0건" in out
+
+
+def test_format_inputs_block_reports_without_pnl_or_turnover() -> None:
+    reports = [_stub_report("2026-05-22", buys=1)]
+    out = format_inputs_block(reports=reports, news_total=10, news_to_llm=10, regime=None)
+    assert "매수 1건" in out
+    # 손익·회전율 데이터 없을 때 해당 라인은 생략 (메시지 깨지지 않게).
+    assert "실현손익" not in out
+    assert "회전율" not in out
+
+
+# ---- format_apply_message — 변경별 이유 + 4섹션 근거 -------------------
+
+
+def _proposal_with_changes_and_reasons() -> DaytradeProposal:
+    return DaytradeProposal(
+        summary_ko="고변동성 대응 + 회전율 축소",
+        confidence=0.6,
+        signals_ko=[
+            "지난 7일 매수 18건 중 13건이 1.2~1.5% 구간에서 손절",
+            "외국인 순매도 4일 누적, KOSPI 5일 변동성 +28%",
+        ],
+        judgment_ko="ATR 4.27% 환경에서 1.2% 손절은 노이즈와 겹침. 1.8% 가 안전 마진.",
+        referenced_headlines_ko=[
+            "원·달러 1,500원 고착 — 외환 변동성 장기화",
+            "외국인, 코스피 4일 연속 순매도",
+        ],
+        weekly_memo_ko="FOMC 결과에 따라 daily_loss_kill 발동 가능성, 모니터링 권장.",
+        top_n=4,
+        stop_loss_pct=0.018,
+        change_reasons={
+            "stop_loss_pct": "손절 13건 중 9건이 노이즈 발동(재진입 후 +0.8% 반등). 1.8% 로 ATR 안전 마진 확보.",
+            "top_n": "회전율 축소 위해 한 종목 비중 ↓, 분산 ↑.",
+        },
+    )
+
+
+def test_format_apply_message_renders_change_reasons_under_each_change() -> None:
+    proposal = _proposal_with_changes_and_reasons()
+    result = ApplyResult(
+        applied_profile=_base_profile(),
+        accepted=["top_n: 3 → 4", "stop_loss_pct: 0.012 → 0.018"],
+    )
+    msg = format_apply_message(result, proposal)
+    # 변경마다 정의/👍/👎 + 📌 이번에 바꾼 이유 가 함께 표시.
+    assert "📌 이번에 바꾼 이유: 회전율 축소 위해" in msg
+    assert "📌 이번에 바꾼 이유: 손절 13건 중 9건이 노이즈" in msg
+
+
+def test_format_apply_message_renders_4section_rationale() -> None:
+    proposal = _proposal_with_changes_and_reasons()
+    result = ApplyResult(applied_profile=_base_profile(), accepted=["top_n: 3 → 4"])
+    msg = format_apply_message(result, proposal)
+    assert "📝 근거" in msg
+    assert "📍 시그널" in msg
+    assert "지난 7일 매수 18건" in msg
+    assert "🎯 판단" in msg
+    assert "ATR 4.27% 환경" in msg
+    assert "🗞 영향 헤드라인" in msg
+    assert "원·달러 1,500원 고착" in msg
+    assert "📅 다음 주 메모" in msg
+    assert "FOMC" in msg
+
+
+def test_format_apply_message_omits_empty_rationale_sections() -> None:
+    """signals_ko/judgment_ko 등 빈 섹션은 헤더가 안 나타나야 메시지가 깔끔."""
+    proposal = DaytradeProposal(summary_ko="유지", confidence=0.5)
+    result = ApplyResult(applied_profile=_base_profile())
+    msg = format_apply_message(result, proposal)
+    assert "📍 시그널" not in msg
+    assert "🎯 판단" not in msg
+    assert "🗞 영향 헤드라인" not in msg
+    assert "📅 다음 주 메모" not in msg
+
+
+def test_format_apply_message_with_inputs_block_inserted() -> None:
+    proposal = DaytradeProposal(summary_ko="x", confidence=0.5)
+    result = ApplyResult(applied_profile=_base_profile())
+    msg = format_apply_message(result, proposal, inputs_block="📊 이번 결정의 입력\n• 매수 8건")
+    assert "📊 이번 결정의 입력" in msg
+    assert "매수 8건" in msg
+
+
+def test_format_apply_message_skips_missing_reason() -> None:
+    """change_reasons 에 키가 없으면 풀이만 표시되고 ``📌`` 라인은 생략."""
+    proposal = DaytradeProposal(summary_ko="x", confidence=0.5, top_n=4, change_reasons={})
+    result = ApplyResult(applied_profile=_base_profile(), accepted=["top_n: 3 → 4"])
+    msg = format_apply_message(result, proposal)
+    assert "(top_n): 3 → 4" in msg
+    assert "📌 이번에 바꾼 이유" not in msg

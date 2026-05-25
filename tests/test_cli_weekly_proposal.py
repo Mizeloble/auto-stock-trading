@@ -118,7 +118,9 @@ def test_weekly_proposal_full_cycle(isolated_cwd: Path, monkeypatch: pytest.Monk
         )
 
     assert result.exit_code == 0, result.output
-    assert "top_n: 3 → 2" in result.output
+    # 새 형식: "• 동시 보유 종목 수 (top_n): 3 → 2" + 글로서리 풀이 라인.
+    assert "(top_n): 3 → 2" in result.output
+    assert "동시 보유 종목 수" in result.output
     target = isolated_cwd / "strategies" / "profiles" / "daytrade-current.yaml"
     assert target.exists()
     loaded = DaytradeProfile.load_yaml(target)

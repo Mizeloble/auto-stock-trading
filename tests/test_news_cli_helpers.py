@@ -109,7 +109,12 @@ def test_run_cycle_target_path_defaults_to_current_when_none(tmp_path: Path) -> 
     assert mock_apply.call_args.kwargs["target_path"] == current
     assert mock_apply.call_args.kwargs["current_path"] == current
     assert mock_apply.call_args.kwargs["fallback_path"] == fallback
-    mock_fmt.assert_called_once_with(fake_result, fake_proposal, symbol_names={})
+    # 새 시그니처: cycle 이 inputs_block 도 생성해서 함께 전달.
+    mock_fmt.assert_called_once()
+    fmt_args, fmt_kwargs = mock_fmt.call_args
+    assert fmt_args == (fake_result, fake_proposal)
+    assert fmt_kwargs["symbol_names"] == {}
+    assert "📊 이번 결정의 입력" in fmt_kwargs["inputs_block"]
 
 
 def test_run_cycle_explicit_target_path_used(tmp_path: Path) -> None:
