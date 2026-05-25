@@ -229,7 +229,7 @@ def propose_daytrade_profile(
     current_profile: dict[str, Any] | None = None,
     regime: RegimeReport | None = None,
     model: str = "claude-opus-4-7",
-    max_tokens: int = 1024,
+    max_tokens: int = 4096,
     max_news_items: int = 80,
 ) -> DaytradeProposal:
     """LLM 호출 → DaytradeProposal. 검증 실패 시 ValidationError raise.
