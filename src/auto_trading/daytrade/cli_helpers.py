@@ -35,7 +35,7 @@ from ..strategy.base import Strategy
 from ..strategy.index_daytrade import IndexMomentumDayTrade
 from ..strategy.intraday import IntradayMomentum
 from .orchestrator import discover_and_arm, start_momentum_loop
-from .profile import DaytradeProfile
+from .profile import DaytradeBreadthGate, DaytradeProfile
 
 console = Console()
 
@@ -241,6 +241,7 @@ async def paper_day_main(
             delay=discover_delay,
             exclude_etf=exclude_etf,
             strategy_factory=factory,
+            breadth_gate_config=profile.breadth_gate if profile else None,
         ),
         name="day-discover",
     )
@@ -274,6 +275,7 @@ async def paper_day_with_commands(
             delay=discover_delay,
             exclude_etf=exclude_etf,
             strategy_factory=factory,
+            breadth_gate_config=profile.breadth_gate if profile else None,
         ),
         name="day-discover",
     )
@@ -333,6 +335,7 @@ async def delayed_discover(
     delay: int,
     exclude_etf: bool = True,
     strategy_factory: Callable[..., Strategy] | None = None,
+    breadth_gate_config: DaytradeBreadthGate | None = None,
 ) -> None:
     """러너 시동 후 `delay` 초 대기 → discover_and_arm.
 
@@ -349,6 +352,7 @@ async def delayed_discover(
                 top_n=top_n,
                 exclude_etf=exclude_etf,
                 strategy_factory=strategy_factory,
+                breadth_gate_config=breadth_gate_config,
             )
         console.print(f"[cyan]발굴 결과:[/cyan] {result.note_ko}")
         # 종목명도 함께 — 텔레그램이 코드+이름 ("005930 삼성전자") 으로 표시.

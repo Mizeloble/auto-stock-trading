@@ -13,6 +13,33 @@
   - **왜**: PR2 가 *발견* 까지만 구현. 자동 매칭/동기화는 키움 미체결 TR 코드 probe 가 선행이라 분리했다.
   - **어떻게 확인**: 키움 미체결 TR probe → 재조회 매칭 → 저널/ state 정합 테스트.
 
+- [ ] **시총 상위 200 스냅샷 — 사용자 검증** (2026-05-21 구현 완료, 첫 시동 성공)
+  - **무엇**: KRX 시총 상위 200 종목 마스터 일 1회 갱신(08:50) + 10분 간격 현재가 + KOSPI/KOSDAQ 지수 JSONL 누적(09:00–15:30).
+  - **왜**: 시장 전반 추적용 데이터셋 — 추후 대시보드/백테스트 입력으로 사용. 키움 시총 TR 부재 → **FinanceDataReader** 로 KRX 공식 데이터 (당초 pykrx 로 도입했으나 2026-05-21 KRX OTP 다운로드 페이지 변경으로 pykrx 시장 전체 함수 전부 KeyError → fdr 로 이전).
+
+- [ ] **Phase 1 breadth 게이트 — 사용자 검증** (2026-05-21 구현 완료, 기본 비활성)
+  - **무엇**: 시총 200 스냅샷의 마지막 라운드에서 advancing_pct(상승종목비율) + mean_change_pct(평균등락률) 산출 → paper-day 발굴 시 매수 게이트로 활용 (약세면 매수 차단). 기본 `enabled=False`.
+  - **왜**: 회전율 1순위 정신 — 시장 약세에서는 매수 자체를 막아 비용 누수 차단. 깜깜이 변경 방지 위해 며칠 dry-run 후 임계 조정.
+  - **어떻게 확인**:
+    1. `strategies/profiles/daytrade-current.yaml` 에 다음 블록 추가 후 paper-day 1~2주 운영:
+       ```yaml
+       breadth_gate:
+         enabled: true
+         min_advancing_pct: 0.5      # 200개 중 50% 이상 상승해야 통과
+         min_mean_change_pct: 0.0    # 평균 등락률 0% 이상
+         snapshot_dir: data/snapshots
+       ```
+    2. paper-day 로그에서 `daytrade.breadth_gate` 이벤트 + `passed`/`reason` 확인.
+    3. 약세 차단 케이스 발생 시 `daytrade.universe_chosen reason=breadth_blocked` 줄 검증.
+    4. 데이터 부족(파일 없음) 시 fail-open — 기존 흐름 보존 확인.
+  - **다음 단계 Phase 2 발굴 풀 교체**: Phase 1 며칠 관찰 후 시총 200 모멘텀 상위로 발굴 풀 교체 (현재 거래량 상위 3 → 시총 200 모멘텀 상위 N). 별도 PR.
+  - **어떻게 확인**:
+    1. `bash scripts/launchd-install.sh` → `launchctl list | grep -E "marketcap-universe|snapshot-top200"` 두 라벨 보임.
+    2. 다음 평일 08:51 직후 `data/snapshots/universe-YYYY-MM-DD.json` 200건 생성 확인.
+    3. 같은 날 09:00 이후 `data/snapshots/topcap-YYYY-MM-DD.jsonl` 가 10분마다 ~200줄씩 증가.
+    4. `tail -1 data/snapshots/topcap-YYYY-MM-DD.jsonl | python -m json.tool` 스키마 확인.
+  - **수동 1회 트리거**: `launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.marketcap-universe`
+
 ---
 
 ## 🚀 남은 과제 (선택)

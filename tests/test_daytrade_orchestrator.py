@@ -216,3 +216,123 @@ async def test_momentum_loop_swallows_update_failures(monkeypatch) -> None:
 
     # 실패해도 여러 번 호출됨 (loop 가 swallow + 계속).
     assert update_mock.await_count >= 1
+
+
+# ---- Phase 1: breadth_gate (시총 200 스냅샷 기반 매수 게이트) ----
+
+from auto_trading.daytrade.profile import DaytradeBreadthGate  # noqa: E402
+from auto_trading.market import breadth as bd_mod  # noqa: E402
+
+
+async def test_breadth_gate_disabled_skips_check(monkeypatch) -> None:
+    """enabled=False 면 compute_breadth 호출조차 X — 회귀 0 보장."""
+    runner = _runner()
+    candidates = [
+        RankedSymbol(symbol="005930", market="KOSPI", name="삼성전자", volume=10, price=70000),
+    ]
+    monkeypatch.setattr(orch, "top_volume", AsyncMock(return_value=candidates))
+    monkeypatch.setattr(
+        orch, "index_gate", AsyncMock(side_effect=lambda _r, m: _gate(m, above=True))
+    )
+    compute_mock = AsyncMock()  # 호출되면 안 됨
+    monkeypatch.setattr(orch, "compute_breadth", compute_mock)
+
+    config = DaytradeBreadthGate(enabled=False)
+    result = await orch.discover_and_arm(
+        rest=object(),
+        runner=runner,
+        top_n=1,
+        breadth_gate_config=config,  # type: ignore[arg-type]
+    )
+
+    assert [c.symbol for c in result.chosen] == ["005930"]
+    compute_mock.assert_not_called()
+
+
+async def test_breadth_gate_blocks_when_weak(monkeypatch) -> None:
+    """enabled=True 이고 강세 미달이면 전 후보 차단 + breadth_blocked reason."""
+    runner = _runner()
+    candidates = [
+        RankedSymbol(symbol="005930", market="KOSPI", name="삼성전자", volume=10, price=70000),
+        RankedSymbol(symbol="000660", market="KOSPI", name="SK하이닉스", volume=8, price=150000),
+    ]
+    monkeypatch.setattr(orch, "top_volume", AsyncMock(return_value=candidates))
+    monkeypatch.setattr(
+        orch, "index_gate", AsyncMock(side_effect=lambda _r, m: _gate(m, above=True))
+    )
+    weak = bd_mod.Breadth(
+        ts="X",
+        sample_size=200,
+        advancing_pct=0.2,
+        declining_pct=0.7,
+        mean_change_pct=-1.0,
+    )
+    monkeypatch.setattr(orch, "compute_breadth", lambda *_a, **_kw: weak)
+
+    config = DaytradeBreadthGate(enabled=True, min_advancing_pct=0.5, min_mean_change_pct=0.0)
+    result = await orch.discover_and_arm(
+        rest=object(),
+        runner=runner,
+        top_n=2,
+        breadth_gate_config=config,  # type: ignore[arg-type]
+    )
+
+    assert result.chosen == []
+    assert runner.symbols == []
+    blocked_reasons = {r for _, r in result.blocked}
+    assert any("breadth_" in r for r in blocked_reasons)
+    assert "breadth 게이트 차단" in result.note_ko
+
+
+async def test_breadth_gate_passes_when_strong(monkeypatch) -> None:
+    """강세면 통과 — 기존 index_gate 흐름 그대로."""
+    runner = _runner()
+    candidates = [
+        RankedSymbol(symbol="005930", market="KOSPI", name="삼성전자", volume=10, price=70000),
+    ]
+    monkeypatch.setattr(orch, "top_volume", AsyncMock(return_value=candidates))
+    monkeypatch.setattr(
+        orch, "index_gate", AsyncMock(side_effect=lambda _r, m: _gate(m, above=True))
+    )
+    strong = bd_mod.Breadth(
+        ts="X",
+        sample_size=200,
+        advancing_pct=0.65,
+        declining_pct=0.30,
+        mean_change_pct=0.5,
+    )
+    monkeypatch.setattr(orch, "compute_breadth", lambda *_a, **_kw: strong)
+
+    config = DaytradeBreadthGate(enabled=True, min_advancing_pct=0.5, min_mean_change_pct=0.0)
+    result = await orch.discover_and_arm(
+        rest=object(),
+        runner=runner,
+        top_n=1,
+        breadth_gate_config=config,  # type: ignore[arg-type]
+    )
+
+    assert [c.symbol for c in result.chosen] == ["005930"]
+
+
+async def test_breadth_gate_fail_open_when_no_data(monkeypatch) -> None:
+    """데이터 부족(unavailable) 시 fail-open — 기존 흐름 그대로."""
+    runner = _runner()
+    candidates = [
+        RankedSymbol(symbol="005930", market="KOSPI", name="삼성전자", volume=10, price=70000),
+    ]
+    monkeypatch.setattr(orch, "top_volume", AsyncMock(return_value=candidates))
+    monkeypatch.setattr(
+        orch, "index_gate", AsyncMock(side_effect=lambda _r, m: _gate(m, above=True))
+    )
+    unavail = bd_mod.Breadth.unavailable_instance("no_file")
+    monkeypatch.setattr(orch, "compute_breadth", lambda *_a, **_kw: unavail)
+
+    config = DaytradeBreadthGate(enabled=True)
+    result = await orch.discover_and_arm(
+        rest=object(),
+        runner=runner,
+        top_n=1,
+        breadth_gate_config=config,  # type: ignore[arg-type]
+    )
+
+    assert [c.symbol for c in result.chosen] == ["005930"]

@@ -492,3 +492,135 @@ def orders_inspect(
         )
     else:
         cli.console.print("[green]✓ 결과 미확인 주문 없음.[/green]")
+
+
+@cli.app.command("build-marketcap-universe")
+def build_marketcap_universe(
+    top_n: int = typer.Option(200, "--top-n", help="상위 몇 개 종목까지 마스터에 저장할지."),
+    out_dir: Path = typer.Option(
+        Path("data/snapshots"),
+        "--out-dir",
+        help="`universe-YYYY-MM-DD.json` 저장 폴더.",
+    ),
+) -> None:
+    """KRX 시가총액 상위 N 종목 마스터를 산출해 JSON 캐시에 저장.
+
+    무엇/왜:
+    - `snapshot-top200` 잡이 매 10분 호출할 *종목 풀*. 매일 1회 (08:50 KST) 갱신.
+    - 키움 API 에 시총 정렬 TR 이 없어 `pykrx` 로 KRX 공식 시총을 받아옴.
+    - 출력: `data/snapshots/universe-YYYY-MM-DD.json` (오늘 KST 날짜 기준 파일명,
+      데이터는 그 시점 직전 거래일 종가 기준).
+
+    어떻게 확인:
+    - `cat data/snapshots/universe-YYYY-MM-DD.json | python -m json.tool | head`.
+    - rank 1 이 보통 삼성전자, market_cap desc 정렬.
+    """
+    from ..market.marketcap import (
+        compute_top_marketcap_universe,
+        save_universe,
+        universe_path_for,
+    )
+
+    entries = compute_top_marketcap_universe(top_n=top_n)
+    if not entries:
+        cli.console.print(
+            "[red]시총 데이터를 받지 못했습니다.[/red] "
+            "KRX 페이지 일시 장애이거나 pykrx 응답 형식이 바뀌었을 수 있습니다."
+        )
+        raise typer.Exit(code=1)
+
+    path = universe_path_for(out_dir)
+    save_universe(entries, path, top_n=top_n)
+    cli.console.print(f"[green]✓ 시총 마스터 저장:[/green] {path} ({len(entries)}건)")
+    cli.console.print(
+        f"[dim]1위: {entries[0].symbol} {entries[0].name} · "
+        f"시총 {entries[0].market_cap / 1e12:.1f}조[/dim]"
+    )
+
+
+@cli.app.command("snapshot-top200")
+def snapshot_top200(
+    universe_dir: Path = typer.Option(
+        Path("data/snapshots"),
+        "--universe-dir",
+        help="`universe-YYYY-MM-DD.json` 가 있는 폴더.",
+    ),
+    out_dir: Path = typer.Option(
+        Path("data/snapshots"),
+        "--out-dir",
+        help="`topcap-YYYY-MM-DD.jsonl` 가 append 될 폴더.",
+    ),
+    fallback_to_yesterday: bool = typer.Option(
+        True,
+        "--fallback-to-yesterday/--no-fallback-to-yesterday",
+        help="오늘 universe 가 없으면 어제 캐시로 폴백.",
+    ),
+    max_fallback_days: int = typer.Option(
+        7,
+        "--max-fallback-days",
+        help="폴백 시 거슬러 올라갈 최대 일수.",
+    ),
+) -> None:
+    """시총 상위 200 종목 현재가 1라운드 스냅샷 → JSONL append.
+
+    무엇/왜:
+    - launchd 가 매 10분 (평일 09:00-15:30 KST) 호출 → 약 30초간 200종목 `ka10001`
+      호출 → `data/snapshots/topcap-YYYY-MM-DD.jsonl` 에 append.
+    - universe 가 없으면 어제(또는 그 전 거래일) 캐시로 폴백 — 마스터 잡이 늦거나
+      실패한 경우에도 스냅샷은 계속 쌓이도록.
+
+    어떻게 확인:
+    - 1회 실행: `uv run auto-trade snapshot-top200` → 약 30초 후 종료.
+    - `wc -l data/snapshots/topcap-YYYY-MM-DD.jsonl` 가 라운드당 ~200 증가.
+    - `head -1 … | python -m json.tool` 로 스키마 확인.
+    """
+    from datetime import timedelta as _td
+
+    from ..market.marketcap import load_cached_universe, universe_path_for
+    from ..monitor.price_snapshot import (
+        IndexSnapshotRecorder,
+        PriceSnapshotRecorder,
+        index_snapshot_path_for,
+        snapshot_path_for,
+    )
+
+    # 1) universe 로드 (오늘 → 어제 → … 최대 max_fallback_days).
+    today = datetime.now(KST).date()
+    universe = []
+    chosen_path: Path | None = None
+    for offset in range(max_fallback_days + 1):
+        target = today - _td(days=offset)
+        cand = universe_path_for(universe_dir, when=target)
+        if cand.exists():
+            universe = load_cached_universe(cand)
+            if universe:
+                chosen_path = cand
+                if offset > 0 and not fallback_to_yesterday:
+                    cli.console.print("[yellow]오늘 universe 없음 — 폴백 비활성이라 종료.[/yellow]")
+                    raise typer.Exit(code=1)
+                break
+
+    if not universe:
+        cli.console.print(
+            "[red]universe 캐시를 찾지 못했습니다.[/red] "
+            "먼저 `auto-trade build-marketcap-universe --top-n 200` 으로 마스터를 만드세요."
+        )
+        raise typer.Exit(code=1)
+
+    if chosen_path and chosen_path.name != f"universe-{today.isoformat()}.json":
+        cli.console.print(f"[yellow]오늘 universe 없음 — 폴백 사용:[/yellow] {chosen_path.name}")
+
+    out_path = snapshot_path_for(out_dir)
+    index_path = index_snapshot_path_for(out_dir)
+    recorder = PriceSnapshotRecorder(path=out_path)
+    index_recorder = IndexSnapshotRecorder(path=index_path)
+
+    async def _run() -> tuple[int, int]:
+        async with cli.KiwoomRestClient() as client:
+            entries = await recorder.record_round(client, universe)
+            indices = await index_recorder.record_round(client)
+            return len(entries), len(indices)
+
+    ok, idx_ok = asyncio.run(_run())
+    cli.console.print(f"[green]✓ 스냅샷 1라운드:[/green] 종목 {ok}/{len(universe)}건 → {out_path}")
+    cli.console.print(f"[green]✓ 지수 스냅샷:[/green] {idx_ok}/2건 (KOSPI/KOSDAQ) → {index_path}")

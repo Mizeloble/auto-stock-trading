@@ -26,6 +26,24 @@ class DaytradeStrategyParams(BaseModel):
     momentum_threshold_pct: float = Field(default=0.0, ge=0.0, le=10.0)
 
 
+class DaytradeBreadthGate(BaseModel):
+    """시총 200 스냅샷 기반 매수 게이트 (Phase 1).
+
+    무엇/왜:
+    - `data/snapshots/topcap-*.jsonl` 마지막 라운드의 상승 종목 비율(advancing_pct)
+      + 평균 등락률(mean_change_pct) 두 신호로 시장 강세/약세 판단.
+    - 약세면 매수 자체 차단 — 회전율·비용 직접 감소 (사용자 회전율 1순위 정신).
+    - `enabled=False` (기본) 면 동작 X — 회귀 0.
+
+    임계는 사용자가 YAML 에서 조정. 데이터 부족(파일 없음) 시 fail-open (게이트 통과).
+    """
+
+    enabled: bool = False
+    min_advancing_pct: float = Field(default=0.5, ge=0.0, le=1.0)
+    min_mean_change_pct: float = Field(default=0.0, ge=-10.0, le=10.0)
+    snapshot_dir: str = "data/snapshots"
+
+
 class DaytradeRiskLimits(BaseModel):
     """RiskLimits 중 day-trade 가 쓰는 부분 + Phase B/C 신규 한도. 보수적 기본."""
 
@@ -58,6 +76,7 @@ class DaytradeProfile(BaseModel):
     discover_delay_sec: int = Field(default=30, ge=0, le=600)
     params: DaytradeStrategyParams = Field(default_factory=DaytradeStrategyParams)
     risk: DaytradeRiskLimits = Field(default_factory=DaytradeRiskLimits)
+    breadth_gate: DaytradeBreadthGate = Field(default_factory=DaytradeBreadthGate)
     notes: str = ""
     created_at: datetime | None = None
     last_updated_at: datetime | None = None
@@ -102,6 +121,7 @@ class DaytradeProfile(BaseModel):
 
 
 __all__ = [
+    "DaytradeBreadthGate",
     "DaytradeProfile",
     "DaytradeRiskLimits",
     "DaytradeStrategyName",

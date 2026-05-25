@@ -26,6 +26,8 @@ LABELS=(
   "com.mizeloble.auto-trade.insight-weekly"
   "com.mizeloble.auto-trade.log-rotate"
   "com.mizeloble.auto-trade.heartbeat-check"
+  "com.mizeloble.auto-trade.marketcap-universe"
+  "com.mizeloble.auto-trade.snapshot-top200"
 )
 
 mkdir -p "$PLIST_DST"
@@ -37,9 +39,13 @@ chmod +x \
   "$PROJECT_DIR/scripts/news-prefetch.sh" \
   "$PROJECT_DIR/scripts/insight-weekly.sh" \
   "$PROJECT_DIR/scripts/rotate-logs.sh" \
-  "$PROJECT_DIR/scripts/heartbeat-check.sh"
+  "$PROJECT_DIR/scripts/heartbeat-check.sh" \
+  "$PROJECT_DIR/scripts/build-marketcap-universe.sh" \
+  "$PROJECT_DIR/scripts/snapshot-top200.sh"
 
-for label in $LABELS; do
+# zsh 와 bash 모두에서 안전한 배열 펼침. unquoted `$LABELS` 는 bash 에서 첫 원소만
+# 처리하는 회귀(2026-05-21) 가 있었음 — `${LABELS[@]}` 로 명시.
+for label in "${LABELS[@]}"; do
   src="$PLIST_SRC/$label.plist"
   dst="$PLIST_DST/$label.plist"
 
@@ -68,9 +74,13 @@ echo "  - 토요일 06:00 KST: news-prefetch (RSS 캐시 선반영, LLM X)"
 echo "  - 토요일 09:00 KST: insight-weekly (인사이트 + weekly-proposal, force_refresh 누적)"
 echo "  - 매일 02:30 KST: log-rotate (30일↑ 압축, 90일↑ 삭제, launchd-*.log truncate)"
 echo "  - 5분마다 (평일 09-16 KST 만): heartbeat-check (봇 멈춤 감지 → 텔레그램 알림)"
+echo "  - 평일 08:50 KST: marketcap-universe (KRX 시총 상위 200 마스터 갱신)"
+echo "  - 평일 09:00–15:30 매 10분: snapshot-top200 (시총 200 종목 현재가 JSONL 누적)"
 echo "  확인: launchctl list | grep mizeloble.auto-trade"
 echo "  강제 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.paper-day"
 echo "  뉴스 prefetch 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.news-prefetch"
 echo "  토요일 cron 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.insight-weekly"
 echo "  로그 회전 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.log-rotate"
 echo "  heartbeat-check 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.heartbeat-check"
+echo "  시총 마스터 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.marketcap-universe"
+echo "  스냅샷 즉시 시동(테스트용): launchctl kickstart -k gui/\$UID/com.mizeloble.auto-trade.snapshot-top200"
