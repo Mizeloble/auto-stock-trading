@@ -42,6 +42,10 @@ class SafetyCaps:
     momentum_threshold_pct_max: float = 3.0
     cooldown_min_max: int = 120
     momentum_lookback_min_max: int = 30
+    # 회전율 가드 — 같은 종목 하루 BUY 한도. LLM 이 너무 큰 값을 제안하면 거부.
+    max_buys_per_symbol_max: int = 10
+    # 회피 종목 목록은 코드 검증으로 충분 — 캡 자체는 두지 않되, 적용 시 코드 형식만 점검.
+    avoid_symbols_max_len: int = 30
     # daily_loss_kill 은 자동 변경을 아예 막지는 않지만 "사람 명시" 권장.
     block_daily_loss_kill_change: bool = False
 
@@ -70,6 +74,7 @@ _PROPOSAL_FIELDS_RISK = (
     "partial_take_pct",
     "partial_take_qty_ratio",
     "daily_loss_kill",
+    "max_buys_per_symbol",
 )
 
 
@@ -144,6 +149,21 @@ def apply_proposal(
         if old_v != new_v:
             accepted.append(f"{fname}: {old_v} → {new_v}")
             new_risk[fname] = new_v
+
+    # avoid_symbols — proposal 의 symbols_to_avoid 를 그대로 YAML 에 복사.
+    # 정렬·중복 제거로 결정론 유지 (같은 입력 → 같은 출력). 비어있으면 변경 없음.
+    proposed_avoid = [str(s).strip() for s in (proposal.symbols_to_avoid or []) if str(s).strip()]
+    if len(proposed_avoid) > caps.avoid_symbols_max_len:
+        rejected.append(
+            f"avoid_symbols {len(proposed_avoid)}건 거부 (캡 {caps.avoid_symbols_max_len})"
+        )
+    else:
+        # 중복 제거 + 정렬 — set 으로 결정론적 비교 후 list 직렬화.
+        new_avoid = sorted(dict.fromkeys(proposed_avoid))
+        current_avoid = sorted(dict.fromkeys(current.avoid_symbols or []))
+        if new_avoid != current_avoid:
+            accepted.append(f"avoid_symbols: {current_avoid} → {new_avoid}")
+            new_top["avoid_symbols"] = new_avoid
 
     new_top["params"] = new_params
     new_top["risk"] = new_risk

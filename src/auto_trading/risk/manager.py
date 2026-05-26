@@ -79,6 +79,9 @@ class RiskLimits:
     # 러너가 30일 일별 수익률 → pairwise_pearson_correlation 으로 미리 계산해
     # evaluate(holding_correlations=...) 로 주입. 비활성 시 evaluate 동작 불변.
     max_position_correlation: float = 0.0
+    # 회전율 가드 — 종목당 하루 BUY 허용 횟수. 0 이면 비활성.
+    # 한도 초과 시 BUY 시그널만 차단 (SELL/청산은 영향 없음). 카운터·리셋은 러너 책임.
+    max_buys_per_symbol: int = 0
     # 29단계 PR39 (#6) — ATR 기반 weight 정규화.
     # False: signal.weight 그대로. True: ATR 데이터 있을 때 weight x (target / atr_pct).
     # 변동성 큰 종목엔 작은 weight, 작은 종목엔 큰 weight (0~1 clamp).

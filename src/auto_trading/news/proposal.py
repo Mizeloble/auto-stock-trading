@@ -60,6 +60,8 @@ class DaytradeProposal(BaseModel):
     partial_take_pct: float | None = Field(default=None, ge=0.0, le=0.10)
     partial_take_qty_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
     daily_loss_kill: bool | None = None
+    # 회전율 가드 — 종목당 하루 BUY 허용 횟수. 0 이면 무제한(비활성).
+    max_buys_per_symbol: int | None = Field(default=None, ge=0, le=10)
 
     # 📌 변경별 이유 — 키는 위 변경 필드명, 값은 1~2문장.
     change_reasons: dict[str, str] = Field(default_factory=dict, max_length=20)
@@ -95,6 +97,7 @@ regime 별 일반 가이드:
 - partial_take_pct: 0.0~0.10 (예: 0.015 = +1.5% 부분 익절)
 - partial_take_qty_ratio: 0.0~1.0 (부분 익절 비율, 보통 0.5)
 - daily_loss_kill: bool (일일 -3% 손실 시 강제 청산)
+- max_buys_per_symbol: 0~10 (종목당 하루 BUY 허용 횟수, 0=무제한). 같은 종목 반복 진입으로 비용만 늘어나는 패턴을 줄일 때 1~3 권장.
 
 규칙 (필드 작성):
 - 변경 가능 파라미터(top_n, cooldown_min, …)는 **바꿀 것만** 채우고 유지할 것은 비워두세요(필드 자체를 응답에 포함하지 말 것).
@@ -158,6 +161,7 @@ PROPOSE_TOOL = {
             "partial_take_pct": {"type": "number", "minimum": 0.0, "maximum": 0.10},
             "partial_take_qty_ratio": {"type": "number", "minimum": 0.0, "maximum": 1.0},
             "daily_loss_kill": {"type": "boolean"},
+            "max_buys_per_symbol": {"type": "integer", "minimum": 0, "maximum": 10},
             "change_reasons": {
                 "type": "object",
                 "description": (
@@ -368,6 +372,7 @@ def format_proposal_message(
         "partial_take_pct",
         "partial_take_qty_ratio",
         "daily_loss_kill",
+        "max_buys_per_symbol",
     ):
         v = getattr(proposal, k)
         if v is not None:

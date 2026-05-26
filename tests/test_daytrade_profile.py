@@ -60,6 +60,26 @@ def test_profile_top_n_upper_bound() -> None:
         DaytradeProfile(name="x", top_n=99)
 
 
+def test_profile_avoid_symbols_roundtrip(tmp_path: Path) -> None:
+    """avoid_symbols 와 max_buys_per_symbol 가 YAML 라운드트립에서 보존된다."""
+    p = DaytradeProfile(
+        name="avoid",
+        avoid_symbols=["356680", "900300"],
+        risk=DaytradeRiskLimits(max_buys_per_symbol=2),
+    )
+    path = tmp_path / "p.yaml"
+    p.dump_yaml(path)
+    loaded = DaytradeProfile.load_yaml(path)
+    assert loaded.avoid_symbols == ["356680", "900300"]
+    assert loaded.risk.max_buys_per_symbol == 2
+
+
+def test_profile_max_buys_upper_bound() -> None:
+    """max_buys_per_symbol > 20 거절."""
+    with pytest.raises(ValidationError):
+        DaytradeProfile(name="x", risk=DaytradeRiskLimits(max_buys_per_symbol=99))
+
+
 def test_profile_stop_loss_upper_bound() -> None:
     """stop_loss_pct > 0.10 (10%) 거절 — 보수 가드."""
     with pytest.raises(ValidationError):

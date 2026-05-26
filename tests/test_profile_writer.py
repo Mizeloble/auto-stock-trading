@@ -106,6 +106,45 @@ def test_apply_daily_loss_kill_default_allows_change() -> None:
     assert out.applied_profile.risk.daily_loss_kill is True
 
 
+def test_apply_avoid_symbols_recorded() -> None:
+    """symbols_to_avoid 가 YAML 의 avoid_symbols 로 그대로 반영."""
+    prop = DaytradeProposal(
+        summary_ko="x",
+        confidence=0.5,
+        symbols_to_avoid=["356680", "900300"],
+    )
+    out = apply_proposal(prop, _base_profile())
+    assert out.applied_profile.avoid_symbols == ["356680", "900300"]
+    assert any("avoid_symbols" in line for line in out.accepted)
+
+
+def test_apply_avoid_symbols_no_change_when_same() -> None:
+    """현재값과 동일하면 accepted 에 들어가지 않음."""
+    base = _base_profile()
+    base = base.model_copy(update={"avoid_symbols": ["356680"]})
+    prop = DaytradeProposal(summary_ko="x", confidence=0.5, symbols_to_avoid=["356680"])
+    out = apply_proposal(prop, base)
+    assert out.applied_profile.avoid_symbols == ["356680"]
+    assert all("avoid_symbols" not in line for line in out.accepted)
+
+
+def test_apply_max_buys_above_cap_rejected() -> None:
+    """SafetyCaps.max_buys_per_symbol_max 보다 큰 제안은 거부 (1차 방어선)."""
+    caps = SafetyCaps(max_buys_per_symbol_max=2)
+    prop = DaytradeProposal(summary_ko="x", confidence=0.5, max_buys_per_symbol=5)
+    out = apply_proposal(prop, _base_profile(), caps=caps)
+    assert out.applied_profile.risk.max_buys_per_symbol == 0  # 기본 유지
+    assert any("max_buys_per_symbol" in line and "거부" in line for line in out.rejected)
+
+
+def test_apply_max_buys_within_cap_recorded() -> None:
+    """max_buys_per_symbol 정상 범위는 적용."""
+    prop = DaytradeProposal(summary_ko="x", confidence=0.5, max_buys_per_symbol=2)
+    out = apply_proposal(prop, _base_profile())
+    assert out.applied_profile.risk.max_buys_per_symbol == 2
+    assert any("max_buys_per_symbol" in line and "→ 2" in line for line in out.accepted)
+
+
 def test_apply_skips_field_when_value_unchanged() -> None:
     """제안값이 현재값과 같으면 accepted 에 안 들어감 (노이즈 방지)."""
     prop = DaytradeProposal(

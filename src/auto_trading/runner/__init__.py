@@ -124,6 +124,10 @@ class PaperRunner:
     # 자연 만료(키움 잔고를 다시 신뢰). 발주 실패(except) 시에는 등록 안 함.
     _pending_sells: dict[str, tuple[int, datetime]] = field(default_factory=dict, init=False)
     _pending_sell_ttl_sec: int = field(default=180, init=False)
+    # 회전율 가드 — 종목당 하루 BUY 체결 카운터. risk.limits.max_buys_per_symbol 활성 시만 의미.
+    # 같은 종목 반복 진입으로 비용만 누적되는 패턴 차단. 날짜 바뀌면 자동 리셋.
+    _daily_buy_counts: dict[str, int] = field(default_factory=dict, init=False)
+    _daily_buy_counts_date: _date | None = field(default=None, init=False)
     # 활성 REST 클라이언트 참조 — force_balance_refresh() 가 별도 인스턴스 안 만들고
     # 메인 루프와 같은 토큰·세션을 재사용하기 위함. run() 의 async with 범위에서만 살아있음.
     _rest_client: KiwoomRestClient | None = field(default=None, init=False, repr=False)
@@ -618,6 +622,17 @@ class PaperRunner:
                 paused_until=until_iso,
             )
             return None
+        # 회전율 가드 — 종목당 일일 BUY 한도 초과 시 신규 진입 차단 (SELL 영향 없음).
+        if signal.side is Side.BUY:
+            exceeded, count, limit = self._buy_limit_exceeded(signal.symbol)
+            if exceeded:
+                log.info(
+                    "runner.signal_blocked_buy_limit",
+                    symbol=signal.symbol,
+                    count=count,
+                    limit=limit,
+                )
+                return None
         decision = self.risk.evaluate(
             signal,
             price=bar.close,
@@ -653,6 +668,10 @@ class PaperRunner:
             # 23단계 Phase B — dry-run BUY 도 일일 누적에 포함 (한도 검증 회로 똑같이 흘러야).
             if order.side is Side.BUY:
                 account.today_notional_used += sim_price * order.quantity
+                self._roll_daily_buy_counts()
+                self._daily_buy_counts[order.symbol] = (
+                    self._daily_buy_counts.get(order.symbol, 0) + 1
+                )
             return None
         return order
 
@@ -719,6 +738,11 @@ class PaperRunner:
                 account.avg_prices[order.symbol] = ref_price
                 # 23단계 Phase B — 일일 매수대금 누적. 실패 시(except 분기) 누적 X.
                 account.today_notional_used += ref_price * order.quantity
+                # 회전율 가드 — 같은 종목 BUY 체결 카운트 누적. 실패 시(except) 누적 X.
+                self._roll_daily_buy_counts()
+                self._daily_buy_counts[order.symbol] = (
+                    self._daily_buy_counts.get(order.symbol, 0) + 1
+                )
                 # 5/14 회귀 후속(2026-05-16) — 재진입. 직전 라운드트립의 미체결
                 # SELL 잔재는 새 포지션과 무관하다. 그대로 두면 _snapshot_account 가
                 # 새 보유분까지 차감하고 guard 가 새 포지션을 보호 못 한다(TTL 180s >
@@ -810,6 +834,38 @@ class PaperRunner:
         if not symbol:
             return None
         return self._symbol_names.get(symbol)
+
+    def _roll_daily_buy_counts(self) -> None:
+        """KST 자정 경계를 넘어가면 일일 BUY 카운터를 리셋.
+
+        무엇/왜:
+        - day-trade 는 매 거래일 새로 시작 — 어제 카운트가 오늘 한도를 갉아먹지 않게.
+        - 러너는 일반적으로 매 거래일 launchd 가 새로 띄우지만, 자동 청산 후
+          재시동·연장 운용 시나리오까지 안전하게 잡으려고 명시 리셋한다.
+        """
+        today = datetime.now(KST).date()
+        if self._daily_buy_counts_date != today:
+            if self._daily_buy_counts:
+                log.info(
+                    "runner.daily_buy_counts_reset",
+                    previous_date=(
+                        self._daily_buy_counts_date.isoformat()
+                        if self._daily_buy_counts_date
+                        else None
+                    ),
+                    new_date=today.isoformat(),
+                )
+            self._daily_buy_counts = {}
+            self._daily_buy_counts_date = today
+
+    def _buy_limit_exceeded(self, symbol: str) -> tuple[bool, int, int]:
+        """BUY 한도 초과 여부 + (현재 카운트, 한도) 반환. 한도 0(비활성) 이면 False."""
+        limit = int(self.risk.limits.max_buys_per_symbol or 0)
+        if limit <= 0:
+            return False, 0, 0
+        self._roll_daily_buy_counts()
+        count = self._daily_buy_counts.get(symbol, 0)
+        return count >= limit, count, limit
 
     def _register_pending_sell(self, symbol: str, quantity: int) -> None:
         """SELL 발주 직후 _pending_sells 에 미체결 수량 누적. 같은 종목 다회 발주 합산."""

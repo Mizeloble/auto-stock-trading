@@ -118,6 +118,31 @@ async def test_discover_uses_equal_weight_when_no_factory(monkeypatch) -> None:
         assert strat.params.get("weight") == pytest.approx(1.0 / 3)
 
 
+async def test_discover_filters_avoid_symbols(monkeypatch) -> None:
+    """avoid_symbols 에 포함된 종목은 게이트 통과해도 매수 후보에서 제외 + blocked 사유 기록.
+
+    2026-05-25 주간 LLM 회피 권고가 다음 거래일 발굴에 실제로 반영되는지 회귀.
+    """
+    runner = _runner()
+    candidates = [
+        RankedSymbol(symbol="356680", market="KOSDAQ", name="엑스게이트", volume=10, price=25000),
+        RankedSymbol(symbol="005930", market="KOSPI", name="삼성전자", volume=8, price=300000),
+    ]
+    monkeypatch.setattr(orch, "top_volume", AsyncMock(return_value=candidates))
+    monkeypatch.setattr(orch, "index_gate", AsyncMock(return_value=_gate("KOSPI", above=True)))
+
+    result = await orch.discover_and_arm(
+        rest=object(),  # type: ignore[arg-type]
+        runner=runner,
+        top_n=2,
+        avoid_symbols=("356680",),
+    )
+
+    assert [c.symbol for c in result.chosen] == ["005930"]
+    assert ("356680", "avoid_symbols") in result.blocked
+    assert runner.symbols == ["005930"]
+
+
 async def test_discover_calls_index_gate_once_per_market(monkeypatch) -> None:
     """같은 시장 후보가 여럿이어도 index_gate 는 시장당 1번만."""
     runner = _runner()

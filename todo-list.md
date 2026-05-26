@@ -8,6 +8,22 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [ ] **회피 종목 + 회전율 가드 — 사용자 검증** (2026-05-26 구현, mock 검증 대기)
+  - **무엇**: 두 가지 가드를 한 번에 도입했다.
+    1. `DaytradeProfile.avoid_symbols` (목록) — 발굴 단계에서 거래량 상위라도 후보에서 즉시 제외. orchestrator 가 `("코드","avoid_symbols")` 로 blocked 마킹.
+    2. `risk.max_buys_per_symbol` (정수, 0=비활성) — 종목당 하루 BUY 체결 횟수 한도. 한도 도달 시 새 BUY 시그널 차단(`runner.signal_blocked_buy_limit`). SELL/청산은 영향 없음. dry_run BUY 도 같은 카운터로 누적해 라이브와 회로 동일. KST 날짜 바뀌면 자동 리셋.
+  - **왜**: 2026-05-26 운영에서 (a) 주간 LLM 의 `⛔ 회피 종목 356680 엑스게이트` 권고가 발굴에 반영 안 돼 4회 매수, (b) 같은 종목 3~4회 반복 진입으로 회전 0.7배 + 비용 차감 -20,488원 — 두 패턴이 동시에 나타남. 둘 다 다음 거래일부터 막을 1차 가드.
+  - **현재 프로파일**: `strategies/profiles/daytrade-current.yaml` 에 `avoid_symbols: ['356680']` + `risk.max_buys_per_symbol: 2` 활성. 직전 yaml 은 `*.bak.2026-05-26` 보관.
+  - **주간 자동화 연동**: `DaytradeProposal` 에 `max_buys_per_symbol` 추가, `profile_writer` 가 LLM 의 `symbols_to_avoid` 를 YAML 의 `avoid_symbols` 로 자동 반영. `SafetyCaps` 에 `max_buys_per_symbol_max=10`, `avoid_symbols_max_len=30` 캡 신설.
+  - **어떻게 확인**:
+    1. 다음 거래일 paper-day 시동 후 텔레그램 `🔎 발굴 완료` 에 `356680` 미포함, 로그 `daytrade.discovery blocked` 에 `("356680","avoid_symbols")` 표시.
+    2. 같은 종목 2회 BUY 후 3번째 시그널 시 로그 `runner.signal_blocked_buy_limit symbol=… count=2 limit=2` 출력 + 텔레그램에 추가 체결 알림 없음.
+    3. 일일 리포트의 종목별 매수 건수가 모든 종목 ≤2 인지.
+    4. 단위 테스트: `uv run pytest tests/test_daytrade_orchestrator.py tests/test_daytrade_profile.py tests/test_profile_writer.py tests/test_runner_buy_limit.py -q` (모두 통과 — 62 케이스).
+  - **운영 관찰 포인트**: 한도가 너무 빡빡하면 정상 추세 종목까지 막혀 기회 손실 가능 — 1~2주 운영 후 회전·비용 변화 보고 한도 조정. 회피 목록은 LLM 권고를 자동 반영하므로, 의도치 않은 차단 발생 시 yaml `avoid_symbols` 에서 빼면 됨.
+
+
+
 - [ ] **29단계 PR4 · `feat(account): 키움 미체결 조회 + suspect 자동 매칭 — #9 3차`**
   - **무엇**: 봇 재시작 시 suspect 주문들을 키움에 재조회해 실제 체결 여부 확인 + 저널 보강 + 로컬 state 동기화.
   - **왜**: PR2 가 *발견* 까지만 구현. 자동 매칭/동기화는 키움 미체결 TR 코드 probe 가 선행이라 분리했다.

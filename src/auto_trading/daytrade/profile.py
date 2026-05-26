@@ -59,6 +59,9 @@ class DaytradeRiskLimits(BaseModel):
     consecutive_loss_pause_sec: int = Field(default=86_400, ge=60, le=604_800)
     # 29단계 PR27/28 (#15) — 보유 종목 페어 상관 가드 (0.7 권장). 0 이면 비활성.
     max_position_correlation: float = Field(default=0.0, ge=0.0, le=1.0)
+    # 회전율 가드 — 종목당 하루 BUY 허용 횟수. 0 이면 비활성(무제한).
+    # 같은 종목 반복 진입으로 비용만 누적되는 패턴을 막는다. SELL/청산은 영향 없음.
+    max_buys_per_symbol: int = Field(default=0, ge=0, le=20)
 
 
 class DaytradeProfile(BaseModel):
@@ -77,6 +80,9 @@ class DaytradeProfile(BaseModel):
     params: DaytradeStrategyParams = Field(default_factory=DaytradeStrategyParams)
     risk: DaytradeRiskLimits = Field(default_factory=DaytradeRiskLimits)
     breadth_gate: DaytradeBreadthGate = Field(default_factory=DaytradeBreadthGate)
+    # 발굴 회피 종목 코드 목록. 거래량 상위에 떠도 매수 후보에서 즉시 제외.
+    # 주간 LLM 리뷰가 "⛔ 회피 종목" 으로 제시한 종목을 다음 주에 자동 반영.
+    avoid_symbols: list[str] = Field(default_factory=list)
     notes: str = ""
     created_at: datetime | None = None
     last_updated_at: datetime | None = None

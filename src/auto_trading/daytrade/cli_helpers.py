@@ -166,6 +166,7 @@ def apply_profile_to_runner(profile: DaytradeProfile, runner: PaperRunner) -> No
     limits.max_consecutive_losses = risk.max_consecutive_losses
     limits.consecutive_loss_pause_sec = risk.consecutive_loss_pause_sec
     limits.max_position_correlation = risk.max_position_correlation
+    limits.max_buys_per_symbol = risk.max_buys_per_symbol
 
 
 def build_profile_factory(
@@ -242,6 +243,7 @@ async def paper_day_main(
             exclude_etf=exclude_etf,
             strategy_factory=factory,
             breadth_gate_config=profile.breadth_gate if profile else None,
+            avoid_symbols=tuple(profile.avoid_symbols) if profile else (),
         ),
         name="day-discover",
     )
@@ -276,6 +278,7 @@ async def paper_day_with_commands(
             exclude_etf=exclude_etf,
             strategy_factory=factory,
             breadth_gate_config=profile.breadth_gate if profile else None,
+            avoid_symbols=tuple(profile.avoid_symbols) if profile else (),
         ),
         name="day-discover",
     )
@@ -336,6 +339,7 @@ async def delayed_discover(
     exclude_etf: bool = True,
     strategy_factory: Callable[..., Strategy] | None = None,
     breadth_gate_config: DaytradeBreadthGate | None = None,
+    avoid_symbols: tuple[str, ...] | list[str] = (),
 ) -> None:
     """러너 시동 후 `delay` 초 대기 → discover_and_arm.
 
@@ -353,6 +357,7 @@ async def delayed_discover(
                 exclude_etf=exclude_etf,
                 strategy_factory=strategy_factory,
                 breadth_gate_config=breadth_gate_config,
+                avoid_symbols=avoid_symbols,
             )
         console.print(f"[cyan]발굴 결과:[/cyan] {result.note_ko}")
         # 종목명도 함께 — 텔레그램이 코드+이름 ("005930 삼성전자") 으로 표시.

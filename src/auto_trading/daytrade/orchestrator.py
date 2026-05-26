@@ -66,6 +66,7 @@ async def discover_and_arm(
     markets: tuple[Market, ...] = ("KOSPI", "KOSDAQ"),
     exclude_etf: bool = True,
     breadth_gate_config: DaytradeBreadthGate | None = None,
+    avoid_symbols: tuple[str, ...] | list[str] = (),
 ) -> DiscoveryResult:
     """발굴 → 게이트 → set_universe 한 번에. 통과 종목 0건이면 set_universe 호출 X.
 
@@ -120,7 +121,11 @@ async def discover_and_arm(
 
     chosen: list[RankedSymbol] = []
     blocked: list[tuple[str, str]] = []
+    avoid_set = {s for s in avoid_symbols if s}
     for cand in candidates:
+        if cand.symbol in avoid_set:
+            blocked.append((cand.symbol, "avoid_symbols"))
+            continue
         gate = gates.get(cand.market)
         if gate is None or not gate.above_5_and_20:
             reason = f"{cand.market}_below_sma" if gate else f"{cand.market}_gate_unavailable"
