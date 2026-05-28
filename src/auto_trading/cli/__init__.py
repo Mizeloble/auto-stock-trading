@@ -25,10 +25,12 @@ from rich.console import Console
 from .._common import KST
 from ..config import get_settings
 from ..daytrade.cli_helpers import (
+    RegimeRoutingResult,
     apply_daytrade_profile_overrides,
     build_paper_day_runner,
     paper_day_main,
     paper_day_with_commands,
+    route_profile_by_regime,
 )
 from ..kiwoom.rest import KiwoomRestClient
 from ..market import calendar as krx_calendar
@@ -245,6 +247,7 @@ from . import _backtest, _ops, _reporting, _strategy, _trading  # noqa: E402,F40
 
 __all__ = [
     "KiwoomRestClient",
+    "RegimeRoutingResult",
     "_build_anthropic_client",
     "_coerce_param",
     "_fetch_daily_bars",
@@ -272,6 +275,7 @@ __all__ = [
     "orders_app",
     "paper_day_main",
     "paper_day_with_commands",
+    "route_profile_by_regime",
     "strategy_app",
     "validate_strategy_source",
 ]

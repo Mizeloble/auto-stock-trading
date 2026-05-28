@@ -1,0 +1,38 @@
+# day-trade TREND_UP 프로파일 — 상승추세장 전용.
+# 베이스: daytrade-current.yaml (사용자 검증 회전율 통제값 유지).
+# 조정 사유: 추세장에서는 진입 기회가 많아도 비용/회전율 통제 원칙 우선.
+#   top_n 4→5 (모멘텀 후보 1개 확장)
+#   momentum_threshold_pct 0.25→0.20 (지수 상승 모멘텀 게이트 살짝 완화 — 추세 시 더 자주 통과)
+# 새 파라미터 도입 없음. 손절·트레일링·부분익절은 불변.
+name: daytrade trend
+strategy: index_momentum_daytrade
+top_n: 5
+exclude_etf: true
+liquidate: '15:15'
+discover_delay_sec: 360
+params:
+  cooldown_min: 60
+  momentum_lookback_min: 15
+  momentum_threshold_pct: 0.20
+risk:
+  stop_loss_pct: 0.018
+  trailing_stop_pct: 0.012
+  partial_take_pct: 0.018
+  partial_take_qty_ratio: 0.5
+  max_order_value: 0.0
+  daily_notional_limit: 20000000.0
+  daily_loss_kill: true
+  max_consecutive_losses: 3
+  consecutive_loss_pause_sec: 86400
+  max_position_correlation: 0.7
+  max_buys_per_symbol: 2
+avoid_symbols:
+  - '356680'
+breadth_gate:
+  enabled: true
+  min_advancing_pct: 0.5
+  min_mean_change_pct: 0.0
+  snapshot_dir: data/snapshots
+notes: |
+  TREND_UP 자동 라우팅용. daytrade-current.yaml 베이스 + top_n=5, momentum 게이트 약간 완화.
+  나머지 회전율 통제(cooldown, daily_notional_limit, max_buys_per_symbol)는 불변.

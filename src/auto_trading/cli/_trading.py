@@ -323,8 +323,19 @@ def paper_day(
 
     # 프로파일 오타·범위 오류를 매매 시동 전에 한국어로 안내(트레이스백 차단).
     # apply_daytrade_profile_overrides 는 cli_helpers(typer-free) 라 여기서 선검증.
+    # 29단계 PR41 — 시장국면 자동 라우팅. regime_router.enabled=True 이면
+    # KODEX 200 60일봉 → MarketRegime 분류 → trend/defensive/range/crash 매핑 프로파일로
+    # 교체. fetch/매핑 실패 시 fail-safe (현재 프로파일 유지). enabled=False(기본) 면 회귀 0.
     if profile_path is not None:
-        cli.load_daytrade_profile_or_exit(profile_path)
+        _pre_profile = cli.load_daytrade_profile_or_exit(profile_path)
+        if _pre_profile.regime_router.enabled:
+            routing = cli.route_profile_by_regime(
+                profile_path,
+                fetch_daily_bars=cli._fetch_daily_bars,
+            )
+            cli.console.print(f"[cyan]{routing.summary_ko}[/cyan]")
+            if routing.routed:
+                profile_path = routing.profile_path  # 매핑된 새 경로로 교체
 
     # 23단계 Phase G — 프로파일 있으면 strategy/top_n/liquidate/discover_delay/exclude_etf 덮어쓰기.
     cfg = cli.apply_daytrade_profile_overrides(

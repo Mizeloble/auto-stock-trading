@@ -1,0 +1,41 @@
+# day-trade HIGH_VOL 프로파일 — 고변동성/패닉장 전용 (사실상 봇 정지).
+# 베이스: daytrade-current.yaml.
+# 조정 사유: 변동성 폭주 시 통계적 우위 사라짐 — 매수 자체를 막아 사일런트 정지.
+#   top_n 4→1 (최소)
+#   max_buys_per_symbol 2→0 (BUY 전면 차단)
+#   daily_notional_limit 20M→1M (사실상 의미 없는 최소값)
+#   stop_loss_pct 0.018→0.010 (혹시라도 진입되면 -1.0% 즉시 손절)
+#   daily_loss_kill: true (불변, 일일 -3% 도달 시 강제 청산)
+# 새 파라미터 도입 없음. 운영자가 daytrade-current.yaml 의 regime_router.enabled=true 면 자동 활성.
+name: daytrade crash
+strategy: index_momentum_daytrade
+top_n: 1
+exclude_etf: true
+liquidate: '15:15'
+discover_delay_sec: 360
+params:
+  cooldown_min: 60
+  momentum_lookback_min: 15
+  momentum_threshold_pct: 0.25
+risk:
+  stop_loss_pct: 0.010
+  trailing_stop_pct: 0.008
+  partial_take_pct: 0.018
+  partial_take_qty_ratio: 0.5
+  max_order_value: 0.0
+  daily_notional_limit: 1000000.0
+  daily_loss_kill: true
+  max_consecutive_losses: 3
+  consecutive_loss_pause_sec: 86400
+  max_position_correlation: 0.7
+  max_buys_per_symbol: 0
+avoid_symbols:
+  - '356680'
+breadth_gate:
+  enabled: true
+  min_advancing_pct: 0.5
+  min_mean_change_pct: 0.0
+  snapshot_dir: data/snapshots
+notes: |
+  HIGH_VOL 자동 라우팅용. max_buys_per_symbol=0 으로 BUY 전면 차단 → 사실상 봇 정지.
+  변동성 폭주 시 통계적 우위 사라지므로 매매 회피가 최선.

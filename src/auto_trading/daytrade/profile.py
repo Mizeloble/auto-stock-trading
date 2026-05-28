@@ -26,6 +26,27 @@ class DaytradeStrategyParams(BaseModel):
     momentum_threshold_pct: float = Field(default=0.0, ge=0.0, le=10.0)
 
 
+class DaytradeRegimeRouter(BaseModel):
+    """시장국면(KODEX 200 60일봉) 기반 프로파일 자동 라우팅.
+
+    무엇/왜:
+    - ``strategy/scanner.classify()`` 가 TREND_UP/DOWN/RANGE/HIGH_VOL 4분류만 해도
+      paper-day 가 매일 같은 프로파일을 써왔다. 약세장에선 보수, 박스권에선 짧은 익절이
+      유리한데 분기가 없으면 단일 프로파일이 모든 상황에 적용.
+    - ``enabled=True`` 면 paper-day 가 시동 시 KODEX 200(069500) 60일봉 → classify →
+      ``strategy.regime_router.select_profile_for_regime`` 매핑된 프로파일로 자동 스위치.
+      매핑된 파일이 없으면 현재 프로파일 fallback.
+
+    설계:
+    - 매핑 규칙은 ``strategy/regime_router.REGIME_PROFILE_MAP`` 의 정적 dict (코드 측).
+      YAML 은 on/off 토글만 — 사용자가 매핑을 바꾸려면 새 프로파일 파일 작성으로 표현.
+    - ``enabled=False`` (기본) 면 동작 X — 회귀 0.
+    - 분기 트리거 실패(KODEX 200 fetch 실패) 시 fail-safe (현재 프로파일 유지 + 경고 로그).
+    """
+
+    enabled: bool = False
+
+
 class DaytradeBreadthGate(BaseModel):
     """시총 200 스냅샷 기반 매수 게이트 (Phase 1).
 
@@ -80,6 +101,9 @@ class DaytradeProfile(BaseModel):
     params: DaytradeStrategyParams = Field(default_factory=DaytradeStrategyParams)
     risk: DaytradeRiskLimits = Field(default_factory=DaytradeRiskLimits)
     breadth_gate: DaytradeBreadthGate = Field(default_factory=DaytradeBreadthGate)
+    # 시장국면(KODEX 200) 자동 라우팅. enabled=True 면 paper-day 가 시동 시
+    # daytrade-trend / defensive / range / crash 중 하나로 자동 스위치.
+    regime_router: DaytradeRegimeRouter = Field(default_factory=DaytradeRegimeRouter)
     # 발굴 회피 종목 코드 목록. 거래량 상위에 떠도 매수 후보에서 즉시 제외.
     # 주간 LLM 리뷰가 "⛔ 회피 종목" 으로 제시한 종목을 다음 주에 자동 반영.
     avoid_symbols: list[str] = Field(default_factory=list)
@@ -129,6 +153,7 @@ class DaytradeProfile(BaseModel):
 __all__ = [
     "DaytradeBreadthGate",
     "DaytradeProfile",
+    "DaytradeRegimeRouter",
     "DaytradeRiskLimits",
     "DaytradeStrategyName",
     "DaytradeStrategyParams",

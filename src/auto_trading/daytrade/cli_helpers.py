@@ -15,29 +15,143 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, time
 from pathlib import Path
+from typing import Any
 
 import structlog
 from rich.console import Console
 
 from ..heartbeat import Heartbeat
 from ..kiwoom.rest import KiwoomRestClient
+from ..market.chart import bars_to_dataframe
 from ..market.index import IndexMomentumTracker, Market
 from ..notify.factory import build_notifier
 from ..notify.reporting import ReportingNotifier
 from ..notify.telegram_commands import TelegramCommandHandler
 from ..notify.throttle import ThrottledNotifier
 from ..runner import PaperRunner
+from ..strategy import scanner
 from ..strategy.base import Strategy
 from ..strategy.index_daytrade import IndexMomentumDayTrade
 from ..strategy.intraday import IntradayMomentum
+from ..strategy.regime_router import select_profile_for_regime
 from .orchestrator import discover_and_arm, start_momentum_loop
 from .profile import DaytradeBreadthGate, DaytradeProfile
 
 console = Console()
+
+
+# 사용자 노출용 regime → (정의, 무엇을 조정했나, 👍 장점, 👎 단점)
+# `feedback_user_facing_tone.md` — YAML 키 금지, 변경마다 정의+👍+👎+이유.
+_REGIME_DESCRIPTIONS: dict[scanner.MarketRegime, tuple[str, str, str, str]] = {
+    scanner.MarketRegime.TREND_UP: (
+        "상승 추세",
+        "top_n↑·지수 모멘텀 게이트 살짝 완화",
+        "추세장 진입 기회 확대",
+        "박스권 전환 직후엔 헛매수 가능",
+    ),
+    scanner.MarketRegime.TREND_DOWN: (
+        "하락 추세",
+        "top_n↓·일 노출 절반·손절 좁게",
+        "약세장 손실 통제·과매매 차단",
+        "반등 초입 기회 일부 놓침",
+    ),
+    scanner.MarketRegime.RANGE: (
+        "박스권",
+        "짧은 부분익절·짧은 트레일링",
+        "박스 상단 빠른 차익 회수",
+        "추세 전환 초입 놓칠 수 있음",
+    ),
+    scanner.MarketRegime.HIGH_VOL: (
+        "고변동성/패닉",
+        "BUY 전면 차단(max_buys=0)·노출 최소",
+        "통계적 우위 사라진 구간 회피",
+        "변동성 정상화 시 진입 지연",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class RegimeRoutingResult:
+    """``route_profile_by_regime`` 결과 — 선택된 경로 + 사용자 노출 메시지."""
+
+    profile_path: Path  # 최종 선택된 프로파일 경로 (fail-safe 시 입력 current 그대로)
+    regime: scanner.MarketRegime | None  # 분류 실패 시 None
+    routed: bool  # True = 매핑 적용됐음, False = fallback/실패
+    summary_ko: str  # 사용자 노출용 1~2줄. console 에 그대로 출력 가능.
+
+
+def route_profile_by_regime(
+    current_path: Path,
+    *,
+    fetch_daily_bars: Callable[[str], Iterable[Any]],
+    profiles_root: Path | None = None,
+    kodex_symbol: str = "069500",
+    lookback: int = 60,
+) -> RegimeRoutingResult:
+    """KODEX 200 60일봉 → ``scanner.classify`` → ``select_profile_for_regime`` → 경로 결정.
+
+    무엇/왜:
+    - ``DaytradeRegimeRouter.enabled=True`` 인 프로파일이 paper-day 시동 시 호출.
+    - 매핑된 프로파일이 존재하면 그 경로, 없으면(또는 fetch/classify 실패하면)
+      ``current_path`` 그대로 반환 (fail-safe — 봇이 멈추지 않게).
+
+    설계:
+    - ``fetch_daily_bars`` 콜백 주입 — 테스트에서 fake bars 로 monkeypatch 가능.
+      운영 호출은 ``cli._fetch_daily_bars`` 를 그대로 넘김. cli_helpers 가 직접
+      keepalive 클라이언트를 만들지 않는다(외부 호출은 cli 측 책임).
+
+    어떻게 확인: tests/daytrade/test_regime_router_integration.py.
+    """
+    root = profiles_root or current_path.parent
+    try:
+        bars = fetch_daily_bars(kodex_symbol)
+        df = bars_to_dataframe(bars).tail(lookback)
+        report = scanner.classify(df, lookback=lookback)
+    except Exception as exc:
+        return RegimeRoutingResult(
+            profile_path=current_path,
+            regime=None,
+            routed=False,
+            summary_ko=(
+                f"⚠️ 시장 국면 분류 실패(KODEX 200 일봉 fetch): {exc}. "
+                "현재 프로파일 유지."
+            ),
+        )
+
+    selected = select_profile_for_regime(
+        report.regime,
+        profiles_root=root,
+        fallback=current_path,
+    )
+    if selected is None or selected == current_path:
+        # 매핑된 파일 없음 → fallback 유지. 사용자에게 어떤 파일이 빠졌는지 알림.
+        return RegimeRoutingResult(
+            profile_path=current_path,
+            regime=report.regime,
+            routed=False,
+            summary_ko=(
+                f"📊 시장 국면={report.regime.value} 이지만 매핑 프로파일이 없어 "
+                f"현재({current_path.name}) 유지. {report.summary_ko}"
+            ),
+        )
+
+    label, change, pros, cons = _REGIME_DESCRIPTIONS.get(
+        report.regime, (report.regime.value, "조정 없음", "-", "-")
+    )
+    summary = (
+        f"📊 시장 국면 자동 라우팅: {label} → {selected.name} ({change}). "
+        f"👍 {pros}. 👎 {cons}."
+    )
+    return RegimeRoutingResult(
+        profile_path=selected,
+        regime=report.regime,
+        routed=True,
+        summary_ko=summary,
+    )
 
 
 @dataclass(frozen=True)
@@ -385,6 +499,7 @@ async def delayed_discover(
 
 __all__ = [
     "PaperDayOverrides",
+    "RegimeRoutingResult",
     "apply_daytrade_profile_overrides",
     "apply_profile_to_runner",
     "build_paper_day_runner",
@@ -392,4 +507,5 @@ __all__ = [
     "delayed_discover",
     "paper_day_main",
     "paper_day_with_commands",
+    "route_profile_by_regime",
 ]

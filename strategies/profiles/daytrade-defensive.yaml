@@ -1,0 +1,41 @@
+# day-trade TREND_DOWN 프로파일 — 약세장(하락추세) 전용.
+# 베이스: daytrade-current.yaml.
+# 조정 사유: 약세장에서는 진입 자체를 줄이고 손절 폭만 좁힘 (회전율 최우선 차단).
+#   top_n 4→2 (후보 절반)
+#   daily_notional_limit 20M→10M (일 매수대금 캡 절반)
+#   max_buys_per_symbol 2→1 (종목당 하루 1회만)
+#   stop_loss_pct 0.018→0.012 (-1.8% → -1.2%, 손절 좁게 — 약세장 추가 하락 위험)
+#   trailing_stop_pct 0.012→0.008 (트레일링 좁게)
+# 새 파라미터 도입 없음. partial_take/breadth_gate/avoid_symbols 불변.
+name: daytrade defensive
+strategy: index_momentum_daytrade
+top_n: 2
+exclude_etf: true
+liquidate: '15:15'
+discover_delay_sec: 360
+params:
+  cooldown_min: 60
+  momentum_lookback_min: 15
+  momentum_threshold_pct: 0.25
+risk:
+  stop_loss_pct: 0.012
+  trailing_stop_pct: 0.008
+  partial_take_pct: 0.018
+  partial_take_qty_ratio: 0.5
+  max_order_value: 0.0
+  daily_notional_limit: 10000000.0
+  daily_loss_kill: true
+  max_consecutive_losses: 3
+  consecutive_loss_pause_sec: 86400
+  max_position_correlation: 0.7
+  max_buys_per_symbol: 1
+avoid_symbols:
+  - '356680'
+breadth_gate:
+  enabled: true
+  min_advancing_pct: 0.5
+  min_mean_change_pct: 0.0
+  snapshot_dir: data/snapshots
+notes: |
+  TREND_DOWN 자동 라우팅용. 회전율·노출 모두 절반 + 손절 좁게.
+  약세장 자동 보수 전환의 핵심 — 사용자 메모리 project_after_cost_loss 의 "과매매 차단" 원칙 강화.

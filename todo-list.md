@@ -8,6 +8,21 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [ ] **시장국면 자동 라우팅 — 사용자 검증** (2026-05-28 구현 + 운영 ON)
+  - **무엇**: paper-day 시동 시 KODEX 200(069500) 60일봉 → `scanner.classify()` → TREND_UP/DOWN/RANGE/HIGH_VOL 4분류 → `select_profile_for_regime()` 가 매핑된 daytrade-{trend,defensive,range,crash}.yaml 로 자동 스위치. 매핑된 4개 프로파일은 `daytrade-current.yaml` 베이스 + 시장국면별로 `top_n`/`stop_loss_pct`/`daily_notional_limit`/`max_buys_per_symbol` 만 보수/공격 방향 조정 (새 파라미터 도입 X).
+  - **왜**: 약세장(TREND_DOWN)·고변동성(HIGH_VOL) 에 같은 공격적 프로파일을 그대로 쓰면 과매매·비용 누수. 분류 결과에 따라 노출 자동 축소·매수 차단. 사용자 메모리 `project_after_cost_loss` "회전율 1순위" 원칙 강화. enabled=False(default) 면 회귀 0.
+  - **현재 상태**: `strategies/profiles/daytrade-current.yaml` 의 `regime_router.enabled: true` (2026-05-28 사용자 요청으로 켬). 직전 yaml 은 `*.bak.2026-05-28-pre-regime-on` 보관. 끄려면 false 로 한 줄 변경 또는 백업 복원.
+  - **fail-safe**: KODEX 200 fetch/분류 실패 또는 매핑 파일 부재 시 현재 프로파일 유지 + 콘솔 경고. 봇은 안 멈춤.
+  - **토요일 cron 영향 없음**: `apply_proposal` 이 proposal 의 명시 필드(top_n/params/risk/avoid_symbols)만 갱신, `regime_router` 블록은 보존.
+  - **어떻게 확인**:
+    1. 다음 paper-day 시동 시 콘솔에 `📊 시장 국면 자동 라우팅: <라벨> → daytrade-X.yaml (...). 👍 ... 👎 ...` 1줄 출력.
+    2. 이어서 `프로파일 로드: daytrade-X.yaml (... top_n=N ...)` 표시 — top_n 이 시장국면에 맞춰 변동.
+    3. fail-safe 케이스(시장 휴장·fetch 실패) 면 `⚠️ 시장 국면 분류 실패` 또는 `📊 시장 국면=X 이지만 매핑 프로파일이 없어 현재 유지` 메시지.
+    4. 단위 + 통합 테스트: `uv run pytest tests/test_strategy_regime_router.py tests/test_daytrade_regime_router_integration.py -v` (12 케이스 통과).
+  - **운영 관찰 포인트**: 4개 매핑 프로파일의 보수성 파라미터(특히 daytrade-defensive 의 top_n=2·daily_notional_limit=10M, daytrade-crash 의 max_buys_per_symbol=0)가 실제 시장 분류와 잘 맞는지 1~2주 관찰. 분류 임계(`scanner.SLOPE_TREND_THRESHOLD=0.003`, `ATR_HIGH_VOL_THRESHOLD=0.030`) 조정은 별도 PR.
+
+
+
 - [ ] **회피 종목 + 회전율 가드 — 사용자 검증** (2026-05-26 구현, mock 검증 대기)
   - **무엇**: 두 가지 가드를 한 번에 도입했다.
     1. `DaytradeProfile.avoid_symbols` (목록) — 발굴 단계에서 거래량 상위라도 후보에서 즉시 제외. orchestrator 가 `("코드","avoid_symbols")` 로 blocked 마킹.

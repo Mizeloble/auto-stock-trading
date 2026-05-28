@@ -1,0 +1,39 @@
+# day-trade RANGE 프로파일 — 박스권(횡보) 전용.
+# 베이스: daytrade-current.yaml.
+# 조정 사유: 박스권은 짧은 익절·짧은 손절이 유리 (큰 폭 추세 기대 X).
+#   partial_take_pct 0.018→0.010 (+1.0% 도달 시 절반 익절 — 박스 상단 빠르게 차익)
+#   trailing_stop_pct 0.012→0.008 (잔량 트레일링도 짧게)
+#   top_n 4→3 (모멘텀 약하므로 후보 1개 축소)
+# 손절(stop_loss_pct), 회전율 통제(cooldown, daily_notional_limit, max_buys_per_symbol)는 불변.
+name: daytrade range
+strategy: index_momentum_daytrade
+top_n: 3
+exclude_etf: true
+liquidate: '15:15'
+discover_delay_sec: 360
+params:
+  cooldown_min: 60
+  momentum_lookback_min: 15
+  momentum_threshold_pct: 0.25
+risk:
+  stop_loss_pct: 0.018
+  trailing_stop_pct: 0.008
+  partial_take_pct: 0.010
+  partial_take_qty_ratio: 0.5
+  max_order_value: 0.0
+  daily_notional_limit: 20000000.0
+  daily_loss_kill: true
+  max_consecutive_losses: 3
+  consecutive_loss_pause_sec: 86400
+  max_position_correlation: 0.7
+  max_buys_per_symbol: 2
+avoid_symbols:
+  - '356680'
+breadth_gate:
+  enabled: true
+  min_advancing_pct: 0.5
+  min_mean_change_pct: 0.0
+  snapshot_dir: data/snapshots
+notes: |
+  RANGE 자동 라우팅용. 짧은 부분익절 + 짧은 트레일링으로 박스권 빠른 회수.
+  손절·회전율 통제 등 안전장치는 current 와 동일.
