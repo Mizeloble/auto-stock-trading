@@ -1174,9 +1174,7 @@ class PaperRunner:
                                 rest, account, reason="liquidate_at_reached"
                             )
                         except Exception as exc:
-                            log.error(
-                                "runner.liquidate_loop_error", error=str(exc), exc_info=exc
-                            )
+                            log.error("runner.liquidate_loop_error", error=str(exc), exc_info=exc)
                             failed = -1  # 예외 = 미확정, 재시도 가치 있음
                         if failed == 0:
                             break
