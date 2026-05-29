@@ -143,6 +143,39 @@ async def test_runner_stopped_day_trade_self_termination_includes_hint(
     assert "09:00" in text
 
 
+async def test_runner_stopped_no_candidates_is_korean_no_raw_code(
+    notifier: TelegramNotifier,
+) -> None:
+    """무발굴 종료(no_candidates) 는 영어 코드 대신 초보자 친화 한국어로 노출."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify("runner.stopped", reason="no_candidates")
+
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "paper 정지" in text
+    assert "오늘 매수할 종목 없음" in text
+    assert "다음 시동" in text
+    assert "no_candidates" not in text  # raw 영어 코드 노출 금지
+
+
+async def test_runner_stopped_discover_failed_is_korean_no_raw_code(
+    notifier: TelegramNotifier,
+) -> None:
+    """발굴 실패(discover_failed) 도 한국어 라벨 + 로그 확인 안내."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify("runner.stopped", reason="discover_failed")
+
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "발굴 실패" in text
+    assert "다음 시동" in text
+    assert "discover_failed" not in text
+
+
 async def test_runner_stopped_normal_reason_no_hint(notifier: TelegramNotifier) -> None:
     """일반 stop (외부 SIGTERM, 사용자 /stop) 은 안내 없이 깔끔하게."""
     async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:

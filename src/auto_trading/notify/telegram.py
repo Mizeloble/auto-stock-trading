@@ -61,13 +61,23 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         dry = " (dry-run)" if fields.get("dry_run") else ""
         return f"▶️ paper 시작{dry}\n전략: {strategy}\n종목: {symbol_label}"
     if event == "runner.stopped":
-        reason = fields.get("reason", "정상")
-        msg = f"⏹ paper 정지 ({reason})"
+        reason = str(fields.get("reason", "정상"))
+        # 내부 영어 코드를 초보자 친화 한국어로 치환 (raw 코드 노출 금지).
+        # 키가 매칭되면 그 라벨을, 아니면 reason 원문(이미 한국어이거나 예외 메시지)을 쓴다.
+        _STOP_LABELS = {
+            "no_candidates": "오늘 매수할 종목 없음",
+            "stopped_before_universe": "시작 준비 중 종료",
+            "discover_failed": "종목 발굴 실패 — 로그 확인 권장",
+        }
+        label = _STOP_LABELS.get(reason, reason)
+        msg = f"⏹ paper 정지 ({label})"
         # day-trade 모드의 자기 종료(universe 비어있음 / 발굴 실패) 면 사용자가 그 후
         # /status 같은 명령을 보내도 듣는 프로세스 없음 — 무응답으로 끝나 헷갈림.
         # 한 줄 안내 추가 (5/3 사용자 피드백).
-        if "before_universe" in str(reason) or "no_candidates" in str(reason):
-            msg += "\n💡 다음 시동(평일 09:00)까지 텔레그램 명령 비활성"
+        if reason in {"no_candidates", "stopped_before_universe", "discover_failed"} or (
+            "before_universe" in reason or "no_candidates" in reason
+        ):
+            msg += "\n💡 다음 시동(평일 09:00)까지 텔레그램 명령에 응답하지 않아요."
         return msg
     if event == "runner.order_accepted":
         sym_label = _with_name(str(fields.get("symbol", "?")), fields.get("name"))

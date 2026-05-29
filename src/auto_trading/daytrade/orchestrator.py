@@ -113,7 +113,7 @@ async def discover_and_arm(
             note = (
                 f"시총 200 breadth 게이트 차단 ({result.reason}: "
                 f"adv={breadth.advancing_pct:.0%}, mean={breadth.mean_change_pct:+.2f}%) "
-                f"— 매수 없이 청산 시각까지 대기."
+                f"— 오늘은 거래 없이 종료합니다."
             )
             blocked_all = [(c.symbol, f"breadth_{result.reason}") for c in candidates]
             log.info("daytrade.universe_chosen", symbols=[], reason="breadth_blocked")
@@ -146,7 +146,7 @@ async def discover_and_arm(
     )
 
     if not chosen:
-        note = f"후보 {len(candidates)}건 모두 지수 게이트 차단 — 매수 없이 청산 시각까지 대기."
+        note = f"후보 {len(candidates)}건 모두 지수 게이트 차단 — 오늘은 거래 없이 종료합니다."
         log.info("daytrade.universe_chosen", symbols=[], reason="all_blocked")
         return DiscoveryResult(chosen=[], blocked=blocked, gates=gates, note_ko=note, names=names)
 

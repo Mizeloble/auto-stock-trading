@@ -67,7 +67,7 @@ _REGIME_DESCRIPTIONS: dict[scanner.MarketRegime, tuple[str, str, str, str]] = {
     ),
     scanner.MarketRegime.HIGH_VOL: (
         "고변동성/패닉",
-        "BUY 전면 차단(max_buys=0)·노출 최소",
+        "신규 매수 전면 차단(1주도 진입 안 함)·보유분만 청산",
         "통계적 우위 사라진 구간 회피",
         "변동성 정상화 시 진입 지연",
     ),
@@ -490,11 +490,11 @@ async def delayed_discover(
         # (5/3 21:42 dry-run 에서 게이트 차단으로 chosen=[] → 6시간 hang 실증.)
         if not result.chosen:
             log.info("daytrade.no_candidates_stopping")
-            runner.request_stop()
+            runner.request_stop(reason="no_candidates")
     except Exception as exc:
         log.error("daytrade.discover_failed", error=str(exc), exc_info=exc)
         # 발굴 실패 — universe 안 채워지므로 명시적 stop 으로 hang 회피.
-        runner.request_stop()
+        runner.request_stop(reason="discover_failed")
 
 
 __all__ = [

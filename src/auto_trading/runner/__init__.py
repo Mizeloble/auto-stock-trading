@@ -100,6 +100,9 @@ class PaperRunner:
     _control_state: RunnerControlState = field(default=RunnerControlState.RUNNING, init=False)
     # request_stop 시 ws.messages() 루프에 즉시 신호를 주기 위한 활성 ws 참조.
     _ws: KiwoomWebSocket | None = field(default=None, init=False, repr=False)
+    # request_stop(reason=…) 로 주입된 종료 사유. universe 대기 중 종료 시 텔레그램
+    # 메시지를 사유별(무발굴/발굴실패/외부정지)로 구분해 표시하기 위함.
+    _stop_reason: str | None = field(default=None, init=False, repr=False)
     # day-trade 모드: set_universe() 가 채워질 때까지 run() 가 대기하는 이벤트.
     _universe_ready: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     # 청산 1회 가드 — 장 마감 후 시계가 계속 도달 상태라도 두 번 호출되지 않게.
@@ -213,7 +216,9 @@ class PaperRunner:
                 # 29단계 회귀 — heartbeat 가 주입된 경우 정상 종료 sentinel 도 함께 touch.
                 if self.heartbeat is not None:
                     self.heartbeat.mark_stopped()
-                await self.notifier.notify("runner.stopped", reason="stopped_before_universe")
+                await self.notifier.notify(
+                    "runner.stopped", reason=self._stop_reason or "stopped_before_universe"
+                )
                 await self.notifier.aclose()
                 return
 
@@ -956,8 +961,12 @@ class PaperRunner:
         self._control_state = RunnerControlState.RUNNING
         log.info("runner.control_state_changed", state="running")
 
-    def request_stop(self) -> None:
+    def request_stop(self, reason: str | None = None) -> None:
         """graceful 종료 요청. 한 번 진입하면 되돌릴 수 없음.
+
+        ``reason`` 은 universe 대기 중 종료 시 텔레그램 메시지를 사유별로
+        구분하기 위한 선택 코드(예: ``no_candidates`` / ``discover_failed``).
+        본 루프가 이미 시작된 뒤의 정상 종료에는 영향 없음.
 
         무엇/왜:
         - control_state 만 바꾸면 ticks(ws) 가 다음 메시지를 영원히 기다릴 때
@@ -969,6 +978,8 @@ class PaperRunner:
         - day-trade 모드에서 universe 대기 중에도 호출 가능 — _universe_ready
           를 set 해서 _wait_universe_or_stop() 이 깨어나 종료 분기를 타도록.
         """
+        if reason is not None:
+            self._stop_reason = reason
         self._control_state = RunnerControlState.STOPPING
         log.info("runner.control_state_changed", state="stopping")
         ws = self._ws

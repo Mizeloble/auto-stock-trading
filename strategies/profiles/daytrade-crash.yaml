@@ -2,10 +2,12 @@
 # 베이스: daytrade-current.yaml.
 # 조정 사유: 변동성 폭주 시 통계적 우위 사라짐 — 매수 자체를 막아 사일런트 정지.
 #   top_n 4→1 (최소)
-#   max_buys_per_symbol 2→0 (BUY 전면 차단)
-#   daily_notional_limit 20M→1M (사실상 의미 없는 최소값)
+#   max_order_value 0→1 (1원 — 모든 매수가 0주로 사이징돼 거부 = BUY 전면 차단)
+#   daily_notional_limit 20M→1 (1원 — 일일 매수대금 사실상 0)
 #   stop_loss_pct 0.018→0.010 (혹시라도 진입되면 -1.0% 즉시 손절)
 #   daily_loss_kill: true (불변, 일일 -3% 도달 시 강제 청산)
+# ⚠️ 0 = "무제한(비활성)" 이다 (max_order_value·daily_notional_limit·max_buys_per_symbol 공통).
+#   차단하려면 0 이 아니라 1 을 써야 한다 — 2026-05-29 이 값들이 0 이라 crash 장에서도 매수가 통과한 버그 수정.
 # 새 파라미터 도입 없음. 운영자가 daytrade-current.yaml 의 regime_router.enabled=true 면 자동 활성.
 name: daytrade crash
 strategy: index_momentum_daytrade
@@ -22,8 +24,8 @@ risk:
   trailing_stop_pct: 0.008
   partial_take_pct: 0.018
   partial_take_qty_ratio: 0.5
-  max_order_value: 0.0
-  daily_notional_limit: 1000000.0
+  max_order_value: 1.0
+  daily_notional_limit: 1.0
   daily_loss_kill: true
   max_consecutive_losses: 3
   consecutive_loss_pause_sec: 86400
@@ -37,5 +39,6 @@ breadth_gate:
   min_mean_change_pct: 0.0
   snapshot_dir: data/snapshots
 notes: |
-  HIGH_VOL 자동 라우팅용. max_buys_per_symbol=0 으로 BUY 전면 차단 → 사실상 봇 정지.
+  HIGH_VOL 자동 라우팅용. max_order_value=1 / daily_notional_limit=1 (1원) 로
+  모든 매수가 0주로 사이징돼 거부됨 → 사실상 봇 정지 (보유분 청산·손절은 정상 동작).
   변동성 폭주 시 통계적 우위 사라지므로 매매 회피가 최선.
