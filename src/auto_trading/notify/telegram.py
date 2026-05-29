@@ -176,6 +176,12 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
             return f"❌ 청산 전부 실패{dry} · {failed}종목 ({reason})"
         return f"🧹 청산 완료{dry} · {success}종목 ({reason})"
 
+    if event == "runner.liquidate_giving_up":
+        failed = fields.get("failed", 0)
+        return (
+            f"🚨 청산 재시도 소진 · {failed}종목 정리 실패\n"
+            f"   미청산분이 다음 거래일로 넘어갑니다(갭 리스크). 수동 확인 필요"
+        )
     if event == "runner.liquidate_failed":
         sym_label = _with_name(str(fields.get("symbol", "?")), fields.get("name"))
         return (

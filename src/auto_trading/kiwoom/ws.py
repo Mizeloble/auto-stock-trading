@@ -126,7 +126,14 @@ class KiwoomWebSocket:
                             await ws.send(raw)  # echo back
                             continue
                         await self._queue.put(msg)
-            except (ConnectionClosed, OSError) as exc:
+            except asyncio.CancelledError:
+                # 태스크 취소(stop)는 정상 종료 경로 — 백오프 없이 전파.
+                raise
+            except Exception as exc:
+                # 끊김(ConnectionClosed/OSError) 뿐 아니라 토큰 취득 실패·로그인/핸드셰이크
+                # RuntimeError·구독 실패까지 여기서 흡수해 재접속 백오프를 태운다.
+                # 과거엔 (ConnectionClosed, OSError) 만 잡아, 장 시작 시 토큰/로그인 실패가
+                # 루프 밖으로 전파되면 ws 태스크가 조용히 죽고 러너가 빈 큐를 영원히 폴링했다.
                 if self._stop.is_set():
                     return
                 uptime = loop.time() - connected_at if connected_at is not None else 0.0
@@ -135,10 +142,13 @@ class KiwoomWebSocket:
                     "uptime_seconds": round(uptime, 1),
                     "backoff": backoff,
                 }
-                if uptime >= _EXPECTED_IDLE_DISCONNECT_SECONDS:
+                if isinstance(exc, ConnectionClosed | OSError) and (
+                    uptime >= _EXPECTED_IDLE_DISCONNECT_SECONDS
+                ):
                     # 모의서버 idle 타임아웃으로 추정 — 재접속 루프가 처리하므로 INFO.
                     log.info("ws.disconnect", **fields)
                 else:
+                    # 연결 외 실패(토큰/로그인/구독)거나 짧게 끊긴 건 진짜 문제 신호 — WARNING.
                     log.warning("ws.disconnect", **fields, exc_info=exc)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)

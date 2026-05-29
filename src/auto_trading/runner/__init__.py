@@ -77,6 +77,10 @@ class PaperRunner:
     # 시계 task 가 도달 시 liquidate_all → request_stop 으로 자기 종료.
     liquidate_at: time | None = None
     liquidate_grace_sec: int = 30
+    # 청산 실패(네트워크 등) 시 STOPPING 으로 굳기 전 실패분만 재시도하는 횟수/간격.
+    # 0 이면 재시도 없이 기존 동작(1회 시도 후 종료). 실패분만 재송신 = idempotent.
+    liquidate_max_retries: int = 2
+    liquidate_retry_delay_sec: int = 5
     # 29단계 PR2 (#9 2차) — 주문 영속 저널. 미지정이면 저널링 비활성 (테스트·기존 호환).
     # 주입 시 매 place_order 호출에 자동 전달, 시동 시 replay 로 손실 의심 주문 알림.
     journal: OrderJournal | None = None
@@ -1037,19 +1041,22 @@ class PaperRunner:
         account: AccountState,
         *,
         reason: str,
-    ) -> None:
+    ) -> int:
         """보유 모든 종목을 시장가 SELL 송신. dry_run 이면 시뮬 로그만.
 
-        한 종목 실패는 다른 종목으로 진행. 호출 후 _liquidation_done 마킹 — 두 번 호출 X.
+        한 종목 실패는 다른 종목으로 진행. 반환값은 *실패한 종목 수*.
+        전부 성공(또는 보유 없음)했을 때만 `_liquidation_done` 마킹 —
+        실패가 남으면 호출자(_liquidation_loop)가 실패분만 재시도할 수 있게 둔다.
+        (성공 종목은 positions 가 0 으로 갱신돼 재호출 시 자연히 제외 = idempotent.)
         """
         if self._liquidation_done:
             log.info("runner.liquidate_skipped", reason="already_done")
-            return
+            return 0
         positions = {sym: qty for sym, qty in account.positions.items() if qty > 0}
         if not positions:
             log.info("runner.liquidate_noop", reason="no_positions")
             self._liquidation_done = True
-            return
+            return 0
 
         log.info(
             "runner.liquidate_start",
@@ -1110,7 +1117,9 @@ class PaperRunner:
                     error=str(exc),
                 )
 
-        self._liquidation_done = True
+        # 전부 성공했을 때만 done 마킹 — 실패가 남으면 재시도 여지를 남긴다.
+        if failed == 0:
+            self._liquidation_done = True
         # count 는 성공 건수만 (backward-compatible). failed 가 추가 필드.
         await self.notifier.notify(
             "runner.liquidate_done",
@@ -1120,6 +1129,7 @@ class PaperRunner:
             attempted=len(positions),
             dry_run=self.dry_run,
         )
+        return failed
 
     async def _heartbeat_loop(self) -> None:
         """heartbeat 파일 mtime 을 interval_sec 간격으로 갱신.
@@ -1155,10 +1165,40 @@ class PaperRunner:
                 if account is None:
                     log.warning("runner.liquidate_skipped", reason="no_account_snapshot")
                 else:
-                    try:
-                        await self.liquidate_all(rest, account, reason="liquidate_at_reached")
-                    except Exception as exc:
-                        log.error("runner.liquidate_loop_error", error=str(exc), exc_info=exc)
+                    # 청산이 (네트워크 등으로) 일부 실패하면 STOPPING 으로 굳기 전에
+                    # 실패분만 유한 횟수 재시도한다. liquidate_all 은 성공 종목 positions 를
+                    # 0 으로 만들어 재호출 시 실패분만 다시 송신 = idempotent.
+                    for attempt in range(self.liquidate_max_retries + 1):
+                        try:
+                            failed = await self.liquidate_all(
+                                rest, account, reason="liquidate_at_reached"
+                            )
+                        except Exception as exc:
+                            log.error(
+                                "runner.liquidate_loop_error", error=str(exc), exc_info=exc
+                            )
+                            failed = -1  # 예외 = 미확정, 재시도 가치 있음
+                        if failed == 0:
+                            break
+                        if attempt < self.liquidate_max_retries:
+                            log.warning(
+                                "runner.liquidate_retry",
+                                failed=failed,
+                                attempt=attempt + 1,
+                                max_retries=self.liquidate_max_retries,
+                                next_delay=self.liquidate_retry_delay_sec,
+                            )
+                            await asyncio.sleep(self.liquidate_retry_delay_sec)
+                        else:
+                            # 재시도 소진 — 미청산분이 남은 채 종료(다음날 갭 리스크). 명시 경고.
+                            # 실제로 아직 보유 중인(=청산 못 한) 종목 수를 세어 정확히 알린다.
+                            remaining = sum(1 for q in account.positions.values() if q > 0)
+                            log.error(
+                                "runner.liquidate_giving_up", failed=failed, remaining=remaining
+                            )
+                            await self.notifier.notify(
+                                "runner.liquidate_giving_up", failed=remaining
+                            )
                 # 체결 확인용 grace — 너무 짧으면 미체결, 너무 길면 다음날까지 lingering.
                 await asyncio.sleep(self.liquidate_grace_sec)
                 self.request_stop()

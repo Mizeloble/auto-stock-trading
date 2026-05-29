@@ -187,6 +187,96 @@ async def test_liquidation_loop_skipped_when_account_snapshot_missing() -> None:
     assert r._control_state is RunnerControlState.STOPPING
 
 
+async def test_liquidate_all_returns_failed_count_and_keeps_done_false_on_partial() -> None:
+    """부분 실패 시 반환값은 실패 종목 수, _liquidation_done 은 False (재시도 여지)."""
+    r = _day_trade_runner(dry_run=False)
+    account = _account({"005930": 10, "000660": 5})
+    r.notifier = AsyncMock()
+
+    async def _flaky(rest, order, **_):  # type: ignore[no-untyped-def]
+        if order.symbol == "005930":
+            raise RuntimeError("kiwoom rejected")
+        return OrderResult(order_no="ORD-2", raw={})
+
+    with patch.object(runner_module, "place_order", AsyncMock(side_effect=_flaky)):
+        failed = await r.liquidate_all(rest=object(), account=account, reason="test")  # type: ignore[arg-type]
+
+    assert failed == 1
+    # 전부 성공이 아니므로 done 마킹 X — 재시도 가능.
+    assert r._liquidation_done is False
+
+
+async def test_liquidation_loop_retries_failed_then_succeeds() -> None:
+    """1차 청산 일부 실패 → 재시도에서 성공 → done + STOPPING. 성공분은 재송신 안 함."""
+    r = _day_trade_runner(dry_run=False, liquidate_grace_sec=0)
+    r.liquidate_max_retries = 2
+    r.liquidate_retry_delay_sec = 0
+    r._account = _account({"005930": 10, "000660": 5})
+    r.notifier = AsyncMock()
+
+    attempts = {"005930": 0, "000660": 0}
+
+    async def _flaky(rest, order, **_):  # type: ignore[no-untyped-def]
+        attempts[order.symbol] += 1
+        # 005930 은 1차만 실패, 2차 성공. 000660 은 항상 성공.
+        if order.symbol == "005930" and attempts["005930"] == 1:
+            raise RuntimeError("transient")
+        return OrderResult(order_no=f"ORD-{order.symbol}", raw={})
+
+    fake_now = datetime.now(KST).replace(hour=15, minute=20, second=0, microsecond=0)
+
+    class _FakeDatetime:
+        @staticmethod
+        def now(tz=None):  # type: ignore[no-untyped-def]
+            return fake_now
+
+    with (
+        patch.object(runner_module, "datetime", _FakeDatetime),
+        patch.object(runner_module, "place_order", AsyncMock(side_effect=_flaky)),
+    ):
+        await r._liquidation_loop(rest=object())  # type: ignore[arg-type]
+
+    # 005930 은 2번(실패→성공), 000660 은 1번만 송신(1차 성공 후 재시도서 제외).
+    assert attempts["005930"] == 2
+    assert attempts["000660"] == 1
+    assert r._liquidation_done is True
+    assert r._control_state is RunnerControlState.STOPPING
+    assert r._account.positions == {"005930": 0, "000660": 0}  # type: ignore[union-attr]
+
+
+async def test_liquidation_loop_gives_up_after_retries_but_still_stops() -> None:
+    """청산이 끝까지 실패해도 재시도 소진 후 경고 알림 + STOPPING (다음날 hang 방지 불변식)."""
+    r = _day_trade_runner(dry_run=False, liquidate_grace_sec=0)
+    r.liquidate_max_retries = 2
+    r.liquidate_retry_delay_sec = 0
+    r._account = _account({"005930": 10})
+    r.notifier = AsyncMock()
+
+    async def _always_fail(rest, order, **_):  # type: ignore[no-untyped-def]
+        raise RuntimeError("broker down")
+
+    fake_now = datetime.now(KST).replace(hour=15, minute=20, second=0, microsecond=0)
+
+    class _FakeDatetime:
+        @staticmethod
+        def now(tz=None):  # type: ignore[no-untyped-def]
+            return fake_now
+
+    with (
+        patch.object(runner_module, "datetime", _FakeDatetime),
+        patch.object(runner_module, "place_order", AsyncMock(side_effect=_always_fail)),
+    ):
+        await r._liquidation_loop(rest=object())  # type: ignore[arg-type]
+
+    # 끝까지 실패 → 불변식: 그래도 STOPPING 진입(다음날 hang 방지).
+    assert r._control_state is RunnerControlState.STOPPING
+    # 미청산분 경고 알림이 나갔다.
+    events = [c.args[0] for c in r.notifier.notify.call_args_list]  # type: ignore[attr-defined]
+    assert "runner.liquidate_giving_up" in events
+    # 1차 + 재시도 2회 = liquidate_all 3회 호출 → 종목 송신 3회.
+    assert r._account.positions["005930"] == 10  # type: ignore[union-attr]
+
+
 def test_intraday_momentum_fires_once_then_silent() -> None:
     """IntradayMomentum 은 첫 봉에 한 번만 BUY, 이후 NONE."""
     from auto_trading._common import Bar, Side
