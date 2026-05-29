@@ -266,7 +266,7 @@ def _build_closing_balance(payload: dict) -> list[str]:
         try:
             total = float(cash) + float(equity)
             out.append(f"계좌 총합: {_won(total)}")
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             pass
     if not holdings:
         out.append("보유: 없음 (전량 청산)")

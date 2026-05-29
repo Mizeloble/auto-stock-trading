@@ -116,10 +116,7 @@ def route_profile_by_regime(
             profile_path=current_path,
             regime=None,
             routed=False,
-            summary_ko=(
-                f"⚠️ 시장 국면 분류 실패(KODEX 200 일봉 fetch): {exc}. "
-                "현재 프로파일 유지."
-            ),
+            summary_ko=(f"⚠️ 시장 국면 분류 실패(KODEX 200 일봉 fetch): {exc}. 현재 프로파일 유지."),
         )
 
     selected = select_profile_for_regime(
@@ -143,8 +140,7 @@ def route_profile_by_regime(
         report.regime, (report.regime.value, "조정 없음", "-", "-")
     )
     summary = (
-        f"📊 시장 국면 자동 라우팅: {label} → {selected.name} ({change}). "
-        f"👍 {pros}. 👎 {cons}."
+        f"📊 시장 국면 자동 라우팅: {label} → {selected.name} ({change}). 👍 {pros}. 👎 {cons}."
     )
     return RegimeRoutingResult(
         profile_path=selected,
