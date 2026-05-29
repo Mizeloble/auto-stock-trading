@@ -1,13 +1,19 @@
 # launchd 자동 운영 가이드
 
-집 맥북에서 day-trade 모드 자동 운영 + 토요일 LLM 자동 갱신 + 매일 로그 정리.
-21~25단계 풀 도입 후 **세 잡** 만 등록하면 사이클 완성:
+집 맥북에서 day-trade 모드 자동 운영 + 시총 200 breadth 인프라 + 토요일 LLM 자동 갱신 + 매일 로그 정리.
+`launchd-install.sh` 한 줄이 다음 **7개 잡** 을 등록하면 사이클 완성:
 
 | 잡 | 트리거 | 동작 |
 |---|---|---|
 | `paper-day` | 평일 08:55 KST | 발굴 → 매수 → 15:15 자체 청산 → 종료. 일일 리포트 텔레그램 |
+| `marketcap-universe` | 평일 08:50 KST | KRX 시총 상위 200 마스터 갱신 (breadth 게이트 입력) |
+| `snapshot-top200` | 평일 09:00~15:30 10분 간격 | 시총 200 현재가 스냅샷 JSONL 누적 |
+| `news-prefetch` | 토요일 06:00 KST | RSS 6개 소스 캐시 선반영 (LLM X · 비용 0) |
 | `insight-weekly` | 토요일 09:00 KST | 인사이트 + weekly-proposal LLM (`daytrade-current.yaml` 자동 갱신) |
 | `log-rotate` | 매일 02:30 KST | 30일↑ `*.log` → `.log.gz`, 90일↑ `.log.gz` 삭제, launchd-*.log 10MB↑ truncate |
+| `heartbeat-check` | 평일 09:00~16:00 5분 간격 | 봇 heartbeat 누락 감지 → 텔레그램 알림 |
+
+등록 후 상태 점검은 `uv run auto-trade ops` 한 줄로 8개 LaunchAgent(위 7개 + 만료된 1회성 잡)의 마지막 실행·종료 코드를 표로 봅니다.
 
 로그: `logs/paper-day-YYYY-MM-DD.log` / `logs/insight-YYYY-MM-DD.log` / `logs/launchd-log-rotate.out.log`.
 

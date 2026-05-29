@@ -185,6 +185,8 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 
 기본 `daytrade-default.yaml` 의 실제 프리셋: stop_loss −1% / trailing −0.5% / partial_take +1.5%(절반) / daily_loss_kill ON, 모멘텀 게이트·절대금액 캡은 OFF. 첫 활성은 이대로 며칠 dry-run 후, 한도를 한두 개씩 손대세요.
 
+> 약세장·과매매를 매수 단계에서 막는 추가 게이트(시장국면 자동 라우팅 · 시총 200 breadth 게이트 · 회피 종목 · 종목당 일일 매수 횟수 한도)는 모두 프로파일 YAML 에서 켭니다. 기본은 전부 OFF — §7 참고.
+
 ---
 
 ## 5. 일일 리포트 + 주간 자동 갱신 (LLM)
@@ -201,9 +203,12 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 `weekly-proposal` 흐름:
 
 1. 직전 7일 일일 리포트 + 6개 RSS 뉴스(한국경제 finance·economy, 연합뉴스 economy·market, SBS Biz, 파이낸셜뉴스) 수집 (`data/news/news-*.json` 캐시, url 키 dedupe 후 누적 병합)
-2. LLM(Anthropic) 호출 **1회** — 다음 주 프로파일 변경 제안 (`DaytradeProposal`)
-3. 안전 캡(top_n ≤ 5, stop_loss ≤ 3% 등) 통과한 변경만 `strategies/profiles/daytrade-current.yaml` 에 적용. 기존은 `.bak.YYYY-MM-DD` 백업
-4. 텔레그램에 "🗞 다음 주 day-trade 프로파일 갱신" 변경 요약 푸시
+2. LLM(Anthropic) 호출 **1회** — 다음 주 프로파일 변경 제안 + 회피 종목 권고 (`DaytradeProposal`)
+3. 안전 캡(top_n ≤ 5, stop_loss ≤ 3% 등) 통과한 변경만 `strategies/profiles/daytrade-current.yaml` 에 적용 (회피 종목은 `avoid_symbols` 로 반영). 기존은 `.bak.YYYY-MM-DD` 백업
+4. 텔레그램에 "🗞 다음 주 day-trade 프로파일 갱신" 푸시 — 초보자 친화 포맷:
+   - **📊 정량 입력** — 기간·매수/청산/에러 건수·실현손익·회전율·시장국면·뉴스 건수를 사실 검증 가능하게 먼저 노출
+   - **변경 항목 글로서리** — 각 변경마다 [정의 / 👍 장점 / 👎 단점 / 📌 이번 이유] 4줄. YAML 키를 그대로 노출하지 않음
+   - **근거 4섹션** — 신호 요약 / 판단 / 참고한 헤드라인 / 주간 메모로 분리해 "왜 이렇게 바꿨는지" 가 한눈에
 
 월요일 08:55 의 paper-day cron 이 자동으로 `daytrade-current.yaml` 을 읽어 그 주 운용에 반영. 파일 없으면 `daytrade-default.yaml` 폴백, 둘 다 없으면 CLI 인자만으로 동작(안전).
 
@@ -276,6 +281,7 @@ day-trade `--profile` YAML 의 `risk:` 블록으로 켭니다. 기본값은 모�
 | `daily_loss_kill` | False | **True** | 일일 −3% 도달 시 보유 강제 청산 + 정지 |
 | `max_order_value` | 0 (무제한) | 0 | 1회 주문 절대 금액 캡(원) |
 | `daily_notional_limit` | 0 (무제한) | 0 | 일일 총 매수대금 캡(원) |
+| `max_buys_per_symbol` | 0 (무제한) | — | **회전율 가드** — 종목당 하루 BUY 허용 횟수. N회 도달 후 추가 매수 차단(SELL/청산은 무관, 자정 리셋) |
 | `max_consecutive_losses` | 0 (OFF) | — | N연속 손절 시 일정 시간 신규 진입 차단 |
 | `consecutive_loss_pause_sec` | 86,400 (24h) | — | 위 차단 지속 시간 |
 | `max_position_correlation` | 0 (OFF) | — | 보유 종목 간 상관계수 가드 (권장 0.7) |
@@ -283,6 +289,29 @@ day-trade `--profile` YAML 의 `risk:` 블록으로 켭니다. 기본값은 모�
 | `atr_target_risk_pct` | 0.01 | — | 위 정규화 기준 ("1 ATR ≈ 자본 1%") |
 
 > 첫 활성은 한두 개만 켜고 며칠 dry-run. 한 번에 다 켜지 마세요.
+> 과매매(같은 종목 반복 진입으로 비용만 누적)가 손실의 1순위 원인이라, 회전율을 줄이고 싶으면 `max_buys_per_symbol` 부터 켜는 걸 권합니다.
+
+### 매수 자체를 줄이는 추가 게이트 (기본 OFF — 약세장·과매매 방어)
+
+`risk:` 한도가 "주문 한 건"을 깎는다면, 아래 세 게이트는 **그날 매수를 아예 막아** 회전율을 줄입니다. 모두 프로파일 YAML 최상위에서 켭니다. 기본 비활성(회귀 0)이고, 데이터가 없으면 안전하게 통과(fail-open)합니다.
+
+| 게이트 | YAML 키 | 동작 |
+|---|---|---|
+| **시장국면 자동 라우팅** | `regime_router.enabled: true` | 시동 시 KODEX 200(069500) 60일봉으로 국면 분류 → `daytrade-trend / defensive / range / crash` 중 맞는 프로파일로 자동 스위치. 매핑 파일 없으면 현재 프로파일 유지 |
+| **시총 200 breadth 게이트** | `breadth_gate.enabled: true` | 시총 200 스냅샷(평일 launchd 누적, §12)의 상승 종목 비율 `min_advancing_pct`(기본 0.5) + 평균 등락률 `min_mean_change_pct`(기본 0.0) 미달 시 매수 차단 |
+| **회피 종목** | `avoid_symbols: ["005930", …]` | 거래량 상위에 떠도 목록의 종목은 발굴 후보에서 즉시 제외. 토요일 weekly-proposal LLM 이 "⛔ 회피 종목" 권고 시 자동 반영 |
+
+예시 (프로파일 YAML 최상위):
+```yaml
+regime_router:
+  enabled: true
+breadth_gate:
+  enabled: true
+  min_advancing_pct: 0.5
+  min_mean_change_pct: 0.0
+avoid_symbols:
+  - "123456"
+```
 
 ---
 
@@ -419,17 +448,19 @@ uv run auto-trade strategy advise --profile strategies/profiles/auto_005930.yaml
 launchctl list | grep mizeloble.auto-trade
 ```
 
-`launchd-install.sh` 한 줄로 다음 **5개 잡** 이 함께 등록됩니다:
+`launchd-install.sh` 한 줄로 다음 **7개 잡** 이 함께 등록됩니다:
 
 | 잡 | 시점 (KST) | 역할 |
 |---|---|---|
 | `paper-day` | 평일 08:55 | day-trade 시동 (`daytrade-current.yaml` → 없으면 `daytrade-default.yaml`) |
+| `marketcap-universe` | 평일 08:50 | 시총 상위 200 종목 마스터 갱신 (breadth 게이트 입력 · §7) |
+| `snapshot-top200` | 평일 09:00~15:30, 10분 간격 | 시총 200 현재가 스냅샷 JSONL 누적 (breadth 게이트 입력) |
 | `news-prefetch` | 토요일 06:00 | RSS 캐시 선반영 (LLM X) |
 | `insight-weekly` | 토요일 09:00 | insight → weekly-proposal LLM cron |
 | `log-rotate` | 매일 02:30 | 로그 자동 정리 (아래) |
 | `heartbeat-check` | 평일 09:00~16:00, 5분 간격 | 봇 생존 감시 (heartbeat 누락 시 텔레그램 알림) |
 
-해제·상세는 [scripts/launchd/README.md](scripts/launchd/README.md) 참고.
+등록 후 `uv run auto-trade ops` 로 8개 LaunchAgent(위 7개 + 만료된 1회성 잡)의 마지막 실행 시각·종료 코드를 표로 한눈에 볼 수 있습니다(§13). 해제·상세는 [scripts/launchd/README.md](scripts/launchd/README.md) 참고.
 
 > swing 모드 자동화 plist 는 deprecated 처리되어 `scripts/legacy/` 로 이동했습니다. 복귀 절차는 [scripts/legacy/README.md](scripts/legacy/README.md).
 
@@ -464,6 +495,7 @@ launchd 는 평일 08:55 만 보고 시동하지만, 한국 법정공휴일·임
 
 | 명령 | 무엇 | 언제 쓰나 |
 |---|---|---|
+| `auto-trade ops` | launchd 자동 잡 8종의 마지막 실행 시각·종료 코드 표 | "어제 cron 이 제대로 돌았나?" 한눈에 확인 (§12) |
 | `auto-trade dashboard` | 투자 결과 분석 웹 (FastAPI, 로컬 전용). `--host/--port` 옵션 | 며칠 운영 후 자산곡선·일별 상세를 브라우저로 보고 싶을 때 |
 | `auto-trade detect-regime` | 현재 시장국면(추세상승/추세하락/박스/고변동성) 분류 | 어떤 day-trade 프로파일이 어울릴지 감 잡을 때 |
 | `auto-trade heartbeat-check` | 봇 heartbeat 누락 검사 (cron 5분 간격 가정) | launchd 가 자동 호출. 수동으로 생존 확인할 때 |
@@ -471,6 +503,8 @@ launchd 는 평일 08:55 만 보고 시동하지만, 한국 법정공휴일·임
 | `auto-trade orders inspect` | 주문 저널 진단·복구 (`--suspect-only`, `--tail`) | preflight 의 미해결 주문 게이트가 실패했을 때 무엇이 미해결인지 확인 |
 | `auto-trade data check` | 데이터 파일 진단·정합성 검사 | 리포트/캐시 파일이 깨졌나 의심될 때 |
 | `auto-trade verify-symbol` | 키움 일봉 fetch + OHLCV 정합성 검사 | 특정 종목 데이터가 이상할 때 |
+| `auto-trade build-marketcap-universe` | KRX 시총 상위 200 마스터 산출 → JSON 캐시 | breadth 게이트(§7) 입력. 평일 08:50 launchd 자동, 수동은 디버그용 |
+| `auto-trade snapshot-top200` | 시총 200 종목 현재가 1라운드 스냅샷 → JSONL append | breadth 게이트 입력. 평일 10분 간격 launchd 자동 |
 | `auto-trade fetch-news` | RSS 뉴스만 미리 fetch → 캐시 갱신 (LLM X · 비용 0) | weekly-proposal 입력 미리 채워두기 (§5) |
 | `auto-trade backtest-compare` | 두 백테스트 결과 비교 (Sharpe/PSR/CAGR/MDD/승률 차이 표) | 전략·파라미터 변경 전후 성능 비교 |
 
@@ -516,7 +550,7 @@ auto-stock-trading/
 ├── .env.example           ← 설정 템플릿 (복사해서 .env 로)
 ├── pyproject.toml         ← Python 프로젝트 메타
 ├── strategies/profiles/   ← 추천·LLM 갱신으로 쌓이는 YAML 들
-├── data/                  ← 리포트·뉴스·백테스트·저널 (자동 생성)
+├── data/                  ← 리포트·뉴스·백테스트·저널·시총 스냅샷 (자동 생성)
 ├── logs/                  ← 운영 로그 (자동 생성)
 ├── scripts/               ← launchd 자동 시작·종료·로그정리 스크립트
 └── src/auto_trading/      ← 봇의 본체 코드
