@@ -144,20 +144,9 @@ def test_real_yaml_profiles_load_without_validation_error() -> None:
         assert profile.risk.max_consecutive_losses == 3
 
 
-def test_current_yaml_has_regime_router_block_disabled_by_default() -> None:
-    """사용자 운영 daytrade-current.yaml 이 있을 때 regime_router 기본 OFF 확인.
-
-    `daytrade-current.yaml` 은 사용자가 운영하며 토요일 cron 으로 자동 갱신되는
-    파일이라 .gitignore 대상. 다른 머신/CI 에는 없는 게 정상이므로 skip.
-    """
-    import pytest
-
-    root = Path(__file__).resolve().parent.parent / "strategies" / "profiles"
-    current = root / "daytrade-current.yaml"
-    if not current.exists():
-        pytest.skip("daytrade-current.yaml 은 운영 자산 (.gitignore) — 본 환경에 없음")
-    profile = DaytradeProfile.load_yaml(current)
-    assert profile.regime_router.enabled is False, (
-        "운영 daytrade-current.yaml 의 regime_router.enabled 가 true 로 켜져 있음. "
-        "사용자가 명시적으로 켠 게 아니라면 false 로 되돌리세요."
-    )
+# 참고: 과거엔 운영 daytrade-current.yaml 의 regime_router 가 기본 OFF 인지 단정하는
+# 테스트가 여기 있었으나, 이 파일은 사용자가 자유롭게 켜고 끄는 운영 자산(.gitignore)이라
+# 사용자가 명시적으로 켜면(2026-05-28 사용자 요청) 항상 빨강이 됐다. 그 테스트가 지키려던
+# 진짜 보증 — "LLM 주간 자동화가 실수로 regime_router 를 켜지 못한다" — 은 운영 파일과
+# 무관한 결정론적 단위 테스트로 옮겼다: test_profile_writer.py 의
+# test_apply_proposal_preserves_regime_router_block.

@@ -8,6 +8,7 @@ from pathlib import Path
 from auto_trading._common import KST
 from auto_trading.daytrade.profile import (
     DaytradeProfile,
+    DaytradeRegimeRouter,
     DaytradeRiskLimits,
     DaytradeStrategyParams,
 )
@@ -43,6 +44,42 @@ def _base_profile() -> DaytradeProfile:
             daily_loss_kill=False,
         ),
     )
+
+
+def test_apply_proposal_preserves_regime_router_block() -> None:
+    """LLM 주간 자동화는 regime_router 를 절대 건드리지 못한다 (화이트리스트 제외).
+
+    무엇/왜: regime_router(시장국면 자동 라우팅)는 사용자가 직접 켜고 끄는 운영 스위치다.
+    DaytradeProposal 스키마에 regime_router 필드가 아예 없고, apply_proposal 은
+    current.model_dump() 로 시작해 _PROPOSAL_FIELDS_* 화이트리스트만 덮어쓰므로,
+    사용자가 켜둔 regime_router.enabled=True 가 자동 갱신으로 꺼지거나 켜지지 않아야 한다.
+    (과거 운영 yaml 을 단정하던 깨지기 쉬운 통합 테스트를 이 결정론적 단위로 대체.)
+    """
+    # 사용자가 regime_router 를 켜둔 프로파일.
+    base = _base_profile()
+    base = base.model_copy(update={"regime_router": DaytradeRegimeRouter(enabled=True)})
+    assert base.regime_router.enabled is True
+
+    # risk·params·top_n·avoid 를 모두 바꾸는 적극적인 proposal.
+    prop = DaytradeProposal(
+        summary_ko="대폭 변경",
+        rationale_ko="ok",
+        confidence=0.9,
+        top_n=2,
+        cooldown_min=90,
+        stop_loss_pct=0.02,
+        symbols_to_avoid=["005930"],
+    )
+    out = apply_proposal(prop, base)
+
+    # 다른 필드는 반영됐어도 regime_router 는 사용자 설정 그대로 보존.
+    assert out.applied_profile.regime_router.enabled is True
+    # 반대로 꺼둔 경우도 자동으로 켜지지 않는다.
+    base_off = _base_profile().model_copy(
+        update={"regime_router": DaytradeRegimeRouter(enabled=False)}
+    )
+    out_off = apply_proposal(prop, base_off)
+    assert out_off.applied_profile.regime_router.enabled is False
 
 
 def test_apply_no_changes_when_proposal_all_none() -> None:
