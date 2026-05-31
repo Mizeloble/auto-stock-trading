@@ -51,6 +51,14 @@ from .control import RunnerControlState
 
 log = structlog.get_logger(__name__)
 
+# churn 브레이크(daily_realized_loss_limit) 의 누적 실현손익을 NET(비용 차감)으로 추정하기
+# 위한 비용율. **reports/daily.py 의 COST_* / backtest/broker.py 와 수동 동기화**(import 로
+# 안 묶는 이유는 모듈 간 역방향 의존 회피 — reports/CLAUDE.md 의 동기화 규칙과 동일).
+# 한쪽만 바꾸면 런타임 브레이크와 사후 리포트 손익이 어긋난다.
+_BRAKE_COMMISSION_RATE = 0.00015  # 0.015% (매수+매도)
+_BRAKE_TAX_RATE_SELL = 0.0020  # 0.20% (매도)
+_BRAKE_SLIPPAGE_RATE = 0.0005  # 5bp (매수+매도)
+
 
 @dataclass
 class PaperRunner:
@@ -135,6 +143,9 @@ class PaperRunner:
     # 같은 종목 반복 진입으로 비용만 누적되는 패턴 차단. 날짜 바뀌면 자동 리셋.
     _daily_buy_counts: dict[str, int] = field(default_factory=dict, init=False)
     _daily_buy_counts_date: _date | None = field(default=None, init=False)
+    # churn 브레이크 — 그날 누적 실현손익(NET=비용 차감, 음수면 손실). SELL 마다 적립, 날짜
+    # 바뀌면 _roll_daily_buy_counts 가 함께 리셋. risk.limits.daily_realized_loss_limit 활성 시만 의미.
+    _daily_realized_net: float = field(default=0.0, init=False)
     # 안전 브레이크 무방비 경고 — daily_loss_kill 이 켜졌는데 평가금액 기준이 없어
     # kill switch 가 판정 불능일 때 *1회만* 경고/알림(매 잔고 갱신마다 스팸 방지).
     _kill_switch_blind_warned: bool = field(default=False, init=False)
@@ -663,6 +674,18 @@ class PaperRunner:
                     limit=limit,
                 )
                 return None
+        # churn 브레이크 — 그날 누적 실현손실이 한도 도달 시 신규 진입 자동 중단 (SELL 불변).
+        # 손익 기준이라 잘 번 날은 안 막고 손실 쌓인 날만 막는다. 0=비활성.
+        if signal.side is Side.BUY:
+            blocked, realized_loss, loss_cap = self._daily_loss_limit_exceeded()
+            if blocked:
+                log.info(
+                    "runner.signal_blocked_daily_loss",
+                    symbol=signal.symbol,
+                    realized_loss=round(realized_loss),
+                    limit=round(loss_cap),
+                )
+                return None
         decision = self.risk.evaluate(
             signal,
             price=bar.close,
@@ -785,23 +808,37 @@ class PaperRunner:
             # 29단계 PR10 (#14 2차) — SELL 시 라운드트립 PnL 산출 → 트래커 갱신.
             # 평균가는 BUY 시에만 갱신되므로 SELL 직전 avg_prices 가 매수가.
             # 부분 매도 시점에도 평균가 그대로 유지 — 누적 라운드트립 측정에 적합.
-            if order.side is Side.SELL and self.loss_tracker is not None:
+            if order.side is Side.SELL:
                 buy_price = account.avg_prices.get(order.symbol, 0.0)
                 if buy_price > 0:
                     pnl = (ref_price - buy_price) * order.quantity
-                    was_paused = self.loss_tracker.is_paused()
-                    self.loss_tracker.record_round_trip(pnl)
-                    # paused 로 *방금* 전환됐으면 텔레그램에 알림.
-                    if not was_paused and self.loss_tracker.is_paused():
-                        await self.notifier.notify(
-                            "risk.consecutive_loss_pause",
-                            streak=self.loss_tracker.streak,
-                            paused_until=(
-                                self.loss_tracker.paused_until.isoformat()
-                                if self.loss_tracker.paused_until
-                                else ""
-                            ),
-                        )
+                    # churn 브레이크 — 그날 누적 실현손익(NET, 비용 차감)에 적립(일자 경계면
+                    # 함께 리셋). 비용까지 빼야 검증대로 "잘 번 날은 보존, 손실 쌓인 날만 차단"
+                    # 이 성립(GROSS 는 승자 재진입까지 잘라 부적합 — 2026-05-31 ledger 검증).
+                    # daily_realized_loss_limit 활성 시 매수 게이트가 이 값을 읽어 차단.
+                    buy_notional = buy_price * order.quantity
+                    sell_notional = ref_price * order.quantity
+                    cost = buy_notional * (
+                        _BRAKE_COMMISSION_RATE + _BRAKE_SLIPPAGE_RATE
+                    ) + sell_notional * (
+                        _BRAKE_COMMISSION_RATE + _BRAKE_TAX_RATE_SELL + _BRAKE_SLIPPAGE_RATE
+                    )
+                    self._roll_daily_buy_counts()
+                    self._daily_realized_net += pnl - cost
+                    if self.loss_tracker is not None:
+                        was_paused = self.loss_tracker.is_paused()
+                        self.loss_tracker.record_round_trip(pnl)
+                        # paused 로 *방금* 전환됐으면 텔레그램에 알림.
+                        if not was_paused and self.loss_tracker.is_paused():
+                            await self.notifier.notify(
+                                "risk.consecutive_loss_pause",
+                                streak=self.loss_tracker.streak,
+                                paused_until=(
+                                    self.loss_tracker.paused_until.isoformat()
+                                    if self.loss_tracker.paused_until
+                                    else ""
+                                ),
+                            )
 
             # 23단계 Phase D — SELL 로 잔량 0 이면 last_exit_ts 갱신 + guard reset.
             if order.side is Side.SELL and account.positions.get(order.symbol, 0) <= 0:
@@ -887,6 +924,8 @@ class PaperRunner:
                 )
             self._daily_buy_counts = {}
             self._daily_buy_counts_date = today
+            # churn 브레이크 누적도 같은 일자 경계로 리셋.
+            self._daily_realized_net = 0.0
 
     def _buy_limit_exceeded(self, symbol: str) -> tuple[bool, int, int]:
         """BUY 한도 초과 여부 + (현재 카운트, 한도) 반환. 한도 0(비활성) 이면 False."""
@@ -896,6 +935,18 @@ class PaperRunner:
         self._roll_daily_buy_counts()
         count = self._daily_buy_counts.get(symbol, 0)
         return count >= limit, count, limit
+
+    def _daily_loss_limit_exceeded(self) -> tuple[bool, float, float]:
+        """그날 누적 실현손실이 한도 도달 여부 + (손실액, 한도) 반환. 한도 0(비활성) 이면 False.
+
+        손실은 양수로 환산(`-_daily_realized_net`). 누적이 이익이면 손실<=0 → 차단 안 함.
+        """
+        cap = float(self.risk.limits.daily_realized_loss_limit or 0.0)
+        if cap <= 0:
+            return False, 0.0, 0.0
+        self._roll_daily_buy_counts()
+        realized_loss = -self._daily_realized_net
+        return realized_loss >= cap, realized_loss, cap
 
     def _register_pending_sell(self, symbol: str, quantity: int) -> None:
         """SELL 발주 직후 _pending_sells 에 미체결 수량 누적. 같은 종목 다회 발주 합산."""
