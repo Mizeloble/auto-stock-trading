@@ -135,6 +135,9 @@ class PaperRunner:
     # 같은 종목 반복 진입으로 비용만 누적되는 패턴 차단. 날짜 바뀌면 자동 리셋.
     _daily_buy_counts: dict[str, int] = field(default_factory=dict, init=False)
     _daily_buy_counts_date: _date | None = field(default=None, init=False)
+    # 안전 브레이크 무방비 경고 — daily_loss_kill 이 켜졌는데 평가금액 기준이 없어
+    # kill switch 가 판정 불능일 때 *1회만* 경고/알림(매 잔고 갱신마다 스팸 방지).
+    _kill_switch_blind_warned: bool = field(default=False, init=False)
     # 활성 REST 클라이언트 참조 — force_balance_refresh() 가 별도 인스턴스 안 만들고
     # 메인 루프와 같은 토큰·세션을 재사용하기 위함. run() 의 async with 범위에서만 살아있음.
     _rest_client: KiwoomRestClient | None = field(default=None, init=False, repr=False)
@@ -334,6 +337,18 @@ class PaperRunner:
         23단계 Phase B 의 kill switch. balance refresh 직후 메인 루프가 호출.
         `liquidate_all` 은 `_liquidation_done` 가드로 idempotent — 두 번 호출돼도 안전.
         """
+        # fail-loud — kill switch 가 켜졌는데 평가금액 기준을 못 읽어 무방비면, 조용히
+        # 넘기지 말고 *1회* 경고/알림(매 갱신마다 스팸 방지). 임계·청산 로직은 불변.
+        if self.risk.kill_switch_baseline_missing(account):
+            if not self._kill_switch_blind_warned:
+                self._kill_switch_blind_warned = True
+                log.warning(
+                    "runner.kill_switch_blind",
+                    day_start_equity=account.day_start_equity,
+                    total_equity=account.total_equity,
+                )
+                await self.notifier.notify("runner.kill_switch_blind")
+            return
         if not self.risk.should_force_liquidate(account):
             return
         log.warning(
@@ -630,6 +645,12 @@ class PaperRunner:
                 streak=self.loss_tracker.streak,
                 paused_until=until_iso,
             )
+            return None
+        # fail-safe — 안전 브레이크(daily_loss_kill)가 평가금액을 못 읽어 무방비면 새 진입을
+        # 자동 차단(사람 대응 없이 위험 비축). 보유분 손절·트레일링·청산(SELL)은 영향 없음 —
+        # 이 게이트는 BUY 경로 안에서만 동작. 평가금액이 복구되면 자동으로 진입 재개.
+        if signal.side is Side.BUY and self.risk.kill_switch_baseline_missing(account):
+            log.warning("runner.buy_blocked_kill_switch_blind", symbol=signal.symbol)
             return None
         # 회전율 가드 — 종목당 일일 BUY 한도 초과 시 신규 진입 차단 (SELL 영향 없음).
         if signal.side is Side.BUY:

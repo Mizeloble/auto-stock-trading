@@ -8,6 +8,13 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [ ] **수익률 재검토 — 리포트 보정 완료, 파라미터 변경은 보류** (2026-05-31, [docs/profit-review-2026-05-30.md](docs/profit-review-2026-05-30.md))
+  - **무엇**: 5일치 거래를 라운드트립 재구성(`scripts/diagnostics/analyze_trades.py`) + 제3자 독립 검증 2명. 결과 보정: 손실의 거의 전부가 **단 하루(5/12, −448k)**에서 나왔고 **나머지 4일은 비용 차감 후 흑자(+73,976)**. 초안의 "구조적 적자" 프레이밍은 5/12에 끌려간 과장이라 정정.
+  - **검증으로 폐기된 처방**: A(종목당 1회)는 반사실에서 **해로움**(5/26 재진입 승자 +107,265 제거 → 그날 −106,301). 트레일링 지연발동도 하방 위험·무근거로 폐기. B(하루 진입 상한)만 데이터상 유효(+63,836)하나 임계 과적합 → 라이브 전 ledger 검증 필요.
+  - **사용자 결정(2026-05-31)**: **리포트 보정만 채택. 코드·설정·YAML 전부 무변경.** B·킬스위치 규명·스윙은 추후 별도 결정.
+  - **킬스위치 규명 완료**([docs/killswitch-review-2026-05-31.md](docs/killswitch-review-2026-05-31.md)): −3% 킬이 5/12를 못 막은 건 버그가 아니라 그물코가 큼(계좌 4,897만원 대비 5/12 −0.92%, −1%에도 미달). 계좌 %-킬은 churn 출혈에 부적합. 개선안 A는 **2026-05-31 구현 완료 — fail-safe**(무방비 시 새 매수 자동 차단 + 텔레그램 1회 경고). 알림만으론 일과시간 대응 불가라는 사용자 지적 반영해 자동 진입 차단까지. `kill_switch_baseline_missing`(manager) + 매수 게이트 차단 + `runner.{kill_switch_blind,buy_blocked_kill_switch_blind}`, 단위테스트, 전체 1129 통과. 남은 후속: B(일일 순실현손실·비용 기준 churn 브레이크) — forward(shadow) 검증 후 별도 결정.
+
+
 - [ ] **시장국면 자동 라우팅 — 사용자 검증** (2026-05-28 구현 + 운영 ON)
   - **무엇**: paper-day 시동 시 KODEX 200(069500) 60일봉 → `scanner.classify()` → TREND_UP/DOWN/RANGE/HIGH_VOL 4분류 → `select_profile_for_regime()` 가 매핑된 daytrade-{trend,defensive,range,crash}.yaml 로 자동 스위치. 매핑된 4개 프로파일은 `daytrade-current.yaml` 베이스 + 시장국면별로 `top_n`/`stop_loss_pct`/`daily_notional_limit`/`max_buys_per_symbol` 만 보수/공격 방향 조정 (새 파라미터 도입 X).
   - **왜**: 약세장(TREND_DOWN)·고변동성(HIGH_VOL) 에 같은 공격적 프로파일을 그대로 쓰면 과매매·비용 누수. 분류 결과에 따라 노출 자동 축소·매수 차단. 사용자 메모리 `project_after_cost_loss` "회전율 1순위" 원칙 강화. enabled=False(default) 면 회귀 0.

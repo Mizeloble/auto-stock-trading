@@ -251,3 +251,17 @@ class RiskManager:
             return False
         today_change = account.total_equity / account.day_start_equity - 1.0
         return today_change <= -abs(self.limits.daily_loss_limit)
+
+    def kill_switch_baseline_missing(self, account: AccountState) -> bool:
+        """kill switch 가 켜졌는데 판정 기준(day_start_equity)이 없어 *무방비* 인 상태.
+
+        무엇/왜:
+        - `should_force_liquidate` 는 day_start_equity<=0 이면 조용히 False 를 돌려준다
+          (fail-open). 그 자체로는 안전(잘못 청산 안 함)하지만, 사용자는 "안전 브레이크가
+          지금 작동 불능" 이라는 사실을 알 길이 없다 → 러너가 이 상태를 *한 번* 경고하도록
+          분리한 판정용 순수 함수.
+        - daily_loss_kill 이 꺼져 있으면 무방비도 아니므로 False.
+
+        어떻게 확인: tests/test_risk_manager.py 의 baseline-missing 케이스.
+        """
+        return self.limits.daily_loss_kill and account.day_start_equity <= 0

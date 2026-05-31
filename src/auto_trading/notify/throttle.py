@@ -32,6 +32,7 @@ _PASSTHROUGH: frozenset[str] = frozenset(
         "runner.stopped",
         "runner.balance_failed_fatal",
         "runner.kill_switch_triggered",
+        "runner.kill_switch_blind",
         "runner.weekly_insight",
         "runner.daily_report",
     }

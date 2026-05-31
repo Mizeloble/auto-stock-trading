@@ -105,6 +105,63 @@ async def test_sell_unaffected_by_buy_limit() -> None:
     spy.assert_called_once()
 
 
+def _runner_killswitch() -> PaperRunner:
+    """daily_loss_kill=True 러너 — 평가금액 기준이 없으면 무방비(fail-safe) 차단."""
+    return PaperRunner(
+        strategy=SmaCrossover(),
+        symbols=["005930"],
+        risk=RiskManager(limits=RiskLimits(daily_loss_kill=True, daily_loss_limit=0.03)),
+    )
+
+
+def _account_with_baseline() -> runner_module.AccountState:
+    """day_start_equity 가 잡힌 정상(무방비 아님) 계좌."""
+    return runner_module.AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        positions={},
+        avg_prices={},
+        day_start_equity=10_000_000,
+    )
+
+
+async def test_buy_blocked_when_kill_switch_blind() -> None:
+    """fail-safe — daily_loss_kill=True 인데 day_start_equity=0(무방비) → 새 매수 자동 차단,
+    risk.evaluate 도달 전에 None.
+    """
+    r = _runner_killswitch()
+    signal = Signal(symbol="005930", side=Side.BUY, weight=0.05, price_hint=Decimal("70000"))
+    with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
+        out = await r._evaluate_signal(signal, _bar(), _account())  # day_start_equity=0
+    assert out is None
+    spy.assert_not_called()  # 무방비면 평가 자체에 도달하지 않음
+
+
+async def test_buy_allowed_when_baseline_present() -> None:
+    """평가금액 기준이 있으면 fail-safe 차단 없음 — 정상 평가 경로."""
+    r = _runner_killswitch()
+    signal = Signal(symbol="005930", side=Side.BUY, weight=0.05, price_hint=Decimal("70000"))
+    with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
+        await r._evaluate_signal(signal, _bar(), _account_with_baseline())
+    spy.assert_called_once()
+
+
+async def test_sell_unaffected_when_kill_switch_blind() -> None:
+    """무방비여도 SELL(보유분 청산)은 차단되지 않는다 — 손실 방어 보존."""
+    r = _runner_killswitch()
+    sell = Signal(symbol="005930", side=Side.SELL, weight=1.0, price_hint=Decimal("70000"))
+    account = runner_module.AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        positions={"005930": 3},
+        avg_prices={"005930": 70_000.0},
+        day_start_equity=0.0,  # 무방비
+    )
+    with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
+        await r._evaluate_signal(sell, _bar(), account)
+    spy.assert_called_once()  # SELL 은 평가 도달
+
+
 async def test_buy_count_incremented_on_successful_fill() -> None:
     """_place_and_track 가 BUY 성공 시 카운터를 1 증가."""
     r = _runner(limit=3)
