@@ -218,8 +218,16 @@ class PaperRunner:
 
         # 29단계 회귀(2026-05-11) — 이전 사이클의 "정상 종료" sentinel 정리.
         # cron heartbeat-check 가 다시 미갱신을 잡아낼 수 있게.
+        #
+        # 2026-06-01 회귀 — clear_stopped() 직후 곧바로 heartbeat 를 1회 기록한다.
+        # 안 그러면 시동(clear_stopped)과 종료 sentinel(mark_stopped) 사이 구간에
+        # runner.txt 가 *지난 거래일* 값으로 남는다. breadth 게이트로 거래 없이
+        # 일찍 종료하는 날엔 매매 루프(=heartbeat_loop)에 못 들어가 이 구간이
+        # 그대로 노출되고, 5분 cron 이 끼면 "stale = 봇 멈춤" 가짜 경보가 뜬다.
+        # 시동 시점 1회 write 로 그 구간의 runner.txt 를 항상 fresh 로 유지.
         if self.heartbeat is not None:
             self.heartbeat.clear_stopped()
+            self.heartbeat.write()
 
         # 29단계 PR2 — 시동 시 손실 의심 주문 검사. 자동 복구는 X (다음 PR), 알림만.
         await self._warn_recovery_pending()
