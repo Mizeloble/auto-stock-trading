@@ -126,16 +126,31 @@ async def test_kill_switch_idempotent_when_already_liquidated() -> None:
     assert r._control_state is RunnerControlState.STOPPING
 
 
-async def test_kill_switch_handles_zero_day_start_equity_safely() -> None:
-    """day_start_equity=0 (잔고 첫 호출 실패 후 복구 등 엣지) — log 의 today_change
-    계산이 ZeroDivisionError 없이 0.0 으로 처리.
+async def test_kill_switch_blind_warns_once_when_baseline_missing() -> None:
+    """fail-loud — daily_loss_kill=True 인데 day_start_equity=0(평가금액 못 읽음) →
+    청산은 안 하되 'runner.kill_switch_blind' 경고를 *1회* 푸시(매 갱신 스팸 방지).
     """
     r = _runner(daily_loss_kill=True, daily_loss_limit=0.03)
     notifier = AsyncMock()
     r.notifier = notifier
+    account = _account(day_start=0.0, total=0.0)
 
-    # should_force_liquidate 는 day_start=0 면 False (RiskManager 의 가드).
-    # 이 케이스는 notifier 도 호출 안 해야.
+    with patch.object(r, "liquidate_all", AsyncMock()) as mock_liq:
+        await r._check_kill_switch(rest=object(), account=account)  # type: ignore[arg-type]
+        # 두 번째 호출 — 이미 경고했으므로 추가 푸시 없음.
+        await r._check_kill_switch(rest=object(), account=account)  # type: ignore[arg-type]
+
+    assert notifier.notify.call_count == 1
+    assert notifier.notify.call_args.args[0] == "runner.kill_switch_blind"
+    mock_liq.assert_not_called()  # 무방비여도 임의 청산은 하지 않음
+    assert r._control_state is RunnerControlState.RUNNING
+
+
+async def test_kill_switch_not_blind_when_kill_disabled() -> None:
+    """daily_loss_kill=False 면 day_start_equity=0 이라도 '무방비'가 아니므로 경고 X."""
+    r = _runner(daily_loss_kill=False, daily_loss_limit=0.03)
+    notifier = AsyncMock()
+    r.notifier = notifier
     account = _account(day_start=0.0, total=0.0)
 
     with patch.object(r, "liquidate_all", AsyncMock()) as mock_liq:

@@ -190,6 +190,27 @@ def test_should_force_liquidate_false_within_threshold() -> None:
     assert rm.should_force_liquidate(acct) is False
 
 
+def test_kill_switch_baseline_missing_true_when_kill_on_and_no_equity() -> None:
+    """daily_loss_kill=True 인데 day_start_equity<=0 → 무방비(True)."""
+    rm = RiskManager(limits=RiskLimits(daily_loss_limit=0.03, daily_loss_kill=True))
+    acct = AccountState(deposit=0, total_equity=0, day_start_equity=0.0)
+    assert rm.kill_switch_baseline_missing(acct) is True
+
+
+def test_kill_switch_baseline_missing_false_when_kill_off() -> None:
+    """daily_loss_kill=False 면 기준이 없어도 무방비가 아님(False)."""
+    rm = RiskManager(limits=RiskLimits(daily_loss_limit=0.03, daily_loss_kill=False))
+    acct = AccountState(deposit=0, total_equity=0, day_start_equity=0.0)
+    assert rm.kill_switch_baseline_missing(acct) is False
+
+
+def test_kill_switch_baseline_missing_false_when_equity_present() -> None:
+    """평가금액 기준이 있으면 무방비 아님 — 정상 판정 경로."""
+    rm = RiskManager(limits=RiskLimits(daily_loss_limit=0.03, daily_loss_kill=True))
+    acct = AccountState(deposit=10_000_000, total_equity=10_000_000, day_start_equity=10_000_000)
+    assert rm.kill_switch_baseline_missing(acct) is False
+
+
 # ---- 29단계 PR27 (#15 Phase 1) — 상관계수 가드 ------------------------------
 
 

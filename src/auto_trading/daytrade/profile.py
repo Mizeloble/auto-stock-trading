@@ -83,6 +83,9 @@ class DaytradeRiskLimits(BaseModel):
     # 회전율 가드 — 종목당 하루 BUY 허용 횟수. 0 이면 비활성(무제한).
     # 같은 종목 반복 진입으로 비용만 누적되는 패턴을 막는다. SELL/청산은 영향 없음.
     max_buys_per_symbol: int = Field(default=0, ge=0, le=20)
+    # churn 브레이크 — 그날 누적 실현손실(원, NET=비용 차감)이 이 값 이상이면 신규 BUY 차단.
+    # 0 이면 비활성. 손익 기준이라 잘 번 날은 안 막고 손실 쌓인 날만 막는다. SELL 불변.
+    daily_realized_loss_limit: float = Field(default=0.0, ge=0.0)
 
 
 class DaytradeProfile(BaseModel):

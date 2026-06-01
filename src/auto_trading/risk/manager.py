@@ -82,6 +82,11 @@ class RiskLimits:
     # 회전율 가드 — 종목당 하루 BUY 허용 횟수. 0 이면 비활성.
     # 한도 초과 시 BUY 시그널만 차단 (SELL/청산은 영향 없음). 카운터·리셋은 러너 책임.
     max_buys_per_symbol: int = 0
+    # churn 브레이크 — 그날 누적 실현손실(매도 시 (체결가-평단가)*수량 - 왕복비용, 비용 차감
+    # NET)이 이 금액(원) 이상이면 신규 BUY 만 차단. 0 이면 비활성. 손익 기준이라 "거래 많아도
+    # 잘 번 날"은 안 막고 "그날 손실이 쌓인 날"만 막는다(2026-05-31 ledger 검증 — NET 기준만
+    # 승자 재진입 보존). SELL·청산 불변. 누적·리셋·게이트는 러너 책임. 임계는 forward 관측 후 확정.
+    daily_realized_loss_limit: float = 0.0
     # 29단계 PR39 (#6) — ATR 기반 weight 정규화.
     # False: signal.weight 그대로. True: ATR 데이터 있을 때 weight x (target / atr_pct).
     # 변동성 큰 종목엔 작은 weight, 작은 종목엔 큰 weight (0~1 clamp).
@@ -251,3 +256,17 @@ class RiskManager:
             return False
         today_change = account.total_equity / account.day_start_equity - 1.0
         return today_change <= -abs(self.limits.daily_loss_limit)
+
+    def kill_switch_baseline_missing(self, account: AccountState) -> bool:
+        """kill switch 가 켜졌는데 판정 기준(day_start_equity)이 없어 *무방비* 인 상태.
+
+        무엇/왜:
+        - `should_force_liquidate` 는 day_start_equity<=0 이면 조용히 False 를 돌려준다
+          (fail-open). 그 자체로는 안전(잘못 청산 안 함)하지만, 사용자는 "안전 브레이크가
+          지금 작동 불능" 이라는 사실을 알 길이 없다 → 러너가 이 상태를 *한 번* 경고하도록
+          분리한 판정용 순수 함수.
+        - daily_loss_kill 이 꺼져 있으면 무방비도 아니므로 False.
+
+        어떻게 확인: tests/test_risk_manager.py 의 baseline-missing 케이스.
+        """
+        return self.limits.daily_loss_kill and account.day_start_equity <= 0

@@ -101,6 +101,14 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         limit_part = f" (-{float(limit) * 100:.1f}%)" if limit is not None else ""
         return f"🛑 일일 손실 한도 도달{limit_part} — 강제 청산 후 정지"
 
+    if event == "runner.kill_switch_blind":
+        # fail-loud — 일일 손실 안전 브레이크가 평가금액을 못 읽어 지금 작동 불능(무방비).
+        # 조용히 넘기지 않고 사용자에게 알려, 잔고 조회/시동 상태를 점검하게 한다. 1회만 푸시.
+        return (
+            "⚠️ 안전 브레이크 작동 불능 — 계좌 평가금액을 못 읽어 '일일 손실 자동 정지'가"
+            " 지금 무방비 상태입니다. 잔고 조회 상태를 확인해 주세요."
+        )
+
     if event == "notify.throttled_summary":
         # 23단계 Phase H — ThrottledNotifier 가 N분 윈도우 모은 요약. 본문 그대로.
         return str(fields.get("text") or "🔁 (요약 비어있음)")

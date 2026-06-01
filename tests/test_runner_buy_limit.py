@@ -15,6 +15,8 @@ from datetime import datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 import auto_trading.runner as runner_module
 from auto_trading._common import KST, Bar, Side
 from auto_trading.account.orders import Order, OrderResult, OrderType
@@ -103,6 +105,160 @@ async def test_sell_unaffected_by_buy_limit() -> None:
     with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
         await r._evaluate_signal(sell, _bar(), account)
     spy.assert_called_once()
+
+
+def _runner_killswitch() -> PaperRunner:
+    """daily_loss_kill=True 러너 — 평가금액 기준이 없으면 무방비(fail-safe) 차단."""
+    return PaperRunner(
+        strategy=SmaCrossover(),
+        symbols=["005930"],
+        risk=RiskManager(limits=RiskLimits(daily_loss_kill=True, daily_loss_limit=0.03)),
+    )
+
+
+def _account_with_baseline() -> runner_module.AccountState:
+    """day_start_equity 가 잡힌 정상(무방비 아님) 계좌."""
+    return runner_module.AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        positions={},
+        avg_prices={},
+        day_start_equity=10_000_000,
+    )
+
+
+async def test_buy_blocked_when_kill_switch_blind() -> None:
+    """fail-safe — daily_loss_kill=True 인데 day_start_equity=0(무방비) → 새 매수 자동 차단,
+    risk.evaluate 도달 전에 None.
+    """
+    r = _runner_killswitch()
+    signal = Signal(symbol="005930", side=Side.BUY, weight=0.05, price_hint=Decimal("70000"))
+    with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
+        out = await r._evaluate_signal(signal, _bar(), _account())  # day_start_equity=0
+    assert out is None
+    spy.assert_not_called()  # 무방비면 평가 자체에 도달하지 않음
+
+
+async def test_buy_allowed_when_baseline_present() -> None:
+    """평가금액 기준이 있으면 fail-safe 차단 없음 — 정상 평가 경로."""
+    r = _runner_killswitch()
+    signal = Signal(symbol="005930", side=Side.BUY, weight=0.05, price_hint=Decimal("70000"))
+    with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
+        await r._evaluate_signal(signal, _bar(), _account_with_baseline())
+    spy.assert_called_once()
+
+
+async def test_sell_unaffected_when_kill_switch_blind() -> None:
+    """무방비여도 SELL(보유분 청산)은 차단되지 않는다 — 손실 방어 보존."""
+    r = _runner_killswitch()
+    sell = Signal(symbol="005930", side=Side.SELL, weight=1.0, price_hint=Decimal("70000"))
+    account = runner_module.AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        positions={"005930": 3},
+        avg_prices={"005930": 70_000.0},
+        day_start_equity=0.0,  # 무방비
+    )
+    with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
+        await r._evaluate_signal(sell, _bar(), account)
+    spy.assert_called_once()  # SELL 은 평가 도달
+
+
+# ---- churn 브레이크 (daily_realized_loss_limit) -----------------------------
+
+
+def _runner_loss_limit(limit_won: float) -> PaperRunner:
+    return PaperRunner(
+        strategy=SmaCrossover(),
+        symbols=["005930"],
+        risk=RiskManager(limits=RiskLimits(daily_realized_loss_limit=limit_won)),
+    )
+
+
+async def test_daily_realized_loss_accumulates_net_on_sell() -> None:
+    """SELL 체결 시 (체결가-평단가)*수량 - 왕복비용 이 _daily_realized_net 에 적립(NET)."""
+    r = _runner_loss_limit(0)  # 적립은 한도 비활성이어도 동작
+    account = runner_module.AccountState(
+        deposit=0,
+        total_equity=700_000,
+        positions={"005930": 10},
+        avg_prices={"005930": 70_000.0},
+    )
+    order = Order(
+        symbol="005930",
+        side=Side.SELL,
+        quantity=10,
+        order_type=OrderType.MARKET,
+        price=Decimal("68000"),  # ref_price = 68,000 → gross (68000-70000)*10 = -20,000
+    )
+    with patch(
+        "auto_trading.runner.place_order",
+        new=AsyncMock(return_value=OrderResult(order_no="S1", client_id="c1", raw={})),
+    ):
+        await r._place_and_track(rest=object(), order=order, bar=_bar(), account=account)  # type: ignore[arg-type]
+    # 비용 = 700,000*(0.00015+0.0005) + 680,000*(0.00015+0.002+0.0005) = 455 + 1,802 = 2,257
+    # NET = -20,000 - 2,257 = -22,257
+    assert r._daily_realized_net == pytest.approx(-22_257.0)
+
+
+async def test_buy_blocked_when_daily_realized_loss_limit_reached() -> None:
+    """그날 누적 실현손실이 한도 이상이면 신규 BUY 차단 (risk.evaluate 도달 전)."""
+    r = _runner_loss_limit(100_000)
+    r._daily_buy_counts_date = datetime.now(KST).date()  # 오늘자 — roll 이 누적을 리셋 않게
+    r._daily_realized_net = -120_000.0  # 12만 손실 (한도 10만 초과)
+    signal = Signal(symbol="005930", side=Side.BUY, weight=0.05, price_hint=Decimal("70000"))
+    with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
+        out = await r._evaluate_signal(signal, _bar(), _account())
+    assert out is None
+    spy.assert_not_called()
+
+
+async def test_buy_allowed_when_loss_below_limit() -> None:
+    """누적 손실이 한도 미만이면 정상 통과."""
+    r = _runner_loss_limit(100_000)
+    r._daily_buy_counts_date = datetime.now(KST).date()
+    r._daily_realized_net = -50_000.0  # 한도 10만 미달
+    signal = Signal(symbol="005930", side=Side.BUY, weight=0.05, price_hint=Decimal("70000"))
+    with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
+        await r._evaluate_signal(signal, _bar(), _account())
+    spy.assert_called_once()
+
+
+async def test_daily_loss_limit_disabled_when_zero() -> None:
+    """daily_realized_loss_limit=0 (기본/비활성) — 큰 손실 누적돼도 차단하지 않는다."""
+    r = _runner_loss_limit(0)
+    r._daily_realized_net = -9_999_999.0
+    signal = Signal(symbol="005930", side=Side.BUY, weight=0.05, price_hint=Decimal("70000"))
+    with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
+        await r._evaluate_signal(signal, _bar(), _account())
+    spy.assert_called_once()
+
+
+async def test_sell_unaffected_by_daily_loss_limit() -> None:
+    """한도 초과 상태라도 SELL(청산)은 차단되지 않는다 — 손실 방어 보존."""
+    r = _runner_loss_limit(100_000)
+    r._daily_realized_net = -500_000.0  # 한도 한참 초과
+    sell = Signal(symbol="005930", side=Side.SELL, weight=1.0, price_hint=Decimal("70000"))
+    account = runner_module.AccountState(
+        deposit=10_000_000,
+        total_equity=10_000_000,
+        positions={"005930": 3},
+        avg_prices={"005930": 70_000.0},
+    )
+    with patch.object(r.risk, "evaluate", wraps=r.risk.evaluate) as spy:
+        await r._evaluate_signal(sell, _bar(), account)
+    spy.assert_called_once()
+
+
+async def test_daily_realized_net_resets_on_new_day() -> None:
+    """일자 경계를 넘으면 누적 실현손익이 0 으로 리셋."""
+    from datetime import date
+
+    r = _runner_loss_limit(100_000)
+    r._daily_realized_net = -120_000.0
+    r._daily_buy_counts_date = date(2020, 1, 1)  # 과거 → roll 시 리셋
+    r._roll_daily_buy_counts()
+    assert r._daily_realized_net == 0.0
 
 
 async def test_buy_count_incremented_on_successful_fill() -> None:

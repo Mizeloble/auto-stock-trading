@@ -277,6 +277,7 @@ def apply_profile_to_runner(profile: DaytradeProfile, runner: PaperRunner) -> No
     limits.consecutive_loss_pause_sec = risk.consecutive_loss_pause_sec
     limits.max_position_correlation = risk.max_position_correlation
     limits.max_buys_per_symbol = risk.max_buys_per_symbol
+    limits.daily_realized_loss_limit = risk.daily_realized_loss_limit
 
 
 def build_profile_factory(
