@@ -61,7 +61,7 @@ def _humanize_age(raw: object) -> str:
     """
     try:
         sec = int(float(raw))  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return ""
     if sec < 60:
         return f"{sec}초"
