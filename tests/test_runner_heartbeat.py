@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 from datetime import time as dt_time
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from auto_trading.heartbeat import Heartbeat
+from auto_trading.heartbeat import Heartbeat, check_heartbeat
 from auto_trading.runner import PaperRunner, RunnerControlState
 from auto_trading.strategy.sma_crossover import SmaCrossover
 
@@ -117,3 +118,35 @@ async def test_run_marks_stopped_sentinel_on_stopped_before_universe(tmp_path: P
     await asyncio.wait_for(task, timeout=2.0)
 
     assert stopped.exists()
+
+
+async def test_run_writes_fresh_heartbeat_on_startup_before_trading_loop(tmp_path: Path) -> None:
+    """2026-06-01 회귀 — 거래 없이 일찍 종료하는 날도 시동 시점에 runner.txt 를
+    fresh 로 남겨야 한다.
+
+    breadth 게이트로 매매 루프(=heartbeat_loop)에 못 들어가면, 시동(clear_stopped)과
+    종료 sentinel(mark_stopped) 사이 구간에 runner.txt 가 *지난 거래일* 값으로 남는다.
+    하필 5분 cron 이 그 구간에 끼면 "stale = 봇 멈춤" 가짜 경보가 떴다. 시동 직후 1회
+    write 로 그 구간의 runner.txt 가 항상 fresh(=check_heartbeat 가 stale 이 아님)임을 고정.
+    """
+    hb_path = tmp_path / "runner.txt"
+    stopped = tmp_path / "stopped.txt"
+    # 지난 거래일의 오래된 heartbeat — 수정 전이라면 이 값이 그대로 남아 stale 판정.
+    hb_path.write_text("2020-01-01T15:01:00+09:00\n", encoding="utf-8")
+    os.utime(hb_path, (0, 0))  # mtime 을 1970 으로 — 확실히 stale 상태로 시작.
+
+    r = PaperRunner(
+        strategy=SmaCrossover(),
+        symbols=[],
+        liquidate_at=dt_time(15, 15),
+        heartbeat=Heartbeat(path=hb_path, stopped_path=stopped, interval_sec=300),
+        notifier=AsyncMock(),
+    )
+    task = asyncio.create_task(r.run())
+    await asyncio.sleep(0.05)
+    r.request_stop()
+    await asyncio.wait_for(task, timeout=2.0)
+
+    # 시동 시점 write 로 mtime 이 갱신됐어야 함 — cron 이 stale 로 오판하지 않는다.
+    status = check_heartbeat(hb_path, max_age_sec=3600, stopped_path=None)
+    assert status.reason != "stale", "시동 직후 heartbeat 가 fresh 여야 가짜 stale 경보를 막는다"

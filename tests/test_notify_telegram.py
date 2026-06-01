@@ -260,6 +260,48 @@ async def test_runner_holiday_skip_korean_format(notifier: TelegramNotifier) -> 
     assert "2026-05-06" in text
 
 
+async def test_heartbeat_alert_stale_is_korean_not_raw_kwargs(
+    notifier: TelegramNotifier,
+) -> None:
+    """#13 — stale 경보가 날것의 event 덤프가 아니라 초보자 친화 한국어 + 사람이 읽을
+    경과시간(2일 18시간)으로 나가야 한다."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.heartbeat_alert",
+            reason="stale",
+            age_sec=237592.13104653358,
+            path="data/heartbeat/runner.txt",
+            max_age_sec=3600,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    # 초보자 친화: 날것의 키/float/경로/이벤트명이 노출되면 안 된다.
+    assert "age_sec" not in text
+    assert "237592" not in text
+    assert "runner.heartbeat_alert" not in text
+    assert "data/heartbeat" not in text
+    # 사람이 읽을 경과시간 + 점검 안내.
+    assert "2일 17시간" in text  # 237592s = 65시간 = 2일 17시간 (정수 절삭)
+    assert "⚠️" in text
+
+
+async def test_heartbeat_alert_missing_is_korean(notifier: TelegramNotifier) -> None:
+    """신호 파일 자체가 없을 때(missing)는 age 없이 별도 안내 문구."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.heartbeat_alert", reason="missing", age_sec=None, max_age_sec=3600
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "runner.heartbeat_alert" not in text
+    assert "신호 파일" in text
+    assert "⚠️" in text
+
+
 async def test_runner_kill_switch_korean_format(notifier: TelegramNotifier) -> None:
     """23단계 Phase B — 일일 손실 한도 강제 청산 알림."""
     async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
