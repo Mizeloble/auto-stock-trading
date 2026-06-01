@@ -53,6 +53,28 @@ def _format_symbol_list(raw: object, names: object) -> str:
     return ", ".join(_with_name(s, name_map.get(s)) for s in items)
 
 
+def _humanize_age(raw: object) -> str:
+    """초 단위 경과시간 → '2일 18시간' / '3시간 5분' / '12분'. 못 읽으면 빈 문자열.
+
+    heartbeat 경보에서 `age_sec=237592.13104653358` 같은 날것의 float 를 초보자가
+    읽을 수 있는 형태로. 가장 큰 단위 2개까지만 노출.
+    """
+    try:
+        sec = int(float(raw))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+    if sec < 60:
+        return f"{sec}초"
+    minutes, _ = divmod(sec, 60)
+    if minutes < 60:
+        return f"{minutes}분"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}시간 {minutes}분" if minutes else f"{hours}시간"
+    days, hours = divmod(hours, 24)
+    return f"{days}일 {hours}시간" if hours else f"{days}일"
+
+
 def _format_message(event: str, fields: dict[str, Any]) -> str:
     """이벤트명 + kwargs 를 사람이 읽을 한 줄 메시지로."""
     if event == "runner.started":
@@ -107,6 +129,22 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         return (
             "⚠️ 안전 브레이크 작동 불능 — 계좌 평가금액을 못 읽어 '일일 손실 자동 정지'가"
             " 지금 무방비 상태입니다. 잔고 조회 상태를 확인해 주세요."
+        )
+
+    if event == "runner.heartbeat_alert":
+        # #13 — cron heartbeat-check 가 봇 침묵(stale)/신호파일 없음(missing)을 잡을 때.
+        # 날것의 event 덤프 대신 초보자 친화 한국어로 (메모리 feedback_user_facing_tone).
+        reason = str(fields.get("reason", "stale"))
+        if reason == "missing":
+            return (
+                "⚠️ 봇 상태 확인 — 살아있다는 신호 파일이 없습니다. 봇이 시동되지 않았거나"
+                " 비정상 종료했을 수 있어요. 맥북·러너 상태를 확인해 주세요."
+            )
+        age_part = _humanize_age(fields.get("age_sec"))
+        dur = f"약 {age_part}째 " if age_part else ""
+        return (
+            f"⚠️ 봇 응답 점검 — {dur}살아있다는 신호가 끊겼습니다. 봇이 멈췄는지"
+            " (맥북 슬립·네트워크 끊김 등) 확인해 주세요."
         )
 
     if event == "notify.throttled_summary":
