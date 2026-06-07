@@ -3,11 +3,13 @@
 # 조정 사유: 박스권은 짧은 익절·짧은 손절이 유리 (큰 폭 추세 기대 X).
 #   partial_take_pct 0.018→0.010 (+1.0% 도달 시 절반 익절 — 박스 상단 빠르게 차익)
 #   trailing_stop_pct 0.012→0.008 (잔량 트레일링도 짧게)
-#   top_n 4→3 (모멘텀 약하므로 후보 1개 축소)
+#   top_n 3→6 (하루 최대 매수 종목 6개)
+#   max_position_weight 0.10 / max_portfolio_exposure 0.60
+#     → 종목당 총평가금액의 10%, 전체 합산 최대 60%(=6종목×10%).
 # 손절(stop_loss_pct), 회전율 통제(cooldown, daily_notional_limit, max_buys_per_symbol)는 불변.
 name: daytrade range
 strategy: index_momentum_daytrade
-top_n: 3
+top_n: 6
 exclude_etf: true
 liquidate: '15:15'
 discover_delay_sec: 360
@@ -22,6 +24,8 @@ risk:
   partial_take_qty_ratio: 0.5
   max_order_value: 0.0
   daily_notional_limit: 20000000.0
+  max_position_weight: 0.10
+  max_portfolio_exposure: 0.60
   daily_loss_kill: true
   max_consecutive_losses: 3
   consecutive_loss_pause_sec: 86400

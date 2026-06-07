@@ -74,6 +74,12 @@ class DaytradeRiskLimits(BaseModel):
     partial_take_qty_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
     max_order_value: float = Field(default=0.0, ge=0.0)
     daily_notional_limit: float = Field(default=0.0, ge=0.0)
+    # 종목당 매수 비중 / 전체 노출 한도(총평가금액 대비). None 이면 엔진 기본
+    # (RiskLimits: max_position_weight=0.20, max_portfolio_exposure=0.80) 유지.
+    # 값을 주면 build_profile_factory 가 신호 weight 를 1.0 으로 두어(이중곱 방지)
+    # 종목당 비중이 곧 max_position_weight 가 된다.
+    max_position_weight: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_portfolio_exposure: float | None = Field(default=None, ge=0.0, le=1.0)
     daily_loss_kill: bool = False
     # 29단계 PR9/10 (#14) — 연속 손절 자동 일시중지. 0 이면 비활성.
     max_consecutive_losses: int = Field(default=0, ge=0, le=20)
