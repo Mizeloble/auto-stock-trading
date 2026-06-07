@@ -278,6 +278,11 @@ def apply_profile_to_runner(profile: DaytradeProfile, runner: PaperRunner) -> No
     limits.max_position_correlation = risk.max_position_correlation
     limits.max_buys_per_symbol = risk.max_buys_per_symbol
     limits.daily_realized_loss_limit = risk.daily_realized_loss_limit
+    # 종목당/전체 노출 한도 — None 이면 엔진 기본(0.20/0.80) 유지(기존 동작 보존).
+    if risk.max_position_weight is not None:
+        limits.max_position_weight = risk.max_position_weight
+    if risk.max_portfolio_exposure is not None:
+        limits.max_portfolio_exposure = risk.max_portfolio_exposure
 
 
 def build_profile_factory(
@@ -285,7 +290,11 @@ def build_profile_factory(
     tracker: IndexMomentumTracker,
 ) -> Callable[..., Strategy]:
     """프로파일 → strategy_factory. discover_and_arm 이 (sym, market=...) 으로 호출."""
-    weight = 1.0 / max(1, profile.top_n)
+    # 신호 weight 와 risk 의 max_position_weight 는 manager.evaluate 에서 곱해진다.
+    # max_position_weight 를 명시한 프로파일은 종목당 비중을 그 한도로 직접 통제하려는
+    # 의도이므로 신호 weight 를 1.0(중립)으로 둬 이중곱을 없앤다. 미설정 프로파일은
+    # 기존 균등분할(1/top_n) 동작을 그대로 보존한다.
+    weight = 1.0 if profile.risk.max_position_weight is not None else 1.0 / max(1, profile.top_n)
 
     if profile.strategy == "intraday_momentum":
 

@@ -54,6 +54,28 @@ def test_profile_round_trip_yaml(tmp_path: Path) -> None:
     assert loaded == p
 
 
+def test_profile_position_exposure_roundtrip(tmp_path: Path) -> None:
+    """max_position_weight / max_portfolio_exposure 가 YAML 라운드트립에서 보존된다."""
+    p = DaytradeProfile(
+        name="sizing",
+        top_n=6,
+        risk=DaytradeRiskLimits(max_position_weight=0.10, max_portfolio_exposure=0.60),
+    )
+    path = tmp_path / "p.yaml"
+    p.dump_yaml(path)
+    loaded = DaytradeProfile.load_yaml(path)
+    assert loaded == p
+    assert loaded.risk.max_position_weight == 0.10
+    assert loaded.risk.max_portfolio_exposure == 0.60
+
+
+def test_profile_position_weight_defaults_to_none() -> None:
+    """미설정이면 None — 엔진 기본을 건드리지 않는다."""
+    p = DaytradeProfile(name="t")
+    assert p.risk.max_position_weight is None
+    assert p.risk.max_portfolio_exposure is None
+
+
 def test_profile_top_n_upper_bound() -> None:
     """top_n > 10 거절."""
     with pytest.raises(ValidationError):

@@ -29,6 +29,48 @@ def test_buy_respects_max_position_weight() -> None:
     assert d.order.quantity == 28
 
 
+def test_six_symbols_each_ten_percent_seventh_rejected() -> None:
+    """종목당 10%·합 60% 설계 검증: 신규 6종목 각 10%, 7번째는 노출 0 으로 거절.
+
+    weight=1.0 (max_position_weight 설정 프로파일이 신호 weight 를 1.0 으로 둠) +
+    max_position_weight=0.10 + max_portfolio_exposure=0.60 조합.
+    """
+    equity = 10_000_000
+    price = 10_000  # 10% = 1,000,000원 = 100주
+    rm = RiskManager(limits=RiskLimits(max_position_weight=0.10, max_portfolio_exposure=0.60))
+
+    positions: dict[str, int] = {}
+    avg_prices: dict[str, float] = {}
+    deposit = equity
+    for i in range(6):
+        sym = f"00000{i}"
+        acct = AccountState(
+            deposit=deposit,
+            total_equity=equity,  # 평단=현재가 가정으로 equity 고정
+            day_start_equity=equity,
+            positions=dict(positions),
+            avg_prices=dict(avg_prices),
+        )
+        d = rm.evaluate(_buy(sym, weight=1.0), price=price, account=acct)
+        assert d.decision is Decision.APPROVE, f"{i}번째 종목은 승인돼야 한다"
+        assert d.order is not None
+        assert d.order.quantity == 100, f"{i}번째 종목은 100주(=10%)여야 한다"
+        positions[sym] = 100
+        avg_prices[sym] = price
+        deposit -= 100 * price
+
+    # 7번째: 이미 60% 보유 → 노출 캡 0 → 거절
+    acct = AccountState(
+        deposit=deposit,
+        total_equity=equity,
+        day_start_equity=equity,
+        positions=dict(positions),
+        avg_prices=dict(avg_prices),
+    )
+    d = rm.evaluate(_buy("999999", weight=1.0), price=price, account=acct)
+    assert d.decision is Decision.REJECT
+
+
 def test_buy_rejected_when_daily_loss_exceeded() -> None:
     rm = RiskManager(limits=RiskLimits(daily_loss_limit=0.03))
     acct = AccountState(deposit=10_000_000, total_equity=9_600_000, day_start_equity=10_000_000)
