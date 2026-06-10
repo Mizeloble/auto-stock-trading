@@ -21,6 +21,16 @@ def _t(hour: int, minute: int, second: int, price: float, volume: int = 1) -> Ti
     )
 
 
+def test_negative_sell_volume_counted_as_absolute() -> None:
+    """키움 0B 체결량(FID 15)은 +매수/-매도 부호 — 매도 체결도 봉 거래량에 합산 (2026-06-10)."""
+    agg = _BarAggregator(minutes=1)
+    assert agg.ingest(_t(9, 0, 5, 100, 10)) is None  # 매수 체결 +10
+    assert agg.ingest(_t(9, 0, 30, 99, -7)) is None  # 매도 체결 -7 (종전엔 0 으로 절사)
+    finalized = agg.ingest(_t(9, 1, 0, 100, 1))
+    assert finalized is not None
+    assert finalized.volume == 17
+
+
 def test_ticks_within_bucket_aggregate_open_high_low_close() -> None:
     agg = _BarAggregator(minutes=1)
 

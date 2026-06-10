@@ -15,6 +15,7 @@ import json
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -74,6 +75,13 @@ class Backtester:
     def run(self, symbol: str, df: pd.DataFrame) -> BacktestResult:
         """`df` 는 ts 인덱스(Datetime) + columns [open, high, low, close, volume]."""
         self.strategy.reset()
+        # 같은 인스턴스 재실행 시 1회차의 현금·포지션·에쿼티·ATR history 가 2회차에
+        # 섞이지 않게 브로커·누적 상태도 함께 리셋 (결정론 보장).
+        self.__post_init__()
+        self._equity = []
+        self._highs = []
+        self._lows = []
+        self._closes = []
         pending: list[Signal] = []
 
         # 29단계 PR30 — 입력 OHLCV 정합성 1회 체크. issue 발견 시 warning 로그.
@@ -142,12 +150,24 @@ class Backtester:
         return BacktestResult(report=report, equity_curve=equity_curve, trades=self._broker.trades)
 
     def _size_quantity(self, signal: Signal, price: float, symbol: str) -> int:
+        weight = max(0.0, min(1.0, signal.weight))
         if signal.side is Side.SELL:
+            # 라이브(risk/manager.py)와 동일하게 weight 비례 매도 — 종전엔 weight 를
+            # 무시하고 전량 매도해 부분 매도 전략에서 백테스트-라이브가 갈라졌다.
             pos = self._broker.positions.get(symbol)
-            return pos.quantity if pos else 0
+            if pos is None or pos.quantity <= 0 or weight <= 0:
+                return 0
+            qty = max(
+                1,
+                int(
+                    (Decimal(pos.quantity) * Decimal(str(weight))).to_integral_value(
+                        rounding="ROUND_HALF_UP"
+                    )
+                ),
+            )
+            return min(qty, pos.quantity)
         if price <= 0:
             return 0
-        weight = max(0.0, min(1.0, signal.weight))
 
         if self.position_sizing == "atr_normalized":
             # ATR 기반 변동성 정규화. period+1 봉 미달이면 진입 X (안전).

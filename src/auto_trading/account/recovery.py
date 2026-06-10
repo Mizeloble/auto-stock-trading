@@ -11,6 +11,8 @@
 매칭 규칙:
 - 같은 ``client_id`` 의 ``submit`` 이 있고 그 뒤로 ``accepted`` 또는
   ``failed`` 이벤트가 없으면 → suspect.
+- ``unknown`` (타임아웃/5xx — 키움이 접수했을 수 있는 실패) 은 suspect 를
+  *해소하지 않는다* — 체결됐는데 봇이 모르는 주문을 복구 스캔이 계속 잡게.
 - 같은 ``client_id`` 의 ``submit`` 두 번(중복 송신)도 결과 이벤트가
   없으면 마지막 submit 만 suspect 로 본다 (재시도가 결과를 덮어쓸 수 있음).
 """
@@ -51,7 +53,7 @@ def find_suspect_orders(events: Iterable[dict]) -> list[SuspectOrder]:
             submits[cid] = event
         elif kind in ("accepted", "failed"):
             submits.pop(cid, None)
-        # 알 수 없는 이벤트는 무시 — 향후 확장 시 영향 없음.
+        # "unknown"(결과 미확정) 포함 그 외 이벤트는 submit 을 해소하지 않음.
 
     return [
         SuspectOrder(

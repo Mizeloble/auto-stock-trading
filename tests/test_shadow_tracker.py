@@ -40,6 +40,18 @@ def test_buy_reduces_cash_and_increases_holdings() -> None:
     assert snap.cash == pytest.approx(1_000_000 - 100_015, rel=1e-9)
 
 
+def test_realized_pnl_includes_buy_fee() -> None:
+    """실현 PnL 은 매수 수수료까지 차감한 NET — backtest(_round_trips)와 정의 통일 (2026-06-10)."""
+    t = ShadowTracker(
+        initial_cash=1_000_000, slippage_bps=0.0, commission_rate=0.001, tax_rate_sell=0.0
+    )
+    t.apply(_signal(side=Side.BUY, quantity=10, price=10_000))  # 매수 fee 100
+    t.apply(_signal(side=Side.SELL, quantity=10, price=12_000))  # 매도 fee 120
+    snap = t.snapshot()
+    # (12_000-10_000)*10 - 매수fee 100 - 매도fee 120 = 19_780 (종전엔 매수fee 누락 → 19_880)
+    assert snap.realized_pnl == pytest.approx(19_780.0)
+
+
 def test_sell_increases_cash_and_realizes_pnl() -> None:
     t = ShadowTracker(
         initial_cash=1_000_000, slippage_bps=0.0, commission_rate=0.0, tax_rate_sell=0.0

@@ -290,3 +290,56 @@ async def test_place_order_journal_records_failed_when_kiwoom_rejects(
     assert [e["event"] for e in events] == ["submit", "failed"]
     assert all(e["client_id"] == "cid-fail" for e in events)
     assert "RC4010" in events[1]["error"]
+
+
+# ---- 2026-06-10 제3자 검토 — 결과 미확정 주문은 failed 가 아닌 unknown ----------
+
+
+async def test_place_order_timeout_journals_unknown_and_stays_suspect(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """타임아웃은 키움이 접수했을 수 있다 — unknown 기록 + 복구 스캔에 suspect 로 남는다."""
+    from auto_trading.account.recovery import find_suspect_orders
+
+    journal = OrderJournal(path=tmp_path / "state.jsonl")
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_ORDER).mock(side_effect=httpx.ConnectTimeout("timed out"))
+        async with KiwoomRestClient(settings=settings) as client:
+            with pytest.raises(httpx.ConnectTimeout):
+                await place_order(
+                    client,
+                    Order(symbol="005930", side=Side.BUY, quantity=1),
+                    journal=journal,
+                    client_id="cid-timeout",
+                )
+
+    events = list(journal.replay())
+    assert [e["event"] for e in events] == ["submit", "unknown"]
+    suspects = find_suspect_orders(events)
+    assert [s.client_id for s in suspects] == ["cid-timeout"]
+
+
+async def test_place_order_5xx_journals_unknown_and_does_not_resend(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """주문의 5xx 는 자동 재전송 없이 1회 송신 + unknown 기록 (이중 체결 방지)."""
+    from auto_trading.account.recovery import find_suspect_orders
+
+    journal = OrderJournal(path=tmp_path / "state.jsonl")
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        route = mock.post(PATH_ORDER).mock(return_value=httpx.Response(503, text="unavailable"))
+        async with KiwoomRestClient(settings=settings, max_retries=3) as client:
+            with pytest.raises(KiwoomError):
+                await place_order(
+                    client,
+                    Order(symbol="005930", side=Side.SELL, quantity=2),
+                    journal=journal,
+                    client_id="cid-5xx",
+                )
+
+    assert route.call_count == 1  # 재전송 없음
+    events = list(journal.replay())
+    assert [e["event"] for e in events] == ["submit", "unknown"]
+    assert [s.client_id for s in find_suspect_orders(events)] == ["cid-5xx"]

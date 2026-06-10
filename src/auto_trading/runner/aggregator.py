@@ -39,7 +39,10 @@ class _BarAggregator:
             prev_bar = None
 
         price = float(tick.price)
-        volume = max(0, tick.volume)
+        # 키움 0B 의 체결거래량(FID 15)은 +매수체결/-매도체결 부호 컨벤션 —
+        # max(0,…) 로 음수를 버리면 매도 체결량이 전부 사라져 봉 거래량이 절반
+        # 수준으로 과소 집계된다 (2026-06-10 제3자 검토). 절대값으로 합산.
+        volume = abs(tick.volume)
         if prev_bar is None:
             self._current[tick.symbol] = Bar(
                 symbol=tick.symbol,

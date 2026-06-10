@@ -174,6 +174,58 @@ async def test_pacing_spaces_consecutive_requests(settings: Settings) -> None:
         assert loop.time() - t0 >= interval
 
 
+# ---- 2026-06-10 제3자 검토 — 주문 TR 의 5xx 자동 재시도 = 이중 체결 위험 ------
+
+
+async def test_non_idempotent_5xx_raises_without_retry(settings: Settings) -> None:
+    """idempotent=False(주문)는 5xx 를 재전송하지 않고 즉시 예외 — 이중 체결 방지."""
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        route = mock.post(PATH_MARKET).mock(
+            side_effect=[
+                httpx.Response(502, text="bad gateway"),
+                httpx.Response(200, json={"return_code": 0}),  # 재시도하면 이게 잡힘
+            ]
+        )
+        async with KiwoomRestClient(settings=settings, max_retries=3) as client:
+            with pytest.raises(KiwoomError) as exc:
+                await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {}, idempotent=False)
+    assert exc.value.code == "502"
+    assert route.call_count == 1  # 단 1회 송신 — 자동 재전송 없음
+
+
+async def test_non_idempotent_429_still_retried(settings: Settings) -> None:
+    """429 는 처리 전 거절이 확실 — 주문이라도 재시도 허용."""
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        route = mock.post(PATH_MARKET).mock(
+            side_effect=[
+                httpx.Response(429, text="rate limited"),
+                httpx.Response(200, json={"return_code": 0, "ord_no": "OK"}),
+            ]
+        )
+        async with KiwoomRestClient(settings=settings, max_retries=2) as client:
+            data = await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {}, idempotent=False)
+    assert data["ord_no"] == "OK"
+    assert route.call_count == 2
+
+
+async def test_idempotent_default_retries_5xx(settings: Settings) -> None:
+    """조회 TR(기본 idempotent=True)은 기존대로 5xx 백오프 재시도."""
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        route = mock.post(PATH_MARKET).mock(
+            side_effect=[
+                httpx.Response(500, text="oops"),
+                httpx.Response(200, json={"return_code": 0, "cur_prc": "3"}),
+            ]
+        )
+        async with KiwoomRestClient(settings=settings, max_retries=2) as client:
+            data = await client.request(TR.QUOTE_CURRENT, PATH_MARKET, {})
+    assert data["cur_prc"] == "3"
+    assert route.call_count == 2
+
+
 async def test_pacing_disabled_when_interval_zero(settings: Settings) -> None:
     """간격 0 이면 페이싱 no-op — 기존 빠른 경로/테스트 호환."""
     import asyncio

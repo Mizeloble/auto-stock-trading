@@ -93,3 +93,53 @@ def test_no_trade_when_signal_rejected_by_cash() -> None:
     result = bt.run("TEST", df)
     # 현금 부족으로 체결 불가
     assert result.trades == []
+
+
+# ---- 2026-06-10 제3자 검토 — SELL weight 비례 + 인스턴스 재실행 격리 ------------
+
+
+class BuyThenPartialSell(Strategy):
+    """첫 bar 매수 후 weight=0.5 부분 매도 — 라이브(risk manager)와 동일 규칙 검증용."""
+
+    def __init__(self, total_bars: int) -> None:
+        super().__init__(total_bars=total_bars)
+        self._i = 0
+
+    def on_bar(self, bar: Bar) -> list[Signal]:
+        self._i += 1
+        if self._i == 1:
+            return [Signal(symbol=bar.symbol, side=Side.BUY, weight=1.0)]
+        if self._i == self.params["total_bars"] - 1:
+            return [Signal(symbol=bar.symbol, side=Side.SELL, weight=0.5)]
+        return []
+
+    def reset(self) -> None:
+        super().reset()
+        self._i = 0
+
+
+def test_sell_weight_is_proportional_like_live() -> None:
+    """SELL weight=0.5 → 보유 절반만 매도. 종전엔 weight 무시하고 전량 매도했다."""
+    df = _df([100, 100, 100, 100, 100, 100])
+    strat = BuyThenPartialSell(total_bars=len(df))
+    bt = Backtester(strategy=strat, initial_cash=100_000.0, slippage_bps=0.0)
+    result = bt.run("TEST", df)
+
+    buy, sell = result.trades
+    assert buy.side is Side.BUY
+    assert sell.side is Side.SELL
+    # 보유 buy.quantity 의 절반 (ROUND_HALF_UP — 라이브 risk/manager.py 와 동일).
+    assert sell.quantity == round(buy.quantity / 2)
+    assert 0 < sell.quantity < buy.quantity
+
+
+def test_rerun_same_instance_is_isolated() -> None:
+    """같은 Backtester 인스턴스 재실행 시 1회차 상태(현금·포지션·에쿼티)가 섞이지 않는다."""
+    df = _df([100, 110, 120, 130, 140, 150])
+    strat = AlwaysBuyOnceThenSell(total_bars=len(df))
+    bt = Backtester(strategy=strat, initial_cash=100_000.0)
+    r1 = bt.run("TEST", df)
+    r2 = bt.run("TEST", df)
+    assert r1.report.as_dict() == r2.report.as_dict()
+    assert len(r1.equity_curve) == len(r2.equity_curve)
+    assert len(r2.trades) == 2  # 누적 안 됨 (종전엔 1회차 trades 가 합산)
