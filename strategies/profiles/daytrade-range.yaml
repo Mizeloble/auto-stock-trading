@@ -31,6 +31,10 @@ risk:
   consecutive_loss_pause_sec: 86400
   max_position_correlation: 0.7
   max_buys_per_symbol: 2
+  # churn 브레이크 — 그날 실현손실(비용 차감)이 15만원 쌓이면 신규 매수 자동 중단.
+  # 2026-06-11 ledger 역산: 5/12 폭주일은 13:13 에 잡아 약 26만원 절약, 다른 날은
+  # 한 번도 안 걸림(5/26 승자 재진입 보존). 0 이면 비활성.
+  daily_realized_loss_limit: 150000.0
 avoid_symbols:
   - '356680'
 breadth_gate:

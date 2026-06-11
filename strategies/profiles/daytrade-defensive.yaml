@@ -29,6 +29,9 @@ risk:
   consecutive_loss_pause_sec: 86400
   max_position_correlation: 0.7
   max_buys_per_symbol: 1
+  # churn 브레이크 — 그날 실현손실(비용 차감)이 15만원 쌓이면 신규 매수 자동 중단.
+  # 2026-06-11 ledger 역산 검증. 약세장 프로파일은 노출이 절반이라 도달 자체가 드묾.
+  daily_realized_loss_limit: 150000.0
 avoid_symbols:
   - '356680'
 breadth_gate:

@@ -24,6 +24,7 @@ from typing import Any
 import structlog
 from rich.console import Console
 
+from ..account.order_journal import DEFAULT_JOURNAL_PATH, OrderJournal
 from ..heartbeat import Heartbeat
 from ..kiwoom.rest import KiwoomRestClient
 from ..market.chart import bars_to_dataframe
@@ -33,6 +34,7 @@ from ..notify.reporting import ReportingNotifier
 from ..notify.telegram_commands import TelegramCommandHandler
 from ..notify.throttle import ThrottledNotifier
 from ..runner import PaperRunner
+from ..runner.day_state import DayStateStore
 from ..strategy import scanner
 from ..strategy.base import Strategy
 from ..strategy.index_daytrade import IndexMomentumDayTrade
@@ -238,6 +240,12 @@ def build_paper_day_runner(
         dry_run=dry_run,
         notifier=inner,
         heartbeat=heartbeat,
+        # 2026-06-11 — 주문 저널이 러너에 배선돼 있지 않아 시동 시 복구 스캔
+        # (_warn_recovery_pending)·preflight 의 no_pending_orders 게이트가 항상
+        # 빈 파일을 보고 있었다. ops/preflight 의 기본 경로와 동일 파일 사용.
+        journal=OrderJournal(path=DEFAULT_JOURNAL_PATH),
+        # 비정상 재시동 시 일일 한도 기준(baseline·매수대금·BUY 카운트·churn) 복원.
+        day_state=DayStateStore(),
     )
 
     momentum_tracker: IndexMomentumTracker | None = None

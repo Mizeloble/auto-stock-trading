@@ -202,7 +202,9 @@ def paper(
             symbol_list.append(sym)
 
     # 29단계 PR27 — paper-day 와 동일하게 heartbeat writer 명시 주입.
+    from ..account.order_journal import DEFAULT_JOURNAL_PATH, OrderJournal
     from ..heartbeat import Heartbeat
+    from ..runner.day_state import DayStateStore
 
     runner = PaperRunner(
         strategies=strategies,  # type: ignore[arg-type]
@@ -212,6 +214,9 @@ def paper(
         dry_run=dry_run,
         notifier=cli.build_notifier(),
         heartbeat=Heartbeat(),
+        # 2026-06-11 — 주문 저널·일일 한도 기준 영속을 paper-day 와 동일하게 주입.
+        journal=OrderJournal(path=DEFAULT_JOURNAL_PATH),
+        day_state=DayStateStore(),
     )
     handler = cli.build_command_handler(
         runner.state_snapshot,

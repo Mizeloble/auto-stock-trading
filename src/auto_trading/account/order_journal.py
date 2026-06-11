@@ -37,7 +37,10 @@ log = structlog.get_logger(__name__)
 
 OrderEvent = Literal["submit", "accepted", "failed", "unknown"]
 
-__all__ = ["OrderEvent", "OrderJournal", "new_client_id"]
+__all__ = ["DEFAULT_JOURNAL_PATH", "OrderEvent", "OrderJournal", "new_client_id"]
+
+# CLI(ops/preflight)와 러너가 같은 파일을 보도록 하는 운영 기본 경로.
+DEFAULT_JOURNAL_PATH = Path("data/orders/state.jsonl")
 
 
 def new_client_id() -> str:
