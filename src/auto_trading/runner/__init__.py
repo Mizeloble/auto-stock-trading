@@ -1423,7 +1423,7 @@ class PaperRunner:
         여기서 예외가 올라오는 건 연속 실패 한도 초과(fail-loud) 뿐이므로, 종전
         메인 루프와 동일하게 러너를 정지시킨다 (알림은 _snapshot_account 가 이미 전송).
         """
-        while self._control_state is not RunnerControlState.STOPPING:
+        while True:
             try:
                 await asyncio.sleep(self.balance_refresh_sec)
             except asyncio.CancelledError:
