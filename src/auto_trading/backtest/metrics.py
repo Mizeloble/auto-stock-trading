@@ -98,6 +98,34 @@ class PerformanceReport:
         }
 
 
+_TRADING_DAYS_PER_YEAR = 252
+_TRADING_MINUTES_PER_DAY = 390  # KRX 09:00~15:30 연속 거래
+
+
+def _periods_per_year(index: pd.Index) -> float:
+    """봉 간격에서 연환산 계수 추정 — 2026-06-10 제3자 검토.
+
+    종전엔 x252 하드코딩이라 1분봉 equity curve 를 넣으면 Sharpe·변동성이
+    sqrt(390)≈19.7배 부풀려졌다. 봉 간격의 *중앙값* 으로 추정 — 야간/주말 갭이
+    섞여도 대부분의 diff 는 봉 간격이라 중앙값이 견고하다.
+    반일(43,200초) 이상이면 일봉 이상으로 보고 기존과 동일하게 252.
+    """
+    if len(index) < 3:
+        return float(_TRADING_DAYS_PER_YEAR)
+    try:
+        diffs = np.diff(index.values).astype("timedelta64[s]").astype(float)
+    except TypeError, ValueError:
+        return float(_TRADING_DAYS_PER_YEAR)
+    diffs = diffs[diffs > 0]
+    if diffs.size == 0:
+        return float(_TRADING_DAYS_PER_YEAR)
+    median_sec = float(np.median(diffs))
+    if median_sec >= 43_200:  # 반일 이상 → 일봉·주봉 등은 기존 동작(252) 유지
+        return float(_TRADING_DAYS_PER_YEAR)
+    bars_per_day = _TRADING_MINUTES_PER_DAY * 60.0 / median_sec
+    return float(_TRADING_DAYS_PER_YEAR) * bars_per_day
+
+
 def compute(
     equity_curve: pd.Series, trades: list[Trade], initial_equity: float
 ) -> PerformanceReport:
@@ -107,16 +135,24 @@ def compute(
     final_equity = float(equity_curve.iloc[-1])
     total_return = final_equity / initial_equity - 1.0
 
-    # 연환산 지표
+    # 연환산 지표 — 봉 간격을 인덱스에서 추정 (일봉=252, 분봉=252 x 하루 봉수)
     daily = equity_curve.pct_change().dropna()
-    ann_vol = float(daily.std() * np.sqrt(252)) if len(daily) > 1 else 0.0
-    ann_ret = float(daily.mean() * 252) if len(daily) > 1 else 0.0
+    periods = _periods_per_year(equity_curve.index)
+    ann_vol = float(daily.std() * np.sqrt(periods)) if len(daily) > 1 else 0.0
+    ann_ret = float(daily.mean() * periods) if len(daily) > 1 else 0.0
     sharpe = ann_ret / ann_vol if ann_vol > 0 else 0.0
     # 29단계 PR31 — Probabilistic Sharpe (per-period 수익률·SR* = 0 기준).
     psr = probabilistic_sharpe_ratio(daily.tolist(), benchmark_sr=0.0)
 
-    years = max((equity_curve.index[-1] - equity_curve.index[0]).days / 365.25, 1e-9)
-    cagr = (final_equity / initial_equity) ** (1 / years) - 1 if initial_equity > 0 else 0.0
+    # CAGR — 기간을 초 단위로 계산 (종전 .days 는 하루 미만 분봉 곡선에서 0 → 1e-9 년
+    # 으로 떨어져 지수가 10^9 이 되는 OverflowError). 최소 1일로 클램프해 일중 곡선의
+    # CAGR 폭주를 막는다 (그래도 극단값이면 inf 로 수렴시키고 죽지 않게).
+    span_sec = float((equity_curve.index[-1] - equity_curve.index[0]).total_seconds())
+    years = max(span_sec / (365.25 * 86_400), 1 / 365.25)
+    try:
+        cagr = (final_equity / initial_equity) ** (1 / years) - 1 if initial_equity > 0 else 0.0
+    except OverflowError:
+        cagr = float("inf")
 
     # MDD
     running_max = equity_curve.cummax()

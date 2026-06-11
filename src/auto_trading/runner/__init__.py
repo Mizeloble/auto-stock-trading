@@ -48,6 +48,7 @@ from ..strategy.base import Signal, Strategy
 from .aggregator import _BarAggregator
 from .aggregator import _floor_bucket as _floor_bucket
 from .control import RunnerControlState
+from .day_state import DayState, DayStateStore
 
 log = structlog.get_logger(__name__)
 
@@ -95,6 +96,10 @@ class PaperRunner:
     # 29단계 PR3 (#13) — 봇 살아있음 신호. 주입 시 background task 가
     # interval_sec 마다 파일 mtime 갱신. 외부 cron 이 누락 시 텔레그램 알림.
     heartbeat: Heartbeat | None = None
+    # 2026-06-10 제3자 검토 — 당일 한도 기준(day_start_equity·매수대금·BUY 카운트·churn
+    # 누적)을 디스크에 보존. 장중 비정상 재시동 시 한도가 희석되지 않게 같은 날짜면 복원.
+    # None 이면 비활성 (테스트·기존 호환).
+    day_state: DayStateStore | None = None
     # 29단계 PR10 (#14 2차) — 연속 손절 자동 일시중지. None 이면 비활성.
     # __post_init__ 에서 risk.limits.max_consecutive_losses > 0 면 자동 생성.
     loss_tracker: ConsecutiveLossTracker | None = None
@@ -147,6 +152,11 @@ class PaperRunner:
     # 자연 만료(키움 잔고를 다시 신뢰). 발주 실패(except) 시에는 등록 안 함.
     _pending_sells: dict[str, tuple[int, datetime]] = field(default_factory=dict, init=False)
     _pending_sell_ttl_sec: int = field(default=180, init=False)
+    # 2026-06-10 제3자 검토 — _pending_sells 의 BUY 대칭. BUY 접수 후 키움 잔고 응답에
+    # 체결이 반영되기 전 스냅샷이 오면 보유가 0 으로 되돌아가 (a) 종목 비중 한도를 한 번
+    # 더 풀로 쓰는 중복 매수, (b) PositionGuard 보호 공백이 생긴다. symbol → (접수 직후
+    # 로컬 기대 총수량, 등록 시각). 키움 raw 가 기대치에 도달하면 해제, TTL 만료 시 폐기.
+    _pending_buys: dict[str, tuple[int, datetime]] = field(default_factory=dict, init=False)
     # 회전율 가드 — 종목당 하루 BUY 체결 카운터. risk.limits.max_buys_per_symbol 활성 시만 의미.
     # 같은 종목 반복 진입으로 비용만 누적되는 패턴 차단. 날짜 바뀌면 자동 리셋.
     _daily_buy_counts: dict[str, int] = field(default_factory=dict, init=False)
@@ -272,6 +282,7 @@ class PaperRunner:
         stop_reason = "정상 종료"
         liquidation_task: asyncio.Task[None] | None = None
         heartbeat_task: asyncio.Task[None] | None = None
+        protection_task: asyncio.Task[None] | None = None
         try:
             async with KiwoomRestClient(settings=self._settings) as rest:
                 # force_balance_refresh() 가 같은 세션을 재사용할 수 있도록 보관.
@@ -286,7 +297,6 @@ class PaperRunner:
 
                 aggregator = _BarAggregator(minutes=self.bar_minutes)
                 account = await self._snapshot_account(rest, previous=None)
-                last_refresh = datetime.now()
 
                 for strat in set(self.strategies.values()):
                     strat.reset()
@@ -298,6 +308,12 @@ class PaperRunner:
                 # 29단계 PR3 (#13) — heartbeat 갱신 task. tick 이 끊겨도 봇 살아있다는 증거.
                 if self.heartbeat is not None:
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+                # 2026-06-10 제3자 검토 — 잔고 갱신 + kill switch 를 tick 루프에서 분리.
+                # 종전엔 tick 도착에 묶여 있어 WS 재접속 백오프·전 종목 거래정지 동안
+                # daily_loss_kill 까지 같이 멈췄다 (포지션 보유 + 시세 단절 + 급락이
+                # 겹치면 보호 공백). REST 는 WS 와 무관하게 살아있으므로 독립 task 로.
+                protection_task = asyncio.create_task(self._protection_loop(rest))
 
                 try:
                     async for tick in ticks(ws):
@@ -313,15 +329,10 @@ class PaperRunner:
                             continue
 
                         # === 봉 확정 시점 전략 평가 + 주문 ===
+                        # protection task 가 주기적으로 self._account 를 갈아끼우므로
+                        # 매 봉마다 최신 스냅샷을 읽는다 (stale 로컬 변수 고착 방지).
+                        account = self._account or account
                         await self._on_bar(rest, bar, account)
-
-                        # === 주기적 잔고 갱신 + kill_switch ===
-                        if (
-                            datetime.now() - last_refresh
-                        ).total_seconds() >= self.balance_refresh_sec:
-                            account = await self._snapshot_account(rest, previous=account)
-                            last_refresh = datetime.now()
-                            await self._check_kill_switch(rest, account)
                 finally:
                     self._ws = None
                     await ws.stop()
@@ -351,6 +362,10 @@ class PaperRunner:
                 heartbeat_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await heartbeat_task
+            if protection_task is not None:
+                protection_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await protection_task
             # 29단계 회귀(2026-05-11) — 정상 종료 sentinel touch. cron 이 이후
             # missing 알림을 30분마다 쏘지 않게.
             if self.heartbeat is not None:
@@ -438,6 +453,20 @@ class PaperRunner:
                 continue
             current = positions.get(sym, 0)
             positions[sym] = max(0, current - pending_qty)
+        # 2026-06-10 제3자 검토 — BUY 대칭 보정. 접수된 매수가 키움 잔고에 아직 미반영이면
+        # 로컬 기대 수량을 유지 — 안 그러면 보유가 0 으로 되돌아가 같은 종목 비중 한도를
+        # 한 번 더 쓰는 중복 매수 + PositionGuard 보호 공백이 생긴다. raw 가 기대치에
+        # 도달하면 반영 완료로 보고 해제 (TTL 만료 시에는 키움 응답을 다시 신뢰).
+        self._reap_pending_buys()
+        for sym, (expected_qty, _ts) in list(self._pending_buys.items()):
+            if positions.get(sym, 0) >= expected_qty:
+                self._pending_buys.pop(sym, None)
+                continue
+            positions[sym] = expected_qty
+            if avg_prices.get(sym, 0.0) <= 0 and previous is not None:
+                prev_avg = previous.avg_prices.get(sym, 0.0)
+                if prev_avg > 0:
+                    avg_prices[sym] = prev_avg  # guard 손절 기준 유지 (주문 시 로컬 평단)
         # 29단계 회귀(2026-05-11) — total_equity 는 "예수금 + 보유 평가금" 으로 명시 계산.
         # 키움 `tot_evlt_amt` 는 모드/응답 버전에 따라 보유 평가금만 담는 경우가 있어
         # 이를 그대로 day_start_equity 분모로 쓰면 일부 매도 직후 분자만 줄어든 것처럼
@@ -448,6 +477,15 @@ class PaperRunner:
         day_start = previous.day_start_equity if previous and previous.day_start_equity else equity
         # 23단계 Phase B — 잔고 갱신은 누적 매수대금을 리셋하지 않음 (러너 재시작 = 자정 리셋).
         today_notional = previous.today_notional_used if previous is not None else 0.0
+        # 2026-06-10 제3자 검토 — 첫 스냅샷이면 같은 날짜의 디스크 저장분을 복원.
+        # 장중 비정상 재시동 시 baseline 이 재시작 시점 평가액으로 잡혀 일일 손실
+        # 한도가 희석되던 문제 (예: -2.5% 손실 후 재시동 → 추가 -3% 까지 허용).
+        if previous is None:
+            restored = self._restore_day_state()
+            if restored is not None:
+                if restored.day_start_equity > 0:
+                    day_start = restored.day_start_equity
+                today_notional = restored.today_notional_used
         state = AccountState(
             deposit=float(snap.deposit),
             total_equity=equity,
@@ -459,6 +497,7 @@ class PaperRunner:
         # 텔레그램 명령 응답을 위해 raw + derived 둘 다 보존.
         self._snapshot = snap
         self._account = state
+        self._persist_day_state(state)
         return state
 
     async def _on_bar(self, rest: KiwoomRestClient, bar: Bar, account: AccountState) -> None:
@@ -877,10 +916,18 @@ class PaperRunner:
                 # 새 보유분까지 차감하고 guard 가 새 포지션을 보호 못 한다(TTL 180s >
                 # 일중 회전 주기). 같은 종목 BUY 체결 시 stale pending 을 폐기.
                 self._pending_sells.pop(order.symbol, None)
+                # 2026-06-10 — BUY 대칭 보정 등록. 다음 잔고 응답이 체결 미반영이어도
+                # 로컬 기대 총수량을 유지해 보호 공백·중복 비중 사용을 막는다.
+                self._pending_buys[order.symbol] = (
+                    account.positions[order.symbol],
+                    datetime.now(),
+                )
             elif order.side is Side.SELL:
                 # 5/14 회귀 — 다음 _snapshot_account 가 키움 raw 잔고를 받았을 때
                 # 체결 미반영분(800033 insufficient_balance) 만큼 빼주도록 등록.
                 self._register_pending_sell(order.symbol, order.quantity)
+                # 로컬 보유가 줄었으니 BUY 기대치는 폐기 — raw-stale 보정은 pending_sells 담당.
+                self._pending_buys.pop(order.symbol, None)
             # 29단계 PR10 (#14 2차) — SELL 시 라운드트립 PnL 산출 → 트래커 갱신.
             # 평균가는 BUY 시에만 갱신되므로 SELL 직전 avg_prices 가 매수가.
             # 부분 매도 시점에도 평균가 그대로 유지 — 누적 라운드트립 측정에 적합.
@@ -919,6 +966,9 @@ class PaperRunner:
             # 23단계 Phase D — SELL 로 잔량 0 이면 last_exit_ts 갱신 + guard reset.
             if order.side is Side.SELL and account.positions.get(order.symbol, 0) <= 0:
                 self._mark_exit(order.symbol, bar.ts)
+            # 2026-06-10 — 한도 기준값(매수대금·BUY 카운트·churn 누적) 디스크 보존.
+            # 비정상 재시동 시 _restore_day_state 가 같은 날짜면 복원.
+            self._persist_day_state(account)
         except Exception as exc:
             # 29단계 PR19 — 실패 송신 latency 도 기록 (timeout/거절 분석).
             if self.latency_tracker is not None:
@@ -1043,6 +1093,54 @@ class PaperRunner:
         stale = [sym for sym, (_qty, ts) in self._pending_sells.items() if now - ts > ttl]
         for sym in stale:
             self._pending_sells.pop(sym, None)
+
+    def _reap_pending_buys(self) -> None:
+        """TTL 지난 _pending_buys 제거 — 만료 후엔 키움 잔고를 다시 신뢰 (SELL 과 동일 TTL)."""
+        if not self._pending_buys:
+            return
+        now = datetime.now()
+        ttl = timedelta(seconds=self._pending_sell_ttl_sec)
+        stale = [sym for sym, (_qty, ts) in self._pending_buys.items() if now - ts > ttl]
+        for sym in stale:
+            self._pending_buys.pop(sym, None)
+
+    def _restore_day_state(self) -> DayState | None:
+        """비정상 재시동 복원 — 같은 KST 날짜의 저장분이 있으면 한도 기준값을 되살린다.
+
+        baseline(day_start_equity)·매수대금 누적은 호출자(_snapshot_account)가 적용,
+        BUY 카운트·churn 누적(NET)은 여기서 직접 복원. day_state 미주입이면 no-op.
+        """
+        if self.day_state is None:
+            return None
+        today = datetime.now(KST).date()
+        saved = self.day_state.load(today)
+        if saved is None:
+            return None
+        self._daily_buy_counts = dict(saved.daily_buy_counts)
+        self._daily_buy_counts_date = today
+        self._daily_realized_net = saved.daily_realized_net
+        log.info(
+            "runner.day_state_restored",
+            day_start_equity=saved.day_start_equity,
+            today_notional_used=round(saved.today_notional_used),
+            buy_counts=sum(saved.daily_buy_counts.values()),
+            daily_realized_net=round(saved.daily_realized_net),
+        )
+        return saved
+
+    def _persist_day_state(self, account: AccountState) -> None:
+        """한도 기준값을 디스크에 저장 — 잔고 갱신·주문 체결 직후 호출. 실패는 swallow."""
+        if self.day_state is None:
+            return
+        self.day_state.save(
+            DayState(
+                date=datetime.now(KST).date().isoformat(),
+                day_start_equity=account.day_start_equity,
+                today_notional_used=account.today_notional_used,
+                daily_buy_counts=dict(self._daily_buy_counts),
+                daily_realized_net=self._daily_realized_net,
+            )
+        )
 
     async def force_balance_refresh(self) -> bool:
         """텔레그램 `/balance` 등 외부에서 캐시를 즉시 갱신하도록 트리거.
@@ -1312,6 +1410,37 @@ class PaperRunner:
             except asyncio.CancelledError:
                 return
             self.heartbeat.write()
+
+    async def _protection_loop(self, rest: KiwoomRestClient) -> None:
+        """잔고 갱신 + kill switch — 메인 tick 루프와 독립된 background task.
+
+        2026-06-10 제3자 검토 — 종전엔 둘 다 tick 루프 본문에만 있어, WS 가 끊겨
+        재접속 백오프를 도는 동안(또는 전 종목 VI/거래정지로 체결이 멎으면)
+        daily_loss_kill 강제청산까지 같이 멈췄다. REST 는 WS 와 무관하게 살아있으므로
+        heartbeat/_liquidation_loop 와 같은 원칙으로 분리. STOPPING 진입 시 즉시 종료.
+
+        잔고 fetch 의 일시 실패는 _snapshot_account 가 previous 를 돌려주며 흡수한다 —
+        여기서 예외가 올라오는 건 연속 실패 한도 초과(fail-loud) 뿐이므로, 종전
+        메인 루프와 동일하게 러너를 정지시킨다 (알림은 _snapshot_account 가 이미 전송).
+        """
+        while self._control_state is not RunnerControlState.STOPPING:
+            try:
+                await asyncio.sleep(self.balance_refresh_sec)
+            except asyncio.CancelledError:
+                return
+            if self._control_state is RunnerControlState.STOPPING:
+                return
+            try:
+                account = await self._snapshot_account(rest, previous=self._account)
+            except Exception as exc:
+                log.error("runner.protection_loop_fatal", error=str(exc), exc_info=exc)
+                self.request_stop(reason="balance_failed_fatal")
+                return
+            try:
+                await self._check_kill_switch(rest, account)
+            except Exception as exc:
+                # kill switch 판정/청산 중 일시 오류 — 다음 주기에 재시도 (보호 지속).
+                log.warning("runner.kill_switch_check_failed", error=str(exc))
 
     async def _liquidation_loop(self, rest: KiwoomRestClient) -> None:
         """KST 시계 폴링 → liquidate_at 도달 시 청산 + request_stop. 1초 간격.

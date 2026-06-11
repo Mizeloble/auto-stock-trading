@@ -13,15 +13,19 @@
   - **왜**: 실거래 전 필수 안전성(①~④) + 의사결정 지표 신뢰(⑤~⑧). 전략 파라미터 변경(발굴 거래대금 전환·churn 임계 활성화·레짐 임계 재보정)은 ledger 반사실 검증 후 별도 진행 — 이번 PR 에 포함 안 함.
   - **어떻게 확인**: `uv run pytest` 1170 통과(신규 24). 모의 운영에서 `runner.signal_blocked_liquidation` / `order_journal` 의 `unknown` 이벤트 / 리포트 JSON 의 `turnover_ratio` 채워짐 확인.
 
-- [ ] **제3자 검토 잔여 — 검증/설계 필요해 보류** (2026-06-10)
-  - **데이터 검증 후 결정**: 발굴 거래대금 정렬 전환+최소가격 필터(ledger 반사실), churn 브레이크 임계 활성화(5/12 곡선 역산), 레짐 분류 임계 재보정(과거 일봉 분포 히스토그램 먼저), 진입 직전 종목 자체 필터(selection_study 와 함께).
-  - **설계 필요한 중간 이슈**: kill switch·잔고 갱신을 tick 루프에서 독립 task 분리(시세 단절 시 보호 공백), `_pending_buys` 대칭 보정(BUY 체결 미반영 race), 재시작 시 `day_start_equity` 복원, 분봉 백테스트 Sharpe 연환산, CPCV fold 경계 갭.
+- [x] **제3자 검토 잔여 2차 — 러너 보호 보강** (2026-06-11)
+  - **무엇**: ① kill switch·잔고 갱신을 tick 루프에서 독립 task(`_protection_loop`)로 분리 — WS 단절·전종목 거래정지 중에도 daily_loss_kill 이 돈다. ② `_pending_buys` 대칭 보정 — BUY 접수 후 키움 잔고 미반영 구간의 보호 공백·중복 비중 사용 차단. ③ `day_state` 디스크 영속 — 장중 비정상 재시동 시 일일 손실 baseline·매수대금·BUY 카운트·churn 누적 복원(한도 희석 방지). ④ **주문 저널이 러너에 배선돼 있지 않던 운영 공백 수정** — paper/paper-day 에 `OrderJournal`+`DayStateStore` 주입(복구 스캔·preflight 게이트가 이제 실제 데이터를 본다). ⑤ 분봉 백테스트 Sharpe 연환산(봉 간격 추정) + 하루 미만 곡선 CAGR OverflowError 수정.
+  - **어떻게 확인**: `uv run pytest` 1190 통과(신규 20). 다음 paper-day 후 `data/orders/state.jsonl`·`data/state/day-state.json` 생성 확인. 장중 재시동 시 로그 `runner.day_state_restored`.
+
+- [ ] **제3자 검토 잔여 — 검증 필요해 보류** (2026-06-10, 일부 2026-06-11 해소)
+  - **데이터 검증 후 결정**: 발굴 거래대금 정렬 전환+최소가격 필터(ledger 반사실), churn 브레이크 임계 활성화(5/12 곡선 역산), 레짐 분류 임계 재보정(과거 일봉 분포 히스토그램 먼저), 진입 직전 종목 자체 필터.
+  - **남은 코드 이슈(낮음)**: CPCV fold 경계 갭(비연속 fold concat 시 인공 PnL — 경계 강제청산+전략 reset 설계 필요).
 
 - [ ] **누적(전날) 추세로 선별 개선 — 효과 검증 먼저** (2026-06-03, 승인된 플랜 `vivid-crunching-donut`)
   - **무엇**: 사용자 문제의식("당일 지표만 보지 말고 전날까지 추세를 보면 더 낫지 않나") 적대적 재검토 결과 — 현 봇은 종목별로 사실상 *무조건 매수*라 추세 게이트는 거래만 줄이는 미검증 베팅. 사용자 선호 = **막지 말고 선별/진입 개선**(거래수 유지). 1순위로 "거래량 상위 풀을 전날까지 추세점수로 재정렬(gate 아님 ranking)"의 효과부터 읽기전용으로 측정.
   - **산출물**: `scripts/diagnostics/selection_study.py` — 12개월 일봉으로 baseline(거래량만) vs improved(거래량+추세) vs pool 의 당일 시가→종가 수익률·승률·페어드 t 비교, `data/studies/*.json` 저장. 합성데이터 자기검증 통과(추세가 수익을 예측하는 세계에서 improved가 baseline 능가, 거래량 함정 회피 확인).
-  - **⚠️ 아직 실데이터 미실행**: 클라우드 컨테이너 블로커 2건 — (1) Python **3.14.0rc2** 가 pydantic 2.13.3 의 `typing._eval_type(prefer_fwd_module=...)`(3.14 정식 API)와 충돌해 패키지 import 불가, (2) **Kiwoom 자격증명 전무**(.env·env 없음)로 mock REST 토큰 발급 불가. → 사용자 로컬(정식 3.14 + .env)에서 `uv run python scripts/diagnostics/selection_study.py` 실행 필요.
-  - **다음 결정**: 실데이터 결과가 |t|<2·diff≤0 이면 **구현 안 함**(현행 유지). diff>0·유의하면 워크포워드·거래수매칭 본검증으로. 진입(눌림목·분할) 개선은 분봉 필요 → 별도 후속.
+  - **✅ 실데이터 실행 완료 (2026-06-07, `data/studies/selection_study_20260607_183103.json`)**: baseline(거래량만) 평균 -0.209%/일 vs improved(+추세 리랭킹) -0.300%/일 — **추세 리랭킹이 오히려 나쁨**(paired diff -0.090%p, t=-1.01, boot p=0.284, CI 가 0 포함). 사전 합의 규칙(|t|<2·diff≤0 → 구현 안 함)에 해당 → **구현 안 함, 현행 유지** (2026-06-11 확인). 집중도 연구(top3 vs top10)도 유의차 없음(p=0.35).
+  - **부수 발견**: pool(상위 10%) 평균이 top-pick 보다 덜 나쁨 — "거래량 상위 압축" 자체가 음의 엣지일 가능성. 발굴 개선은 리랭킹이 아니라 **랭킹 축 교체(거래대금)+필터** 방향으로 검증하는 게 다음 후보.
 
 - [ ] **수익률 재검토 — 리포트 보정 완료, 파라미터 변경은 보류** (2026-05-31, [docs/profit-review-2026-05-30.md](docs/profit-review-2026-05-30.md))
   - **무엇**: 5일치 거래를 라운드트립 재구성(`scripts/diagnostics/analyze_trades.py`) + 제3자 독립 검증 2명. 결과 보정: 손실의 거의 전부가 **단 하루(5/12, −448k)**에서 나왔고 **나머지 4일은 비용 차감 후 흑자(+73,976)**. 초안의 "구조적 적자" 프레이밍은 5/12에 끌려간 과장이라 정정.
