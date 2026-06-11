@@ -94,7 +94,12 @@ class ShadowTracker:
             new_qty = held + signal.quantity
             self.holdings[signal.symbol] = new_qty
             self.avg_prices[signal.symbol] = total / new_qty if new_qty else 0.0
-            self._fifo_lots.setdefault(signal.symbol, deque()).append([signal.quantity, price])
+            # 매수 수수료를 주당 단가로 lot 에 보관 — 실현 PnL 에서 차감해
+            # backtest(_round_trips)·reports 와 같은 "매수비용 포함 NET" 정의로 통일.
+            fee_per_share = fee / signal.quantity if signal.quantity else 0.0
+            self._fifo_lots.setdefault(signal.symbol, deque()).append(
+                [signal.quantity, price, fee_per_share]
+            )
         else:
             price = signal.price - slip
             held = self.holdings.get(signal.symbol, 0)
@@ -109,9 +114,13 @@ class ShadowTracker:
             remaining = qty
             lots = self._fifo_lots.setdefault(signal.symbol, deque())
             while remaining > 0 and lots:
-                lot_qty, lot_price = lots[0]
+                lot_qty, lot_price, lot_fee_per_share = lots[0]
                 matched = min(lot_qty, remaining)
-                pnl = (price - lot_price) * matched - (fee + tax) * (matched / qty)
+                pnl = (
+                    (price - lot_price) * matched
+                    - lot_fee_per_share * matched  # 매수 수수료 안분 (종전 누락)
+                    - (fee + tax) * (matched / qty)
+                )
                 self.realized_pnl += pnl
                 lot_qty -= matched
                 remaining -= matched

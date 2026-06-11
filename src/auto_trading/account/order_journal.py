@@ -35,7 +35,7 @@ from .orders import Order
 
 log = structlog.get_logger(__name__)
 
-OrderEvent = Literal["submit", "accepted", "failed"]
+OrderEvent = Literal["submit", "accepted", "failed", "unknown"]
 
 __all__ = ["OrderEvent", "OrderJournal", "new_client_id"]
 
@@ -76,8 +76,18 @@ class OrderJournal:
         self._append(client_id=client_id, event="accepted", order_no=order_no)
 
     def failed(self, *, client_id: str, error: str) -> None:
-        """송신 예외. 메시지에서 시크릿이 새지 않게 호출자가 사전 정제."""
+        """송신 예외 — 키움이 처리 후 *확정 거절* 한 경우만. 메시지에서 시크릿이
+        새지 않게 호출자가 사전 정제."""
         self._append(client_id=client_id, event="failed", error=error)
+
+    def unknown(self, *, client_id: str, error: str) -> None:
+        """결과 미확정 — 타임아웃/5xx 등 키움이 접수했을 *가능성* 이 있는 실패.
+
+        `failed` 와 달리 suspect 해소로 치지 않는다 — 재시작 복구 스캔
+        (`recovery.find_suspect_orders`)이 이 주문을 계속 의심 목록에 올려
+        사용자/후속 대사 로직이 실제 체결 여부를 확인하게 한다.
+        """
+        self._append(client_id=client_id, event="unknown", error=error)
 
     def replay(self) -> Iterator[dict]:
         """저널 전체를 한 줄씩 dict 로 yield. 손상된 라인은 스킵하고 로그만."""

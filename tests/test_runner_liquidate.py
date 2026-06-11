@@ -118,6 +118,84 @@ async def test_liquidate_all_noop_on_empty_positions() -> None:
     assert r._liquidation_done is True
 
 
+# ---- 2026-06-10 제3자 검토 — 청산 시작 후 신규 주문/guard 차단 ------------------
+
+
+async def test_buy_blocked_after_liquidation_started() -> None:
+    """청산 후 grace 동안 BUY 가 체결되면 오버나이트 포지션 — 시그널 전면 차단."""
+    from datetime import datetime
+
+    from auto_trading._common import Bar, Side
+    from auto_trading.strategy.base import Signal
+
+    r = _day_trade_runner(dry_run=False)
+    account = _account({"005930": 10})
+
+    async def _ok(rest, order, **_):  # type: ignore[no-untyped-def]
+        return OrderResult(order_no=f"ORD-{order.symbol}", raw={})
+
+    with patch.object(runner_module, "place_order", AsyncMock(side_effect=_ok)):
+        await r.liquidate_all(rest=object(), account=account, reason="test")  # type: ignore[arg-type]
+
+    bar = Bar(
+        symbol="005930",
+        ts=datetime.now(KST),
+        open=10_000,
+        high=10_000,
+        low=10_000,
+        close=10_000,
+        volume=1,
+    )
+    signal = Signal(symbol="005930", side=Side.BUY, weight=1.0)
+    order = await r._evaluate_signal(signal, bar, _account({}))
+    assert order is None
+
+    # SELL 도 차단 — 청산 루프와의 중복 매도 방지.
+    sell = Signal(symbol="005930", side=Side.SELL, weight=1.0)
+    assert await r._evaluate_signal(sell, bar, _account({"005930": 10})) is None
+
+
+async def test_position_guard_skipped_after_liquidation_started() -> None:
+    """청산 SELL 이 in-flight 인 동안 guard 가 같은 잔량을 또 내보내지 않는다."""
+    from datetime import datetime
+
+    from auto_trading._common import Bar
+
+    r = _day_trade_runner(dry_run=False)
+    r._liquidation_started = True
+    account = _account({"005930": 10})
+    bar = Bar(
+        symbol="005930",
+        ts=datetime.now(KST),
+        open=9_000,  # 평단 10_000 대비 -10% — guard 활성이면 손절 발화 상황
+        high=9_000,
+        low=9_000,
+        close=9_000,
+        volume=1,
+    )
+    with patch.object(runner_module, "place_order") as mock_place:
+        await r._run_position_guard(rest=object(), bar=bar, account=account)  # type: ignore[arg-type]
+    mock_place.assert_not_called()
+
+
+async def test_liquidate_all_nets_out_pending_sells() -> None:
+    """직전 guard SELL 이 in-flight(_pending_sells) 인 수량은 청산에서 제외 — 중복 매도 방지."""
+    r = _day_trade_runner(dry_run=False)
+    account = _account({"005930": 10, "000660": 5})
+    r._register_pending_sell("005930", 10)  # 005930 전량이 이미 매도 중
+
+    placed: list[object] = []
+
+    async def _ok(rest, order, **_):  # type: ignore[no-untyped-def]
+        placed.append(order)
+        return OrderResult(order_no=f"ORD-{order.symbol}", raw={})
+
+    with patch.object(runner_module, "place_order", AsyncMock(side_effect=_ok)):
+        await r.liquidate_all(rest=object(), account=account, reason="test")  # type: ignore[arg-type]
+
+    assert [o.symbol for o in placed] == ["000660"]  # type: ignore[attr-defined]
+
+
 async def test_liquidate_all_idempotent_second_call_skipped() -> None:
     r = _day_trade_runner(dry_run=True)
     account = _account({"005930": 10})

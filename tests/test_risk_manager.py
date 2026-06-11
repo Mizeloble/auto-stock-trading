@@ -80,6 +80,40 @@ def test_buy_rejected_when_daily_loss_exceeded() -> None:
     assert "daily loss" in d.reason
 
 
+def test_daily_loss_limit_zero_means_disabled() -> None:
+    """0=무제한 규약 (2026-06-10) — 종전엔 0 이 '보합 이하 전부 차단' 으로 동작."""
+    rm = RiskManager(
+        limits=RiskLimits(daily_loss_limit=0.0, max_position_weight=0.2, max_portfolio_exposure=1.0)
+    )
+    # 미세 하락 (-0.01%) — limit 0 이면 차단하지 않아야 한다.
+    acct = AccountState(deposit=9_999_000, total_equity=9_999_000, day_start_equity=10_000_000)
+    d = rm.evaluate(_buy(), price=70_000, account=acct)
+    assert d.decision is Decision.APPROVE
+
+
+def test_force_liquidate_disabled_when_limit_zero() -> None:
+    """daily_loss_kill=True 라도 limit 0 이면 kill switch 비활성 — 즉시 강제청산 금지."""
+    rm = RiskManager(limits=RiskLimits(daily_loss_limit=0.0, daily_loss_kill=True))
+    acct = AccountState(deposit=9_000_000, total_equity=9_000_000, day_start_equity=10_000_000)
+    assert rm.should_force_liquidate(acct) is False
+    # 기준 결측 경고도 limit 0 이면 무방비 상태가 아니므로 False.
+    blind = AccountState(deposit=0, total_equity=0, day_start_equity=0)
+    assert rm.kill_switch_baseline_missing(blind) is False
+
+
+def test_sell_weight_zero_rejected_not_one_share() -> None:
+    """weight 0 SELL 은 거절 — 종전 max(1,…) 보정으로 1주가 나가던 버그 회귀 방지."""
+    rm = RiskManager()
+    acct = AccountState(
+        deposit=0,
+        total_equity=700_000,
+        positions={"005930": 10},
+        avg_prices={"005930": 70_000},
+    )
+    d = rm.evaluate(_sell(weight=0.0), price=71_000, account=acct)
+    assert d.decision is Decision.REJECT
+
+
 def test_buy_rejected_when_budget_below_minimum() -> None:
     rm = RiskManager(limits=RiskLimits(min_order_value=50_000))
     acct = AccountState(deposit=5_000, total_equity=5_000, day_start_equity=5_000)

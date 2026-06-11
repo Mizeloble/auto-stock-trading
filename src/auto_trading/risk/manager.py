@@ -58,7 +58,7 @@ class AccountState:
 class RiskLimits:
     max_position_weight: float = 0.20  # 한 종목당 예수금 대비 20%
     max_portfolio_exposure: float = 0.80  # 현금+주식 중 주식 80% 한도
-    daily_loss_limit: float = 0.03  # 당일 -3% 시 신규 진입 차단
+    daily_loss_limit: float = 0.03  # 당일 -3% 시 신규 진입 차단. 0 이면 비활성(무제한)
     min_order_value: float = 10_000.0  # 너무 작은 주문 차단 (수수료 손해)
     # 23단계 Phase B — 보수적 기본은 비활성(0/False). 활성은 명시적 설정 필요.
     max_order_value: float = 0.0  # 1회 주문 절대 한도(원). 0 이면 무제한
@@ -144,6 +144,9 @@ class RiskManager:
             held = account.positions.get(signal.symbol, 0)
             if held <= 0:
                 return RiskDecision(Decision.REJECT, reason="no position to sell")
+            if weight <= 0:
+                # weight 0 인 SELL 은 "팔지 말라" — max(1,…) 보정으로 1주가 나가던 버그 방지.
+                return RiskDecision(Decision.REJECT, reason="sell weight is zero")
             qty = max(1, int((Decimal(held) * weight).to_integral_value(rounding="ROUND_HALF_UP")))
             qty = min(qty, held)
             order = Order(
@@ -157,8 +160,9 @@ class RiskManager:
 
         # --- BUY 시나리오 가드 ---
 
-        # 1) 일일 손실 한도
-        if account.day_start_equity > 0:
+        # 1) 일일 손실 한도 — 0 은 비활성 (저장소 전체의 "0=무제한" 규약).
+        #    종전엔 0 이 "보합 이하 전부 차단" 으로 뒤집혀 동작했다 (2026-06-10 제3자 검토).
+        if self.limits.daily_loss_limit > 0 and account.day_start_equity > 0:
             today_change = account.total_equity / account.day_start_equity - 1.0
             if today_change <= -abs(self.limits.daily_loss_limit):
                 reason = f"daily loss limit hit ({today_change:.2%})"
@@ -252,6 +256,9 @@ class RiskManager:
         """
         if not self.limits.daily_loss_kill:
             return False
+        if self.limits.daily_loss_limit <= 0:
+            # 0=비활성 규약 — 종전엔 0 이 "보합 이하 즉시 강제청산" 으로 동작했다.
+            return False
         if account.day_start_equity <= 0:
             return False
         today_change = account.total_equity / account.day_start_equity - 1.0
@@ -269,4 +276,8 @@ class RiskManager:
 
         어떻게 확인: tests/test_risk_manager.py 의 baseline-missing 케이스.
         """
-        return self.limits.daily_loss_kill and account.day_start_equity <= 0
+        return (
+            self.limits.daily_loss_kill
+            and self.limits.daily_loss_limit > 0  # limit 0 = kill switch 비활성 — 무방비 아님
+            and account.day_start_equity <= 0
+        )

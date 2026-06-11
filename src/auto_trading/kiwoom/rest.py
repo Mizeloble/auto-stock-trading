@@ -26,6 +26,26 @@ log = structlog.get_logger(__name__)
 
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 
+# 결과 미확정으로 봐야 하는 HTTP 상태 — 게이트웨이 뒤에서 주문이 접수됐을 수 있다.
+# 429/4xx 는 처리 전 거절이 확실하므로 제외.
+_UNKNOWN_OUTCOME_STATUSES = {"500", "502", "503", "504"}
+
+
+def is_outcome_unknown(exc: Exception) -> bool:
+    """실패한 요청이 키움에 *도달해 처리됐을 가능성* 이 있는지 판정.
+
+    주문 TR 호출자가 저널 이벤트(`failed` vs `unknown`)를 가르는 기준:
+    - 네트워크/타임아웃(httpx.TransportError): 요청이 도달해 체결됐을 수 있음 → True.
+    - HTTP 5xx KiwoomError: 게이트웨이 뒤에서 접수됐을 수 있음 → True.
+    - 그 외(return_code 거절, HTTP 4xx): 키움이 처리 후 명시 거절 — 확정 실패 → False.
+    """
+    if isinstance(exc, httpx.TransportError):
+        return True
+    if isinstance(exc, KiwoomError):
+        return exc.code in _UNKNOWN_OUTCOME_STATUSES
+    return False
+
+
 # 키움은 무효/만료 토큰을 HTTP 401 이 아니라 HTTP 200 + return_code 로 돌려준다.
 # 관측된 형태: [3] 인증에 실패했습니다[8005:Token이 유효하지 않습니다]. 이 신호가 보이면
 # 캐시 토큰을 버리고 한 번 재발급해 재시도 — 죽은 캐시 하나로 하루를 날리는 사고 방지.
@@ -106,8 +126,16 @@ class KiwoomRestClient:
         *,
         cont_yn: str = "N",
         next_key: str = "",
+        idempotent: bool = True,
     ) -> dict[str, Any]:
-        """단일 페이지 요청. 429/5xx 는 지수 백오프로 재시도."""
+        """단일 페이지 요청. 429/5xx 는 지수 백오프로 재시도.
+
+        idempotent=False (주문 등 상태 변경 TR):
+        5xx 는 키움이 요청을 *접수한 뒤* 응답만 유실됐을 수 있어 자동 재전송하면
+        같은 주문이 두 번 체결될 수 있다 (2026-06-10 제3자 검토). 처리 전 거절이
+        확실한 429 만 재시도하고 5xx 는 즉시 예외로 올린다 — 호출자가 미체결
+        조회로 대사하도록.
+        """
         await self._pace()
         token = await self._token_provider.get_token()
         headers = {
@@ -128,7 +156,8 @@ class KiwoomRestClient:
                 headers["Authorization"] = f"Bearer {token}"
                 resp = await self._client.post(path, headers=headers, json=body or {})
 
-            if resp.status_code in RETRY_STATUSES and attempt < self._max_retries:
+            retryable = idempotent or resp.status_code == 429
+            if retryable and resp.status_code in RETRY_STATUSES and attempt < self._max_retries:
                 delay = 0.5 * (2**attempt)
                 log.warning(
                     "kiwoom.retry",

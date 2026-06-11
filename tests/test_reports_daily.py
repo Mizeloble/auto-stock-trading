@@ -335,6 +335,65 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     assert loaded == report
 
 
+def test_save_load_roundtrip_preserves_every_field(tmp_path: Path) -> None:
+    """전 필드 라운드트립 동등성 — 2026-06-10 회귀.
+
+    저장은 asdict 로 전 필드가 나가는데 복원(_from_json_dict)에서 turnover_ratio
+    등 6개 필드가 빠져, 과매매 진단 지표가 주간 인사이트·대시보드에서 항상
+    None/0 으로 떨어졌다. dataclass 동등성으로 향후 필드 추가 누락도 잡는다.
+    """
+    from dataclasses import asdict
+
+    report = DailyReport(
+        date="2026-06-09",
+        mode="day-trade",
+        dry_run=False,
+        discovery_chosen=["A"],
+        discovery_blocked=[("C", "below")],
+        market_gates=[MarketGateInfo(market="KOSPI", last=1.0, sma5=1.0, sma20=1.0, above=True)],
+        buys=[TradeRecord(symbol="A", side="buy", quantity=10, price=100.0, simulated=False)],
+        liquidations=[],
+        error_count=3,
+        note_ko="요약",
+        realized_pnl=100.0,
+        realized_pnl_pct=10.0,
+        sells=[TradeRecord(symbol="A", side="sell", quantity=10, price=110.0, simulated=False)],
+        excluded_etf_count=2,
+        rank_candidates=["A", "B"],
+        discovery_chosen_names={"A": "에이전자"},
+        closing_cash=1_000_000,
+        closing_equity=1_100_000,
+        closing_total_pnl=100_000,
+        closing_holdings=[
+            ClosingHolding(
+                symbol="A",
+                name="에이전자",
+                quantity=1,
+                avg_price=100.0,
+                current_price=101.0,
+                market_value=101.0,
+                pnl=1.0,
+                pnl_pct=1.0,
+            )
+        ],
+        total_fees=30.0,
+        total_taxes=220.0,
+        total_slippage=110.0,
+        realized_pnl_after_cost=-260.0,
+        timeline=[TimelineEvent(time_kst="09:01", kind="buy", text="매수")],
+        # 종전 복원 누락 6필드 — 이 테스트의 핵심.
+        traded_notional=2_100_000.0,
+        turnover_ratio=0.21,
+        orders_failed_count=1,
+        liquidations_failed_count=2,
+        balance_failure_count=1,
+        fatal_count=4,
+    )
+    loaded = load_daily_report(save_daily_report(report, root=tmp_path))
+    assert asdict(loaded) == asdict(report)
+    assert loaded.turnover_ratio == 0.21
+
+
 def test_save_creates_directory(tmp_path: Path) -> None:
     """저장 폴더가 없어도 자동 생성."""
     nested = tmp_path / "deep" / "reports"

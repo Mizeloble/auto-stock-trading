@@ -151,15 +151,18 @@ def _round_trips(trades: list[Trade]) -> list[float]:
     pnls: list[float] = []
     for t in trades:
         if t.side is Side.BUY:
-            opens[t.symbol].append([t.quantity, t.price, t.fee])
+            # 매수 수수료는 *매수 lot 수량* 기준 주당 단가로 보관 — 매도 수량 분모로
+            # 안분하면 피라미딩 시 과소, 부분 매도 시 중복 차감돼 승률이 왜곡된다.
+            fee_per_share = t.fee / t.quantity if t.quantity else 0.0
+            opens[t.symbol].append([t.quantity, t.price, fee_per_share])
         else:
             remaining = t.quantity
             sell_cost = t.fee + t.tax
             while remaining > 0 and opens[t.symbol]:
-                buy_qty, buy_price, buy_fee = opens[t.symbol][0]
+                buy_qty, buy_price, buy_fee_per_share = opens[t.symbol][0]
                 matched = min(buy_qty, remaining)
                 pnl = (t.price - buy_price) * matched
-                pnl -= buy_fee * (matched / t.quantity if t.quantity else 0)
+                pnl -= buy_fee_per_share * matched
                 pnl -= sell_cost * (matched / t.quantity if t.quantity else 0)
                 pnls.append(pnl)
                 buy_qty -= matched

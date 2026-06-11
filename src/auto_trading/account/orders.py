@@ -15,7 +15,7 @@ import structlog
 
 from .._common import Side, normalize_symbol
 from ..kiwoom.endpoints import PATH_ORDER, TR
-from ..kiwoom.rest import KiwoomRestClient
+from ..kiwoom.rest import KiwoomRestClient, is_outcome_unknown
 
 if TYPE_CHECKING:
     from .order_journal import OrderJournal
@@ -94,10 +94,17 @@ async def place_order(
     }
     tr_id = TR.ORDER_BUY if order.side is Side.BUY else TR.ORDER_SELL
     try:
-        data = await client.request(tr_id, PATH_ORDER, body)
+        # idempotent=False — 주문은 5xx/타임아웃 자동 재전송 시 이중 체결 위험.
+        data = await client.request(tr_id, PATH_ORDER, body, idempotent=False)
     except Exception as exc:
         if journal is not None:
-            journal.failed(client_id=client_id, error=str(exc))
+            # 타임아웃/5xx 는 키움이 접수했을 수 있다 — `failed` 로 닫으면 복구
+            # 스캔(find_suspect_orders)에서 빠져 "체결됐는데 봇은 모르는 주문"이
+            # 된다. `unknown` 으로 남겨 suspect 로 유지 (2026-06-10 제3자 검토).
+            if is_outcome_unknown(exc):
+                journal.unknown(client_id=client_id, error=str(exc))
+            else:
+                journal.failed(client_id=client_id, error=str(exc))
         raise
 
     order_no = str(data.get("ord_no") or data.get("odno") or "")

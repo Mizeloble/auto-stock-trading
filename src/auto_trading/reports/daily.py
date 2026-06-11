@@ -868,6 +868,15 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
         total_slippage=payload.get("total_slippage"),
         realized_pnl_after_cost=payload.get("realized_pnl_after_cost"),
         timeline=timeline,
+        # 라운드트립 유실 복원(2026-06-10) — 저장은 asdict 로 전 필드가 나가는데
+        # 복원에서 빠져 있어 turnover_ratio(과매매 진단 핵심)가 주간 인사이트·
+        # 대시보드에서 항상 None 으로 떨어졌다.
+        traded_notional=payload.get("traded_notional"),
+        turnover_ratio=payload.get("turnover_ratio"),
+        orders_failed_count=int(payload.get("orders_failed_count") or 0),
+        liquidations_failed_count=int(payload.get("liquidations_failed_count") or 0),
+        balance_failure_count=int(payload.get("balance_failure_count") or 0),
+        fatal_count=int(payload.get("fatal_count") or 0),
     )
 
 

@@ -70,6 +70,18 @@ def test_submit_then_failed_is_not_suspect() -> None:
     assert find_suspect_orders([_submit("c1"), _failed("c1", "RC4010")]) == []
 
 
+def test_submit_then_unknown_stays_suspect() -> None:
+    """타임아웃/5xx(unknown) 는 체결됐을 수 있다 — suspect 를 해소하지 않는다 (2026-06-10)."""
+    unknown = {
+        "ts": "2026-05-10T10:00:01+09:00",
+        "event": "unknown",
+        "client_id": "c1",
+        "error": "timeout",
+    }
+    [s] = find_suspect_orders([_submit("c1"), unknown])
+    assert s.client_id == "c1"
+
+
 def test_mixed_only_unresolved_are_suspects() -> None:
     events = [
         _submit("c1"),

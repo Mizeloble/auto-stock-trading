@@ -119,6 +119,14 @@ class PaperRunner:
     _universe_ready: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     # 청산 1회 가드 — 장 마감 후 시계가 계속 도달 상태라도 두 번 호출되지 않게.
     _liquidation_done: bool = field(default=False, init=False)
+    # 청산 *시작* 가드 — liquidate_all 진입 시 True. 청산 SELL 이 in-flight 인 동안
+    # (그리고 청산 후 grace 30초 동안) 메인 루프가 신규 주문·guard SELL 을 내면
+    # 오버나이트 매수/중복 매도가 된다 (2026-06-10 제3자 검토). 한 번 켜지면 러너
+    # 수명 동안 유지 — 청산 후는 봇 종료 수순이라 해제할 이유가 없다.
+    _liquidation_started: bool = field(default=False, init=False)
+    # dry-run 분기에서 BUY 가 "시뮬 체결" 됐는지 — _evaluate_signal 의 진입 롤백이
+    # 시뮬 체결을 거절로 오인해 전략 상태를 되돌리지 않게 하는 내부 플래그.
+    _eval_buy_simulated: bool = field(default=False, init=False)
     # 29단계 PR6 (#10 2차) — reject 분류 결과로 일시 차단된 종목.
     # symbol → skip 만료 시각 (KST). 만료 후 자연 회복.
     _skipped_until: dict[str, datetime] = field(default_factory=dict, init=False)
@@ -478,6 +486,10 @@ class PaperRunner:
         guard = self.position_guard
         if guard is None or not guard.is_active:
             return
+        # 일일 청산이 시작됐으면 guard SELL 도 중단 — 청산 루프가 이미 같은 잔량을
+        # 시장가로 내보내는 중이라 여기서 또 내면 중복 매도(800033)가 된다.
+        if self._liquidation_started:
+            return
         qty = account.positions.get(bar.symbol, 0)
         if qty <= 0:
             return
@@ -631,15 +643,59 @@ class PaperRunner:
     async def _evaluate_signal(
         self, signal: Signal, bar: Bar, account: AccountState
     ) -> Order | None:
+        """리스크 평가 + PAUSED/dry-run 게이트. 실제 판정은 _apply_signal_gates.
+
+        BUY 가 거절돼 주문이 안 나갔으면(dry-run 시뮬 체결 제외) 전략의 진입
+        기록을 롤백한다 — index_daytrade 류 전략은 시그널 발사 시점에 '보유 중'
+        으로 기록하므로, 그대로 두면 거절 한 번에 그 종목이 하루 종일 잠긴다
+        (2026-06-10 제3자 검토).
+        """
+        self._eval_buy_simulated = False
+        order = await self._apply_signal_gates(signal, bar, account)
+        if order is None and signal.side is Side.BUY and not self._eval_buy_simulated:
+            self._rollback_entry_state(signal.symbol)
+        return order
+
+    def _rollback_entry_state(self, symbol: str) -> None:
+        """체결되지 않은 BUY 의 전략 진입 기록(last_entry_ts) 해제 — 재진입 허용.
+
+        last_exit_ts 는 보존 — 직전 청산 쿨다운은 이미 충족된 상태에서만 새 진입
+        시그널이 나오므로 entry 만 지워도 쿨다운 우회는 발생하지 않는다.
+        last_entry_ts 를 안 쓰는 전략(sma_crossover 등)은 자연히 no-op.
+        """
+        strat = self.strategies.get(symbol)
+        if strat is None:
+            return
+        last_entry = strat.state.get("last_entry_ts")
+        if last_entry is None:
+            return
+        last_exit = strat.state.get("last_exit_ts")
+        if last_exit is not None and last_entry <= last_exit:
+            return  # 이번 시그널이 기록한 진입이 아님 (이미 청산 후 상태)
+        strat.state["last_entry_ts"] = None
+
+    async def _apply_signal_gates(
+        self, signal: Signal, bar: Bar, account: AccountState
+    ) -> Order | None:
         """리스크 평가 + PAUSED/dry-run 게이트.
 
         None 반환 케이스(각각 로그 한 줄):
+        - 일일 청산 시작 후 → `runner.signal_blocked_liquidation`
         - 종목 skip 중 (직전 reject 분류) → `runner.signal_skipped_reject`
         - 리스크 매니저 REJECT → `runner.signal_rejected`
         - PAUSED → `runner.order_skipped_paused` (텔레그램 /last_signal 정확도 위해 시그널·리스크는 그대로)
         - dry_run → `runner.order_simulated`
         Order 반환 시 호출자가 _place_and_track 으로 실제 송신.
         """
+        # 일일 청산이 시작됐으면 신규 주문 전면 차단 — BUY 는 오버나이트 포지션이
+        # 되고(grace 30초 사이 체결 후 봇 종료), SELL 은 청산 루프와 중복 매도.
+        if self._liquidation_started:
+            log.info(
+                "runner.signal_blocked_liquidation",
+                symbol=signal.symbol,
+                side=signal.side.value,
+            )
+            return None
         if self._is_symbol_skipped(signal.symbol):
             until = self._skipped_until[signal.symbol]
             log.info(
@@ -728,6 +784,8 @@ class PaperRunner:
             )
             # 23단계 Phase B — dry-run BUY 도 일일 누적에 포함 (한도 검증 회로 똑같이 흘러야).
             if order.side is Side.BUY:
+                # 시뮬 체결 = 진입 성공 — _evaluate_signal 의 진입 롤백 대상 아님.
+                self._eval_buy_simulated = True
                 account.today_notional_used += sim_price * order.quantity
                 self._roll_daily_buy_counts()
                 self._daily_buy_counts[order.symbol] = (
@@ -793,10 +851,20 @@ class PaperRunner:
                 qty=order.quantity,
             )
             # 로컬 포지션 즉시 갱신 (다음 snapshot 까지의 공백 메움)
+            prev_qty = account.positions.get(order.symbol, 0)
             delta = order.quantity if order.side is Side.BUY else -order.quantity
-            account.positions[order.symbol] = max(0, account.positions.get(order.symbol, 0) + delta)
+            account.positions[order.symbol] = max(0, prev_qty + delta)
             if order.side is Side.BUY:
-                account.avg_prices[order.symbol] = ref_price
+                # 추가 매수는 가중평균 — 마지막 매수가로 덮어쓰면 다음 잔고 갱신까지
+                # guard 의 손절 기준이 틀어진다. (키움 잔고 갱신 시 정확값으로 복원됨.)
+                prev_avg = account.avg_prices.get(order.symbol, 0.0)
+                if prev_qty > 0 and prev_avg > 0:
+                    total_qty = prev_qty + order.quantity
+                    account.avg_prices[order.symbol] = (
+                        prev_avg * prev_qty + ref_price * order.quantity
+                    ) / total_qty
+                else:
+                    account.avg_prices[order.symbol] = ref_price
                 # 23단계 Phase B — 일일 매수대금 누적. 실패 시(except 분기) 누적 X.
                 account.today_notional_used += ref_price * order.quantity
                 # 회전율 가드 — 같은 종목 BUY 체결 카운트 누적. 실패 시(except) 누적 X.
@@ -877,6 +945,9 @@ class PaperRunner:
             silence_notify = (
                 category is RejectCategory.INSUFFICIENT_BALANCE and order.side is Side.SELL
             )
+            # 발주 실패한 BUY — 전략의 진입 기록을 롤백해 재진입 잠김 방지.
+            if order.side is Side.BUY:
+                self._rollback_entry_state(order.symbol)
             log.error(
                 "runner.order_failed",
                 error=str(exc),
@@ -1129,10 +1200,21 @@ class PaperRunner:
         실패가 남으면 호출자(_liquidation_loop)가 실패분만 재시도할 수 있게 둔다.
         (성공 종목은 positions 가 0 으로 갱신돼 재호출 시 자연히 제외 = idempotent.)
         """
+        # 청산 시작 표시 — 메인 루프의 신규 주문(_apply_signal_gates)·guard SELL
+        # (_run_position_guard)이 즉시 멈춘다. 오버나이트 매수/중복 매도 차단.
+        self._liquidation_started = True
         if self._liquidation_done:
             log.info("runner.liquidate_skipped", reason="already_done")
             return 0
-        positions = {sym: qty for sym, qty in account.positions.items() if qty > 0}
+        # guard 등에서 직전에 발주돼 아직 in-flight 인 SELL 수량은 빼고 청산 —
+        # 같은 잔량을 청산 루프가 또 내보내는 중복 매도(800033) 방지.
+        self._reap_pending_sells()
+        positions: dict[str, int] = {}
+        for sym, qty in account.positions.items():
+            pending_qty, _ = self._pending_sells.get(sym, (0, None))
+            net = qty - max(0, pending_qty)
+            if net > 0:
+                positions[sym] = net
         if not positions:
             log.info("runner.liquidate_noop", reason="no_positions")
             self._liquidation_done = True
@@ -1179,6 +1261,9 @@ class PaperRunner:
                     buy_price=buy_price,
                 )
                 account.positions[symbol] = 0
+                # 종료 직전 마지막 잔고 갱신이 키움의 체결 미반영 응답을 받아도
+                # holdings 0 으로 보정되게 등록 (run() finally 의 보정 주석 참조).
+                self._register_pending_sell(symbol, qty)
                 success += 1
             except Exception as exc:
                 failed += 1
