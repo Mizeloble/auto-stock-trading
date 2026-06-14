@@ -141,3 +141,44 @@ async def test_runner_without_day_state_unchanged(tmp_path: Path) -> None:
         state = await r._snapshot_account(rest=object(), previous=None)  # type: ignore[arg-type]
     assert state.day_start_equity == 9_700_000.0
     assert not (tmp_path / "day-state.json").exists()
+
+
+# ---- 2026-06-14 적대적 검증 — 입출금 가드 ----------------------------------------
+
+
+async def test_large_drift_rejects_restore_as_deposit_withdrawal(tmp_path: Path) -> None:
+    """장중 입/출금 후 같은날 재시동: baseline-현재 괴리가 크면 복원 거부 → 현재 평가액 채택.
+
+    종전엔 출금으로 줄어든 평가액(7M)에 입출금 전 baseline(10M)을 복원해
+    today_change≈-30% 로 kill switch 가 오발동(불필요 전량 청산)했다.
+    """
+    store = _store(tmp_path)
+    store.save(
+        DayState(
+            date=_today().isoformat(),
+            day_start_equity=10_000_000.0,
+            today_notional_used=4_000_000.0,
+            daily_buy_counts={"005930": 2},
+            daily_realized_net=-150_000.0,
+        )
+    )
+    r = PaperRunner(strategy=SmaCrossover(), symbols=["005930"], day_state=store)
+    # 현재 평가액 7M — baseline 10M 대비 -30% (임계 15% 초과 → 입출금 의심).
+    with patch.object(runner_module, "get_balance", AsyncMock(return_value=_snapshot(7_000_000))):
+        state = await r._snapshot_account(rest=object(), previous=None)  # type: ignore[arg-type]
+
+    assert state.day_start_equity == 7_000_000.0  # stale 10M 거부, 현재값 채택
+    assert state.today_notional_used == 0.0  # 복원 거부 시 누적도 안 가져옴
+    assert r._daily_buy_counts == {}  # BUY 카운트·churn 누적도 복원 안 함
+    assert r._daily_realized_net == 0.0
+
+
+async def test_normal_intraday_loss_still_restores(tmp_path: Path) -> None:
+    """정상 일중 손실(-2.5%)은 임계 안이라 복원 — 입출금 가드가 한도 희석 방지를 안 깬다."""
+    store = _store(tmp_path)
+    store.save(DayState(date=_today().isoformat(), day_start_equity=10_000_000.0))
+    r = PaperRunner(strategy=SmaCrossover(), symbols=["005930"], day_state=store)
+    # 9.75M — baseline 대비 -2.5% (임계 15% 안 → 정상 손익, 복원).
+    with patch.object(runner_module, "get_balance", AsyncMock(return_value=_snapshot(9_750_000))):
+        state = await r._snapshot_account(rest=object(), previous=None)  # type: ignore[arg-type]
+    assert state.day_start_equity == 10_000_000.0  # baseline 보존 (희석 방지 유지)

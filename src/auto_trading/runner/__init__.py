@@ -60,6 +60,12 @@ _BRAKE_COMMISSION_RATE = 0.00015  # 0.015% (매수+매도)
 _BRAKE_TAX_RATE_SELL = 0.0020  # 0.20% (매도)
 _BRAKE_SLIPPAGE_RATE = 0.0005  # 5bp (매수+매도)
 
+# day_state 복원 시 입출금 가드 임계 (2026-06-14 적대적 검증). 디스크 baseline 과 현재
+# 평가액 괴리가 이 비율을 넘으면 장중 입출금으로 보고 복원 거부 → stale baseline 으로
+# kill switch 가 오발동/미발동하는 것을 막는다. 일일 손실 한도(보통 3%)보다 충분히 커
+# 정상 일중 손익은 거의 닿지 않고, 큰 괴리는 입출금이 유력.
+DAY_STATE_MAX_DRIFT = 0.15
+
 
 @dataclass
 class PaperRunner:
@@ -481,7 +487,7 @@ class PaperRunner:
         # 장중 비정상 재시동 시 baseline 이 재시작 시점 평가액으로 잡혀 일일 손실
         # 한도가 희석되던 문제 (예: -2.5% 손실 후 재시동 → 추가 -3% 까지 허용).
         if previous is None:
-            restored = self._restore_day_state()
+            restored = self._restore_day_state(equity)
             if restored is not None:
                 if restored.day_start_equity > 0:
                     day_start = restored.day_start_equity
@@ -1104,11 +1110,20 @@ class PaperRunner:
         for sym in stale:
             self._pending_buys.pop(sym, None)
 
-    def _restore_day_state(self) -> DayState | None:
+    def _restore_day_state(self, current_equity: float) -> DayState | None:
         """비정상 재시동 복원 — 같은 KST 날짜의 저장분이 있으면 한도 기준값을 되살린다.
 
         baseline(day_start_equity)·매수대금 누적은 호출자(_snapshot_account)가 적용,
         BUY 카운트·churn 누적(NET)은 여기서 직접 복원. day_state 미주입이면 no-op.
+
+        입출금 가드 (2026-06-14 적대적 검증): 디스크 baseline 과 현재 평가액의 괴리가
+        정상 일중 손익 범위(DAY_STATE_MAX_DRIFT)를 넘으면 *장중 입출금* 으로 보고
+        복원을 거부한다. 입출금은 equity 총액을 바꿔 stale baseline 을 만들고, kill
+        switch(today_change=equity/day_start-1)를 출금 시 오발동(가짜 손실로 전량
+        청산)·입금 시 미발동(보호 공백)시킨다. 키움 입출금내역 TR 이 없어 직접
+        감지 불가 → 괴리 휴리스틱으로 보수적으로 차단(거부 시 현재 평가액이 baseline).
+        일일 손실 한도(보통 3%)에서 이미 청산·정지하므로 정상 손익이 임계(15%)에
+        닿는 일은 사실상 없다 — 임계를 넘는 큰 괴리는 입출금이 압도적으로 유력.
         """
         if self.day_state is None:
             return None
@@ -1116,6 +1131,17 @@ class PaperRunner:
         saved = self.day_state.load(today)
         if saved is None:
             return None
+        if saved.day_start_equity > 0:
+            drift = abs(current_equity / saved.day_start_equity - 1.0)
+            if drift > DAY_STATE_MAX_DRIFT:
+                log.warning(
+                    "runner.day_state_drift_rejected",
+                    saved_baseline=round(saved.day_start_equity),
+                    current_equity=round(current_equity),
+                    drift_pct=round(drift * 100, 1),
+                    threshold_pct=round(DAY_STATE_MAX_DRIFT * 100, 1),
+                )
+                return None
         self._daily_buy_counts = dict(saved.daily_buy_counts)
         self._daily_buy_counts_date = today
         self._daily_realized_net = saved.daily_realized_net
