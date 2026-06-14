@@ -22,9 +22,11 @@ def _resolve_out_dir(out_dir: Path | None, *, strategy_name: str, symbol: str, s
 
     walk-forward(``_wf``)·CPCV(``_cpcv``)가 똑같이 쓰던 경로 해석을 한 곳으로.
     """
-    out = out_dir or Path(
-        "data/backtests"
-    ) / f"{strategy_name}_{symbol}{suffix}_{datetime.now():%Y%m%d_%H%M%S}"
+    out = (
+        out_dir
+        or Path("data/backtests")
+        / f"{strategy_name}_{symbol}{suffix}_{datetime.now():%Y%m%d_%H%M%S}"
+    )
     out.mkdir(parents=True, exist_ok=True)
     return out
 
