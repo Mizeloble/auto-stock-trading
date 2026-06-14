@@ -451,28 +451,8 @@ class PaperRunner:
         for h in snap.holdings:
             if h.name and h.name.strip():
                 self._symbol_names.setdefault(h.symbol, h.name)
-        # 5/14 회귀 — 미체결 SELL 만큼 raw 잔고에서 차감. _pending_sells 의 TTL 지난
-        # 항목은 만료 (다음 호출에서 키움 응답을 그대로 신뢰).
-        self._reap_pending_sells()
-        for sym, (pending_qty, _ts) in self._pending_sells.items():
-            if pending_qty <= 0:
-                continue
-            current = positions.get(sym, 0)
-            positions[sym] = max(0, current - pending_qty)
-        # 2026-06-10 제3자 검토 — BUY 대칭 보정. 접수된 매수가 키움 잔고에 아직 미반영이면
-        # 로컬 기대 수량을 유지 — 안 그러면 보유가 0 으로 되돌아가 같은 종목 비중 한도를
-        # 한 번 더 쓰는 중복 매수 + PositionGuard 보호 공백이 생긴다. raw 가 기대치에
-        # 도달하면 반영 완료로 보고 해제 (TTL 만료 시에는 키움 응답을 다시 신뢰).
-        self._reap_pending_buys()
-        for sym, (expected_qty, _ts) in list(self._pending_buys.items()):
-            if positions.get(sym, 0) >= expected_qty:
-                self._pending_buys.pop(sym, None)
-                continue
-            positions[sym] = expected_qty
-            if avg_prices.get(sym, 0.0) <= 0 and previous is not None:
-                prev_avg = previous.avg_prices.get(sym, 0.0)
-                if prev_avg > 0:
-                    avg_prices[sym] = prev_avg  # guard 손절 기준 유지 (주문 시 로컬 평단)
+        # 5/14·6/10 회귀 — in-flight 주문(미체결 SELL·미반영 BUY)에 맞춰 raw 잔고를 보정.
+        self._apply_pending_corrections(positions, avg_prices, previous)
         # 29단계 회귀(2026-05-11) — total_equity 는 "예수금 + 보유 평가금" 으로 명시 계산.
         # 키움 `tot_evlt_amt` 는 모드/응답 버전에 따라 보유 평가금만 담는 경우가 있어
         # 이를 그대로 day_start_equity 분모로 쓰면 일부 매도 직후 분자만 줄어든 것처럼
@@ -505,6 +485,40 @@ class PaperRunner:
         self._account = state
         self._persist_day_state(state)
         return state
+
+    def _apply_pending_corrections(
+        self,
+        positions: dict[str, int],
+        avg_prices: dict[str, float],
+        previous: AccountState | None,
+    ) -> None:
+        """raw 키움 잔고(positions/avg_prices)를 in-flight 주문 기대치로 in-place 보정.
+
+        키움 잔고 응답은 방금 접수한 주문을 아직 반영 못 할 수 있어, 로컬이 추적하는
+        미체결 SELL·미반영 BUY 로 raw 를 보정한다(둘 다 TTL 만료 시 키움 응답을 신뢰).
+        """
+        # 5/14 회귀 — 미체결 SELL 만큼 raw 잔고에서 차감. _pending_sells 의 TTL 지난
+        # 항목은 만료 (다음 호출에서 키움 응답을 그대로 신뢰).
+        self._reap_pending_sells()
+        for sym, (pending_qty, _ts) in self._pending_sells.items():
+            if pending_qty <= 0:
+                continue
+            current = positions.get(sym, 0)
+            positions[sym] = max(0, current - pending_qty)
+        # 2026-06-10 제3자 검토 — BUY 대칭 보정. 접수된 매수가 키움 잔고에 아직 미반영이면
+        # 로컬 기대 수량을 유지 — 안 그러면 보유가 0 으로 되돌아가 같은 종목 비중 한도를
+        # 한 번 더 쓰는 중복 매수 + PositionGuard 보호 공백이 생긴다. raw 가 기대치에
+        # 도달하면 반영 완료로 보고 해제 (TTL 만료 시에는 키움 응답을 다시 신뢰).
+        self._reap_pending_buys()
+        for sym, (expected_qty, _ts) in list(self._pending_buys.items()):
+            if positions.get(sym, 0) >= expected_qty:
+                self._pending_buys.pop(sym, None)
+                continue
+            positions[sym] = expected_qty
+            if avg_prices.get(sym, 0.0) <= 0 and previous is not None:
+                prev_avg = previous.avg_prices.get(sym, 0.0)
+                if prev_avg > 0:
+                    avg_prices[sym] = prev_avg  # guard 손절 기준 유지 (주문 시 로컬 평단)
 
     async def _on_bar(self, rest: KiwoomRestClient, bar: Bar, account: AccountState) -> None:
         log.debug("runner.bar", symbol=bar.symbol, ts=bar.ts.isoformat(), close=bar.close)
@@ -900,130 +914,140 @@ class PaperRunner:
             delta = order.quantity if order.side is Side.BUY else -order.quantity
             account.positions[order.symbol] = max(0, prev_qty + delta)
             if order.side is Side.BUY:
-                # 추가 매수는 가중평균 — 마지막 매수가로 덮어쓰면 다음 잔고 갱신까지
-                # guard 의 손절 기준이 틀어진다. (키움 잔고 갱신 시 정확값으로 복원됨.)
-                prev_avg = account.avg_prices.get(order.symbol, 0.0)
-                if prev_qty > 0 and prev_avg > 0:
-                    total_qty = prev_qty + order.quantity
-                    account.avg_prices[order.symbol] = (
-                        prev_avg * prev_qty + ref_price * order.quantity
-                    ) / total_qty
-                else:
-                    account.avg_prices[order.symbol] = ref_price
-                # 23단계 Phase B — 일일 매수대금 누적. 실패 시(except 분기) 누적 X.
-                account.today_notional_used += ref_price * order.quantity
-                # 회전율 가드 — 같은 종목 BUY 체결 카운트 누적. 실패 시(except) 누적 X.
-                self._roll_daily_buy_counts()
-                self._daily_buy_counts[order.symbol] = (
-                    self._daily_buy_counts.get(order.symbol, 0) + 1
-                )
-                # 5/14 회귀 후속(2026-05-16) — 재진입. 직전 라운드트립의 미체결
-                # SELL 잔재는 새 포지션과 무관하다. 그대로 두면 _snapshot_account 가
-                # 새 보유분까지 차감하고 guard 가 새 포지션을 보호 못 한다(TTL 180s >
-                # 일중 회전 주기). 같은 종목 BUY 체결 시 stale pending 을 폐기.
-                self._pending_sells.pop(order.symbol, None)
-                # 2026-06-10 — BUY 대칭 보정 등록. 다음 잔고 응답이 체결 미반영이어도
-                # 로컬 기대 총수량을 유지해 보호 공백·중복 비중 사용을 막는다.
-                self._pending_buys[order.symbol] = (
-                    account.positions[order.symbol],
-                    datetime.now(),
-                )
+                self._apply_buy_fill(account, order, ref_price=ref_price, prev_qty=prev_qty)
             elif order.side is Side.SELL:
                 # 5/14 회귀 — 다음 _snapshot_account 가 키움 raw 잔고를 받았을 때
                 # 체결 미반영분(800033 insufficient_balance) 만큼 빼주도록 등록.
                 self._register_pending_sell(order.symbol, order.quantity)
                 # 로컬 보유가 줄었으니 BUY 기대치는 폐기 — raw-stale 보정은 pending_sells 담당.
                 self._pending_buys.pop(order.symbol, None)
-            # 29단계 PR10 (#14 2차) — SELL 시 라운드트립 PnL 산출 → 트래커 갱신.
-            # 평균가는 BUY 시에만 갱신되므로 SELL 직전 avg_prices 가 매수가.
-            # 부분 매도 시점에도 평균가 그대로 유지 — 누적 라운드트립 측정에 적합.
-            if order.side is Side.SELL:
-                buy_price = account.avg_prices.get(order.symbol, 0.0)
-                if buy_price > 0:
-                    pnl = (ref_price - buy_price) * order.quantity
-                    # churn 브레이크 — 그날 누적 실현손익(NET, 비용 차감)에 적립(일자 경계면
-                    # 함께 리셋). 비용까지 빼야 검증대로 "잘 번 날은 보존, 손실 쌓인 날만 차단"
-                    # 이 성립(GROSS 는 승자 재진입까지 잘라 부적합 — 2026-05-31 ledger 검증).
-                    # daily_realized_loss_limit 활성 시 매수 게이트가 이 값을 읽어 차단.
-                    buy_notional = buy_price * order.quantity
-                    sell_notional = ref_price * order.quantity
-                    cost = buy_notional * (
-                        _BRAKE_COMMISSION_RATE + _BRAKE_SLIPPAGE_RATE
-                    ) + sell_notional * (
-                        _BRAKE_COMMISSION_RATE + _BRAKE_TAX_RATE_SELL + _BRAKE_SLIPPAGE_RATE
-                    )
-                    self._roll_daily_buy_counts()
-                    self._daily_realized_net += pnl - cost
-                    if self.loss_tracker is not None:
-                        was_paused = self.loss_tracker.is_paused()
-                        self.loss_tracker.record_round_trip(pnl)
-                        # paused 로 *방금* 전환됐으면 텔레그램에 알림.
-                        if not was_paused and self.loss_tracker.is_paused():
-                            await self.notifier.notify(
-                                "risk.consecutive_loss_pause",
-                                streak=self.loss_tracker.streak,
-                                paused_until=(
-                                    self.loss_tracker.paused_until.isoformat()
-                                    if self.loss_tracker.paused_until
-                                    else ""
-                                ),
-                            )
-
-            # 23단계 Phase D — SELL 로 잔량 0 이면 last_exit_ts 갱신 + guard reset.
-            if order.side is Side.SELL and account.positions.get(order.symbol, 0) <= 0:
-                self._mark_exit(order.symbol, bar.ts)
+                await self._record_sell_round_trip(account, order, ref_price=ref_price, bar=bar)
             # 2026-06-10 — 한도 기준값(매수대금·BUY 카운트·churn 누적) 디스크 보존.
             # 비정상 재시동 시 _restore_day_state 가 같은 날짜면 복원.
             self._persist_day_state(account)
         except Exception as exc:
-            # 29단계 PR19 — 실패 송신 latency 도 기록 (timeout/거절 분석).
-            if self.latency_tracker is not None:
-                self.latency_tracker.record(
-                    label="order_send_fail",
-                    duration_ms=(_time.monotonic() - t0) * 1000.0,
-                )
-            # 29단계 PR6 (#10 2차) — KiwoomError 면 카테고리 분류 + skip 등록.
-            # 그 외 예외(네트워크 등)는 카테고리 UNKNOWN, skip 0.
-            category = RejectCategory.UNKNOWN
-            skip_seconds = 0
-            if isinstance(exc, KiwoomError):
-                classification = classify_reject(exc.message, exc.code)
-                category = classification.category
-                skip_seconds = classification.skip_seconds
-                if skip_seconds > 0:
-                    self._skipped_until[order.symbol] = datetime.now(KST) + timedelta(
-                        seconds=skip_seconds
-                    )
-            # 5/14 회귀 — SELL 발주가 매도가능수량 부족으로 실패하는 케이스는
-            # in-flight race(아직 _pending_sells 가 적용 안 된 봉) 가 절대다수.
-            # 로그는 정상 분류해 남기되 텔레그램 ❌ 알림은 생략 — 사용자에게는
-            # 실제 자금/포지션 손실이 아닌 정상 흐름의 잔재.
-            silence_notify = (
-                category is RejectCategory.INSUFFICIENT_BALANCE and order.side is Side.SELL
+            await self._handle_order_error(order, exc, t0=t0)
+
+    def _apply_buy_fill(
+        self, account: AccountState, order: Order, *, ref_price: float, prev_qty: int
+    ) -> None:
+        """BUY 체결 직후 로컬 상태 갱신 — 가중평균·일일 매수대금·회전 카운트·pending 보정."""
+        # 추가 매수는 가중평균 — 마지막 매수가로 덮어쓰면 다음 잔고 갱신까지
+        # guard 의 손절 기준이 틀어진다. (키움 잔고 갱신 시 정확값으로 복원됨.)
+        prev_avg = account.avg_prices.get(order.symbol, 0.0)
+        if prev_qty > 0 and prev_avg > 0:
+            total_qty = prev_qty + order.quantity
+            account.avg_prices[order.symbol] = (
+                prev_avg * prev_qty + ref_price * order.quantity
+            ) / total_qty
+        else:
+            account.avg_prices[order.symbol] = ref_price
+        # 23단계 Phase B — 일일 매수대금 누적. 실패 시(except 분기) 누적 X.
+        account.today_notional_used += ref_price * order.quantity
+        # 회전율 가드 — 같은 종목 BUY 체결 카운트 누적. 실패 시(except) 누적 X.
+        self._roll_daily_buy_counts()
+        self._daily_buy_counts[order.symbol] = self._daily_buy_counts.get(order.symbol, 0) + 1
+        # 5/14 회귀 후속(2026-05-16) — 재진입. 직전 라운드트립의 미체결
+        # SELL 잔재는 새 포지션과 무관하다. 그대로 두면 _snapshot_account 가
+        # 새 보유분까지 차감하고 guard 가 새 포지션을 보호 못 한다(TTL 180s >
+        # 일중 회전 주기). 같은 종목 BUY 체결 시 stale pending 을 폐기.
+        self._pending_sells.pop(order.symbol, None)
+        # 2026-06-10 — BUY 대칭 보정 등록. 다음 잔고 응답이 체결 미반영이어도
+        # 로컬 기대 총수량을 유지해 보호 공백·중복 비중 사용을 막는다.
+        self._pending_buys[order.symbol] = (
+            account.positions[order.symbol],
+            datetime.now(),
+        )
+
+    async def _record_sell_round_trip(
+        self, account: AccountState, order: Order, *, ref_price: float, bar: Bar
+    ) -> None:
+        """SELL 체결 직후 라운드트립 PnL 산출 → churn 누적·연속손절 트래커·잔량0 guard reset."""
+        # 29단계 PR10 (#14 2차) — SELL 시 라운드트립 PnL 산출 → 트래커 갱신.
+        # 평균가는 BUY 시에만 갱신되므로 SELL 직전 avg_prices 가 매수가.
+        # 부분 매도 시점에도 평균가 그대로 유지 — 누적 라운드트립 측정에 적합.
+        buy_price = account.avg_prices.get(order.symbol, 0.0)
+        if buy_price > 0:
+            pnl = (ref_price - buy_price) * order.quantity
+            # churn 브레이크 — 그날 누적 실현손익(NET, 비용 차감)에 적립(일자 경계면
+            # 함께 리셋). 비용까지 빼야 검증대로 "잘 번 날은 보존, 손실 쌓인 날만 차단"
+            # 이 성립(GROSS 는 승자 재진입까지 잘라 부적합 — 2026-05-31 ledger 검증).
+            # daily_realized_loss_limit 활성 시 매수 게이트가 이 값을 읽어 차단.
+            buy_notional = buy_price * order.quantity
+            sell_notional = ref_price * order.quantity
+            cost = buy_notional * (
+                _BRAKE_COMMISSION_RATE + _BRAKE_SLIPPAGE_RATE
+            ) + sell_notional * (
+                _BRAKE_COMMISSION_RATE + _BRAKE_TAX_RATE_SELL + _BRAKE_SLIPPAGE_RATE
             )
-            # 발주 실패한 BUY — 전략의 진입 기록을 롤백해 재진입 잠김 방지.
-            if order.side is Side.BUY:
-                self._rollback_entry_state(order.symbol)
-            log.error(
+            self._roll_daily_buy_counts()
+            self._daily_realized_net += pnl - cost
+            if self.loss_tracker is not None:
+                was_paused = self.loss_tracker.is_paused()
+                self.loss_tracker.record_round_trip(pnl)
+                # paused 로 *방금* 전환됐으면 텔레그램에 알림.
+                if not was_paused and self.loss_tracker.is_paused():
+                    await self.notifier.notify(
+                        "risk.consecutive_loss_pause",
+                        streak=self.loss_tracker.streak,
+                        paused_until=(
+                            self.loss_tracker.paused_until.isoformat()
+                            if self.loss_tracker.paused_until
+                            else ""
+                        ),
+                    )
+        # 23단계 Phase D — SELL 로 잔량 0 이면 last_exit_ts 갱신 + guard reset.
+        if account.positions.get(order.symbol, 0) <= 0:
+            self._mark_exit(order.symbol, bar.ts)
+
+    async def _handle_order_error(self, order: Order, exc: Exception, *, t0: float) -> None:
+        """주문 송신 실패 처리 — latency 기록·거절 분류·skip 등록·진입 롤백·로그/알림."""
+        # 29단계 PR19 — 실패 송신 latency 도 기록 (timeout/거절 분석).
+        if self.latency_tracker is not None:
+            self.latency_tracker.record(
+                label="order_send_fail",
+                duration_ms=(_time.monotonic() - t0) * 1000.0,
+            )
+        # 29단계 PR6 (#10 2차) — KiwoomError 면 카테고리 분류 + skip 등록.
+        # 그 외 예외(네트워크 등)는 카테고리 UNKNOWN, skip 0.
+        category = RejectCategory.UNKNOWN
+        skip_seconds = 0
+        if isinstance(exc, KiwoomError):
+            classification = classify_reject(exc.message, exc.code)
+            category = classification.category
+            skip_seconds = classification.skip_seconds
+            if skip_seconds > 0:
+                self._skipped_until[order.symbol] = datetime.now(KST) + timedelta(
+                    seconds=skip_seconds
+                )
+        # 5/14 회귀 — SELL 발주가 매도가능수량 부족으로 실패하는 케이스는
+        # in-flight race(아직 _pending_sells 가 적용 안 된 봉) 가 절대다수.
+        # 로그는 정상 분류해 남기되 텔레그램 ❌ 알림은 생략 — 사용자에게는
+        # 실제 자금/포지션 손실이 아닌 정상 흐름의 잔재.
+        silence_notify = category is RejectCategory.INSUFFICIENT_BALANCE and order.side is Side.SELL
+        # 발주 실패한 BUY — 전략의 진입 기록을 롤백해 재진입 잠김 방지.
+        if order.side is Side.BUY:
+            self._rollback_entry_state(order.symbol)
+        log.error(
+            "runner.order_failed",
+            error=str(exc),
+            symbol=order.symbol,
+            category=category.value,
+            skip_seconds=skip_seconds,
+            notify_silenced=silence_notify,
+            exc_info=exc,
+        )
+        if not silence_notify:
+            await self.notifier.notify(
                 "runner.order_failed",
                 error=str(exc),
                 symbol=order.symbol,
+                name=self._name_of(order.symbol),
+                side=order.side.value,
+                qty=order.quantity,
                 category=category.value,
                 skip_seconds=skip_seconds,
-                notify_silenced=silence_notify,
-                exc_info=exc,
             )
-            if not silence_notify:
-                await self.notifier.notify(
-                    "runner.order_failed",
-                    error=str(exc),
-                    symbol=order.symbol,
-                    name=self._name_of(order.symbol),
-                    side=order.side.value,
-                    qty=order.quantity,
-                    category=category.value,
-                    skip_seconds=skip_seconds,
-                )
 
     def register_symbol_names(self, names: dict[str, str]) -> None:
         """발굴 결과 등 외부에서 코드→이름 매핑을 주입. 빈 값/공백은 무시."""
