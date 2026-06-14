@@ -118,9 +118,7 @@ class LatencyTracker:
 
     def replay(self) -> Iterator[LatencyEntry]:
         """저널 전체를 한 줄씩 yield. 손상 라인 스킵."""
-        for line_no, data in iter_jsonl(
-            self.path, log_event="latency.corrupt_line", logger=log
-        ):
+        for line_no, data in iter_jsonl(self.path, log_event="latency.corrupt_line", logger=log):
             try:
                 yield LatencyEntry(
                     ts=str(data["ts"]),
