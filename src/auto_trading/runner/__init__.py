@@ -1024,9 +1024,7 @@ class PaperRunner:
         # in-flight race(아직 _pending_sells 가 적용 안 된 봉) 가 절대다수.
         # 로그는 정상 분류해 남기되 텔레그램 ❌ 알림은 생략 — 사용자에게는
         # 실제 자금/포지션 손실이 아닌 정상 흐름의 잔재.
-        silence_notify = (
-            category is RejectCategory.INSUFFICIENT_BALANCE and order.side is Side.SELL
-        )
+        silence_notify = category is RejectCategory.INSUFFICIENT_BALANCE and order.side is Side.SELL
         # 발주 실패한 BUY — 전략의 진입 기록을 롤백해 재진입 잠김 방지.
         if order.side is Side.BUY:
             self._rollback_entry_state(order.symbol)
