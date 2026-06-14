@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv
+import json
+from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from pathlib import Path
 
@@ -12,6 +15,33 @@ from auto_trading import cli
 
 from ..backtest.engine import Backtester, save_result
 from ..strategy import registry
+
+
+def _resolve_out_dir(out_dir: Path | None, *, strategy_name: str, symbol: str, suffix: str) -> Path:
+    """결과 저장 폴더 결정 + 생성. out_dir 지정 시 그대로, 아니면 타임스탬프 폴더.
+
+    walk-forward(``_wf``)·CPCV(``_cpcv``)가 똑같이 쓰던 경로 해석을 한 곳으로.
+    """
+    out = (
+        out_dir
+        or Path("data/backtests")
+        / f"{strategy_name}_{symbol}{suffix}_{datetime.now():%Y%m%d_%H%M%S}"
+    )
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def _write_csv(path: Path, header: Sequence[object], rows: Iterable[Sequence[object]]) -> None:
+    """헤더 + 행들을 CSV 로 기록 (newline="" — csv 표준 권장)."""
+    with path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(rows)
+
+
+def _write_summary_json(path: Path, data: dict) -> None:
+    """요약 dict 를 indent=2 JSON 으로 기록."""
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 @cli.app.command()
@@ -151,9 +181,6 @@ def _run_walk_forward(
     - windows.csv: 윈도우별 메트릭 행.
     - summary.json: WalkForwardSummary as_dict.
     """
-    import csv as _csv
-    import json as _json
-
     from ..backtest.walk_forward import walk_forward
 
     def _factory():
@@ -217,52 +244,39 @@ def _run_walk_forward(
     cli.console.print(summary_table)
 
     # 저장.
-    out = (
-        out_dir
-        or Path("data/backtests") / f"{strategy_name}_{symbol}_wf_{datetime.now():%Y%m%d_%H%M%S}"
-    )
-    out.mkdir(parents=True, exist_ok=True)
-
-    windows_path = out / "windows.csv"
-    with windows_path.open("w", newline="") as f:
-        writer = _csv.writer(f)
-        writer.writerow(
-            ["start", "end", "sharpe", "cagr", "max_drawdown", "win_rate", "num_trades"]
-        )
-        for w in result.windows:
-            r = w.report
-            writer.writerow(
-                [
-                    w.start.isoformat(),
-                    w.end.isoformat(),
-                    f"{r.sharpe:.6f}",
-                    f"{r.cagr:.6f}",
-                    f"{r.max_drawdown:.6f}",
-                    f"{r.win_rate:.6f}",
-                    r.num_trades,
-                ]
-            )
-
-    summary_path = out / "summary.json"
-    summary_path.write_text(
-        _json.dumps(
-            {
-                "n_windows": s.n_windows,
-                "sharpe_mean": s.sharpe_mean,
-                "sharpe_std": s.sharpe_std,
-                "sharpe_min": s.sharpe_min,
-                "sharpe_max": s.sharpe_max,
-                "cagr_mean_pct": s.cagr_mean_pct,
-                "cagr_std_pct": s.cagr_std_pct,
-                "mdd_worst_pct": s.mdd_worst_pct,
-                "win_rate_mean_pct": s.win_rate_mean_pct,
-                "positive_sharpe_ratio": s.positive_sharpe_ratio,
-                "window_days": window_days,
-                "step_days": step_days,
-            },
-            indent=2,
+    out = _resolve_out_dir(out_dir, strategy_name=strategy_name, symbol=symbol, suffix="_wf")
+    _write_csv(
+        out / "windows.csv",
+        ["start", "end", "sharpe", "cagr", "max_drawdown", "win_rate", "num_trades"],
+        (
+            [
+                w.start.isoformat(),
+                w.end.isoformat(),
+                f"{w.report.sharpe:.6f}",
+                f"{w.report.cagr:.6f}",
+                f"{w.report.max_drawdown:.6f}",
+                f"{w.report.win_rate:.6f}",
+                w.report.num_trades,
+            ]
+            for w in result.windows
         ),
-        encoding="utf-8",
+    )
+    _write_summary_json(
+        out / "summary.json",
+        {
+            "n_windows": s.n_windows,
+            "sharpe_mean": s.sharpe_mean,
+            "sharpe_std": s.sharpe_std,
+            "sharpe_min": s.sharpe_min,
+            "sharpe_max": s.sharpe_max,
+            "cagr_mean_pct": s.cagr_mean_pct,
+            "cagr_std_pct": s.cagr_std_pct,
+            "mdd_worst_pct": s.mdd_worst_pct,
+            "win_rate_mean_pct": s.win_rate_mean_pct,
+            "positive_sharpe_ratio": s.positive_sharpe_ratio,
+            "window_days": window_days,
+            "step_days": step_days,
+        },
     )
 
     cli.console.print(f"[green]결과 저장:[/green] {out}")
@@ -289,8 +303,6 @@ def _run_cpcv(
     - folds.csv: fold/조합 별 메트릭 행.
     - summary.json: CPCVSummary + 요청 파라미터.
     """
-    import csv as _csv
-    import json as _json
     from dataclasses import asdict as _asdict
 
     from ..backtest.cpcv import combinatorial_purged_kfold, purged_kfold
@@ -381,52 +393,40 @@ def _run_cpcv(
     cli.console.print(summary_table)
 
     # 저장.
-    out = (
-        out_dir
-        or Path("data/backtests") / f"{strategy_name}_{symbol}_cpcv_{datetime.now():%Y%m%d_%H%M%S}"
-    )
-    out.mkdir(parents=True, exist_ok=True)
-
-    folds_path = out / "folds.csv"
-    with folds_path.open("w", newline="") as csv_file:
-        writer = _csv.writer(csv_file)
-        writer.writerow(
+    out = _resolve_out_dir(out_dir, strategy_name=strategy_name, symbol=symbol, suffix="_cpcv")
+    _write_csv(
+        out / "folds.csv",
+        [
+            "fold" if combinatorial else "index",
+            "n_bars",
+            "sharpe",
+            "probabilistic_sharpe",
+            "max_drawdown_pct",
+            "win_rate_pct",
+            "num_trades",
+        ],
+        (
             [
-                "fold" if combinatorial else "index",
-                "n_bars",
-                "sharpe",
-                "probabilistic_sharpe",
-                "max_drawdown_pct",
-                "win_rate_pct",
-                "num_trades",
+                label,
+                n_bars,
+                rep.sharpe,
+                rep.probabilistic_sharpe,
+                rep.max_drawdown * 100.0,
+                rep.win_rate * 100.0,
+                rep.num_trades,
             ]
-        )
-        for label, n_bars, rep in rows:
-            writer.writerow(
-                [
-                    label,
-                    n_bars,
-                    rep.sharpe,
-                    rep.probabilistic_sharpe,
-                    rep.max_drawdown * 100.0,
-                    rep.win_rate * 100.0,
-                    rep.num_trades,
-                ]
-            )
-
-    summary_path = out / "summary.json"
-    summary_path.write_text(
-        _json.dumps(
-            {
-                **_asdict(summary),
-                "n_folds_requested": n_folds,
-                "embargo_bars": embargo_bars,
-                "n_test_folds": n_test_folds,
-                "combinatorial": combinatorial,
-            },
-            indent=2,
+            for label, n_bars, rep in rows
         ),
-        encoding="utf-8",
+    )
+    _write_summary_json(
+        out / "summary.json",
+        {
+            **_asdict(summary),
+            "n_folds_requested": n_folds,
+            "embargo_bars": embargo_bars,
+            "n_test_folds": n_test_folds,
+            "combinatorial": combinatorial,
+        },
     )
 
     cli.console.print(f"[green]결과 저장:[/green] {out}")
