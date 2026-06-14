@@ -6,13 +6,23 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, time
 from decimal import Decimal
 from enum import StrEnum
+from pathlib import Path
+from typing import Protocol
 from zoneinfo import ZoneInfo
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+class _WarnLogger(Protocol):
+    """``iter_jsonl`` 이 손상 라인을 보고할 때 쓰는 최소 로거 인터페이스."""
+
+    def warning(self, event: str, **kwargs: object) -> object: ...
 
 
 class Side(StrEnum):
@@ -98,6 +108,40 @@ def mask_secret(value: str | None, *, with_length: bool = False) -> str:
     return f"{preview}{len(value)}" if with_length else preview
 
 
+def iter_jsonl(
+    path: Path,
+    *,
+    log_event: str,
+    logger: _WarnLogger,
+) -> Iterator[tuple[int, dict]]:
+    """JSONL 저널을 ``(줄번호, dict)`` 로 순회한다.
+
+    여러 저널(latency·LLM cost·order)이 똑같이 작성하던
+    "파일 열기 → enumerate → strip → 빈 줄 스킵 → json.loads →
+    JSONDecodeError 면 경고 로그 후 스킵" 패턴의 단일 구현이다.
+
+    무엇/왜:
+    - dict 로 파싱하는 데까지만 책임진다. 파싱된 dict 의 필드 검증(키 누락·타입 등)은
+      호출부마다 다르므로, 줄번호를 함께 돌려줘 호출부가 동일한 형식으로 로깅하도록 한다.
+    - 파일이 없으면 빈 이터레이터.
+
+    어떻게 확인: 각 저널의 replay() 회귀 테스트.
+    """
+    if not path.exists():
+        return
+    with path.open(encoding="utf-8") as fh:
+        for line_no, raw in enumerate(fh, start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError as exc:
+                logger.warning(log_event, path=str(path), line_no=line_no, error=str(exc))
+                continue
+            yield line_no, data
+
+
 def normalize_symbol(raw: object) -> str:
     """키움 응답의 종목코드 정규화 — 6자리 코드 추출.
 
@@ -122,6 +166,7 @@ __all__ = [
     "Bar",
     "Side",
     "extract_rows",
+    "iter_jsonl",
     "mask_secret",
     "normalize_symbol",
     "parse_kiwoom_ts",

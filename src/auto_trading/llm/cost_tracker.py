@@ -26,7 +26,7 @@ from pathlib import Path
 
 import structlog
 
-from .._common import KST
+from .._common import KST, iter_jsonl
 
 log = structlog.get_logger(__name__)
 
@@ -145,29 +145,22 @@ class CostTracker:
 
     def replay(self) -> Iterator[CostEntry]:
         """저널 전체를 한 줄씩 yield. 손상 라인 스킵."""
-        if not self.path.exists():
-            return
-        with self.path.open(encoding="utf-8") as fh:
-            for line_no, raw in enumerate(fh, start=1):
-                line = raw.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    yield CostEntry(
-                        ts=str(data["ts"]),
-                        model=str(data["model"]),
-                        input_tokens=int(data["input_tokens"]),
-                        output_tokens=int(data["output_tokens"]),
-                        cost_usd=float(data["cost_usd"]),
-                    )
-                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-                    log.warning(
-                        "llm_cost.corrupt_line",
-                        path=str(self.path),
-                        line_no=line_no,
-                        error=str(exc),
-                    )
+        for line_no, data in iter_jsonl(self.path, log_event="llm_cost.corrupt_line", logger=log):
+            try:
+                yield CostEntry(
+                    ts=str(data["ts"]),
+                    model=str(data["model"]),
+                    input_tokens=int(data["input_tokens"]),
+                    output_tokens=int(data["output_tokens"]),
+                    cost_usd=float(data["cost_usd"]),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                log.warning(
+                    "llm_cost.corrupt_line",
+                    path=str(self.path),
+                    line_no=line_no,
+                    error=str(exc),
+                )
 
     def monthly_summary(self, year_month: str | None = None) -> MonthlySummary:
         """주어진 'YYYY-MM' 월의 누적 (default: 이번 달 KST)."""

@@ -30,7 +30,7 @@ from uuid import uuid4
 
 import structlog
 
-from .._common import KST
+from .._common import KST, iter_jsonl
 from .orders import Order
 
 log = structlog.get_logger(__name__)
@@ -94,22 +94,10 @@ class OrderJournal:
 
     def replay(self) -> Iterator[dict]:
         """저널 전체를 한 줄씩 dict 로 yield. 손상된 라인은 스킵하고 로그만."""
-        if not self.path.exists():
-            return
-        with self.path.open(encoding="utf-8") as fh:
-            for line_no, raw in enumerate(fh, start=1):
-                line = raw.strip()
-                if not line:
-                    continue
-                try:
-                    yield json.loads(line)
-                except json.JSONDecodeError as exc:
-                    log.warning(
-                        "order_journal.corrupt_line",
-                        path=str(self.path),
-                        line_no=line_no,
-                        error=str(exc),
-                    )
+        for _line_no, data in iter_jsonl(
+            self.path, log_event="order_journal.corrupt_line", logger=log
+        ):
+            yield data
 
     def _append(self, **fields: object) -> None:
         record = {"ts": datetime.now(tz=KST).isoformat(), **fields}

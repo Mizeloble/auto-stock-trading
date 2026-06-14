@@ -24,7 +24,7 @@ from pathlib import Path
 
 import structlog
 
-from .._common import KST
+from .._common import KST, iter_jsonl
 from ..config import Settings, get_settings
 
 log = structlog.get_logger(__name__)
@@ -118,27 +118,20 @@ class LatencyTracker:
 
     def replay(self) -> Iterator[LatencyEntry]:
         """저널 전체를 한 줄씩 yield. 손상 라인 스킵."""
-        if not self.path.exists():
-            return
-        with self.path.open(encoding="utf-8") as fh:
-            for line_no, raw in enumerate(fh, start=1):
-                line = raw.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    yield LatencyEntry(
-                        ts=str(data["ts"]),
-                        label=str(data["label"]),
-                        duration_ms=float(data["duration_ms"]),
-                    )
-                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-                    log.warning(
-                        "latency.corrupt_line",
-                        path=str(self.path),
-                        line_no=line_no,
-                        error=str(exc),
-                    )
+        for line_no, data in iter_jsonl(self.path, log_event="latency.corrupt_line", logger=log):
+            try:
+                yield LatencyEntry(
+                    ts=str(data["ts"]),
+                    label=str(data["label"]),
+                    duration_ms=float(data["duration_ms"]),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                log.warning(
+                    "latency.corrupt_line",
+                    path=str(self.path),
+                    line_no=line_no,
+                    error=str(exc),
+                )
 
     def daily_stats(self, date_str: str) -> list[DailyLatencyStats]:
         """``YYYY-MM-DD`` 일자의 label 별 통계 리스트. 카테고리 없으면 빈 리스트."""
