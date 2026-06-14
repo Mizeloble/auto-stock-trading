@@ -415,81 +415,75 @@ def format_last_signal(state: RunnerStateSnapshot) -> str:
     return "\n".join(lines)
 
 
-def format_daily_report(payload: dict) -> str:
-    """22단계 Phase A — 일일 리포트 텔레그램 메시지.
-
-    payload 는 `reports.daily.DailyReport` 의 asdict 결과(+tuple→list 변환).
-    """
-    date = str(payload.get("date") or "?")
-    mode = str(payload.get("mode") or "?")
-    dry = " · dry-run" if payload.get("dry_run") else ""
-    lines = [f"📊 일일 리포트 ({date})", f"모드: {mode}{dry}"]
-
+def _daily_discovery_section(payload: dict) -> list[str]:
+    """발굴(채택·차단) 섹션. 없으면 빈 리스트."""
     chosen = payload.get("discovery_chosen") or []
     blocked = payload.get("discovery_blocked") or []
+    if not (chosen or blocked):
+        return []
     chosen_names_raw = payload.get("discovery_chosen_names") or {}
     chosen_names: dict[str, str] = (
         {str(k): str(v) for k, v in chosen_names_raw.items()}
         if isinstance(chosen_names_raw, dict)
         else {}
     )
-    if chosen or blocked:
-        lines.append("")
-        head = f"🔎 발굴: 채택 {len(chosen)}건"
-        if blocked:
-            head += f" · 차단 {len(blocked)}건"
-        excluded_etf = int(payload.get("excluded_etf_count") or 0)
-        if excluded_etf:
-            head += f" (ETF {excluded_etf}건 제외)"
-        lines.append(head)
-        if chosen:
-            lines.append(f"선정: {', '.join(_with_name(s, chosen_names.get(s)) for s in chosen)}")
-        if blocked:
-            shown = ", ".join(f"{_with_name(s, chosen_names.get(s))}({r})" for s, r in blocked[:5])
-            tail = f" 외 {len(blocked) - 5}" if len(blocked) > 5 else ""
-            lines.append(f"차단: {shown}{tail}")
+    head = f"🔎 발굴: 채택 {len(chosen)}건"
+    if blocked:
+        head += f" · 차단 {len(blocked)}건"
+    excluded_etf = int(payload.get("excluded_etf_count") or 0)
+    if excluded_etf:
+        head += f" (ETF {excluded_etf}건 제외)"
+    out = ["", head]
+    if chosen:
+        out.append(f"선정: {', '.join(_with_name(s, chosen_names.get(s)) for s in chosen)}")
+    if blocked:
+        shown = ", ".join(f"{_with_name(s, chosen_names.get(s))}({r})" for s, r in blocked[:5])
+        tail = f" 외 {len(blocked) - 5}" if len(blocked) > 5 else ""
+        out.append(f"차단: {shown}{tail}")
+    return out
 
+
+def _daily_gates_section(payload: dict) -> list[str]:
+    """시장 게이트 섹션. 없으면 빈 리스트."""
     gates = payload.get("market_gates") or []
-    if gates:
-        lines.append("")
-        lines.append("📈 시장 게이트")
-        for g in gates:
-            mark = "✅" if g.get("above") else "❌"
-            last = g.get("last")
-            sma5 = g.get("sma5")
-            sma20 = g.get("sma20")
-            metric = ""
-            if last is not None and sma5 is not None and sma20 is not None:
-                metric = f" (last {float(last):.2f} / 5 {float(sma5):.2f} / 20 {float(sma20):.2f})"
-            lines.append(f"- {g.get('market', '?')} {mark}{metric}")
+    if not gates:
+        return []
+    out = ["", "📈 시장 게이트"]
+    for g in gates:
+        mark = "✅" if g.get("above") else "❌"
+        last = g.get("last")
+        sma5 = g.get("sma5")
+        sma20 = g.get("sma20")
+        metric = ""
+        if last is not None and sma5 is not None and sma20 is not None:
+            metric = f" (last {float(last):.2f} / 5 {float(sma5):.2f} / 20 {float(sma20):.2f})"
+        out.append(f"- {g.get('market', '?')} {mark}{metric}")
+    return out
 
+
+def _daily_timeline_section(payload: dict) -> list[str]:
+    """오늘 흐름(타임라인) 섹션. 없으면 빈 리스트."""
     timeline_lines = _build_timeline_lines(payload.get("timeline") or [])
-    if timeline_lines:
-        lines.append("")
-        lines.append(f"⏱ 오늘 흐름 ({len(timeline_lines)}건)")
-        lines.extend(timeline_lines)
+    if not timeline_lines:
+        return []
+    return ["", f"⏱ 오늘 흐름 ({len(timeline_lines)}건)", *timeline_lines]
 
-    buys = payload.get("buys") or []
-    liqs = payload.get("liquidations") or []
+
+def _daily_trades_section(buys: list, liqs: list) -> list[str]:
+    """매매 결과/매수/청산 섹션. 빈 하위 섹션은 생략."""
     pair_lines, only_buy_lines, only_sell_lines = _build_trade_lines(buys, liqs)
+    out: list[str] = []
     if pair_lines:
-        lines.append("")
-        lines.append(f"📋 매매 결과: {len(pair_lines)}건")
-        lines.extend(pair_lines)
+        out += ["", f"📋 매매 결과: {len(pair_lines)}건", *pair_lines]
     if only_buy_lines:
-        lines.append("")
-        lines.append(f"💰 매수: {len(only_buy_lines)}건")
-        lines.extend(only_buy_lines)
+        out += ["", f"💰 매수: {len(only_buy_lines)}건", *only_buy_lines]
     if only_sell_lines:
-        lines.append("")
-        lines.append(f"🧹 청산: {len(only_sell_lines)}건")
-        lines.extend(only_sell_lines)
+        out += ["", f"🧹 청산: {len(only_sell_lines)}건", *only_sell_lines]
+    return out
 
-    closing_lines = _build_closing_balance(payload)
-    if closing_lines:
-        lines.append("")
-        lines.extend(closing_lines)
 
+def _daily_summary_section(payload: dict, buys: list, liqs: list) -> list[str]:
+    """요약(실현손익·거래대금·회전·에러) + 비용 차감 PnL 섹션."""
     realized = payload.get("realized_pnl")
     realized_pct = payload.get("realized_pnl_pct")
     realized_after_cost = payload.get("realized_pnl_after_cost")
@@ -524,15 +518,41 @@ def format_daily_report(payload: dict) -> str:
             if cnt
         ]
         summary_parts.append("에러 " + " · ".join(breakdown) if breakdown else f"에러 {err}건")
+    out: list[str] = []
     if summary_parts:
-        lines.append("")
         # 📋 는 매매 결과 섹션이 쓰므로 요약은 다른 이모지로 시각 구분.
-        lines.append("📊 " + " · ".join(summary_parts))
-
+        out += ["", "📊 " + " · ".join(summary_parts)]
     # 비용 차감 PnL — 23단계 Phase A. 비용이 0이라 값이 같아도 초보에게
     # "수수료·세금·슬리피지 반영됨" 을 명시하려 거래가 있으면 항상 함께 노출.
     if realized is not None and realized_after_cost is not None:
-        lines.append(f"💸 비용 차감 PnL: {_signed_won(realized_after_cost)}")
+        out.append(f"💸 비용 차감 PnL: {_signed_won(realized_after_cost)}")
+    return out
+
+
+def format_daily_report(payload: dict) -> str:
+    """22단계 Phase A — 일일 리포트 텔레그램 메시지.
+
+    payload 는 `reports.daily.DailyReport` 의 asdict 결과(+tuple→list 변환).
+    """
+    date = str(payload.get("date") or "?")
+    mode = str(payload.get("mode") or "?")
+    dry = " · dry-run" if payload.get("dry_run") else ""
+    lines = [f"📊 일일 리포트 ({date})", f"모드: {mode}{dry}"]
+
+    buys = payload.get("buys") or []
+    liqs = payload.get("liquidations") or []
+
+    lines += _daily_discovery_section(payload)
+    lines += _daily_gates_section(payload)
+    lines += _daily_timeline_section(payload)
+    lines += _daily_trades_section(buys, liqs)
+
+    closing_lines = _build_closing_balance(payload)
+    if closing_lines:
+        lines.append("")
+        lines.extend(closing_lines)
+
+    lines += _daily_summary_section(payload, buys, liqs)
 
     note = str(payload.get("note_ko") or "")
     if note:

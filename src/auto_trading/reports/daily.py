@@ -321,6 +321,63 @@ def _extract_gates(events: LogEvents) -> list[MarketGateInfo]:
     return out
 
 
+def _collect_order_records(
+    records: list[dict],
+    *,
+    simulated: bool,
+    names: dict[str, str],
+    buys: list[TradeRecord],
+    sells: list[TradeRecord],
+    buy_prices: dict[str, float],
+) -> None:
+    """주문 이벤트 한 묶음(시뮬 또는 실체결)을 buys/sells 에 분배.
+
+    시뮬(orders_simulated)과 실체결(orders_accepted)이 ``simulated`` 플래그만
+    다르고 로직은 동일해 한 곳으로 모음. buy_prices 는 호출 간 공유돼 마지막
+    매수가가 청산 buy_price 폴백으로 쓰인다.
+    """
+    for rec in records:
+        side = str(rec.get("side", ""))
+        symbol = str(rec.get("symbol", ""))
+        qty = _as_int(rec.get("qty")) or 0
+        # 러너가 봉 종가로 근사한 체결가를 함께 로깅 (시장가 체결가 사후 보정 X).
+        price = _as_float(rec.get("price"))
+        if not symbol or qty <= 0:
+            continue
+        if side == "buy":
+            buys.append(TradeRecord(symbol, "buy", qty, price, simulated, names.get(symbol)))
+            if price is not None:
+                buy_prices[symbol] = price
+        elif side == "sell":
+            sells.append(TradeRecord(symbol, "sell", qty, price, simulated, names.get(symbol)))
+
+
+def _collect_liquidation_records(
+    records: list[dict],
+    *,
+    simulated: bool,
+    names: dict[str, str],
+    buy_prices: dict[str, float],
+    liqs: list[LiquidationRecord],
+) -> None:
+    """EOD 청산 이벤트 한 묶음을 liqs 에 누적. simulated/accepted 공용."""
+    for rec in records:
+        symbol = str(rec.get("symbol", ""))
+        qty = _as_int(rec.get("qty")) or 0
+        if symbol and qty > 0:
+            buy_price = _as_float(rec.get("buy_price")) or buy_prices.get(symbol)
+            liqs.append(
+                LiquidationRecord(
+                    symbol=symbol,
+                    quantity=qty,
+                    sell_price=_as_float(rec.get("sell_price")),
+                    buy_price=buy_price,
+                    simulated=simulated,
+                    name=names.get(symbol),
+                )
+            )
+
+
 def _extract_trades(
     events: LogEvents, names: dict[str, str]
 ) -> tuple[list[TradeRecord], list[TradeRecord], list[LiquidationRecord]]:
@@ -333,65 +390,38 @@ def _extract_trades(
     buys: list[TradeRecord] = []
     sells: list[TradeRecord] = []
     buy_prices: dict[str, float] = {}  # symbol -> last buy price (시뮬·실거래 공통)
-    for rec in events.orders_simulated:
-        side = str(rec.get("side", ""))
-        symbol = str(rec.get("symbol", ""))
-        qty = _as_int(rec.get("qty")) or 0
-        price = _as_float(rec.get("price"))
-        if not symbol or qty <= 0:
-            continue
-        if side == "buy":
-            buys.append(TradeRecord(symbol, "buy", qty, price, True, names.get(symbol)))
-            if price is not None:
-                buy_prices[symbol] = price
-        elif side == "sell":
-            sells.append(TradeRecord(symbol, "sell", qty, price, True, names.get(symbol)))
-    for rec in events.orders_accepted:
-        side = str(rec.get("side", ""))
-        symbol = str(rec.get("symbol", ""))
-        qty = _as_int(rec.get("qty")) or 0
-        # 신규: 러너가 봉 종가로 근사한 체결가를 함께 로깅 (시장가 체결가 사후 보정 X).
-        price = _as_float(rec.get("price"))
-        if not symbol or qty <= 0:
-            continue
-        if side == "buy":
-            buys.append(TradeRecord(symbol, "buy", qty, price, False, names.get(symbol)))
-            if price is not None:
-                buy_prices[symbol] = price
-        elif side == "sell":
-            sells.append(TradeRecord(symbol, "sell", qty, price, False, names.get(symbol)))
+    _collect_order_records(
+        events.orders_simulated,
+        simulated=True,
+        names=names,
+        buys=buys,
+        sells=sells,
+        buy_prices=buy_prices,
+    )
+    _collect_order_records(
+        events.orders_accepted,
+        simulated=False,
+        names=names,
+        buys=buys,
+        sells=sells,
+        buy_prices=buy_prices,
+    )
 
     liqs: list[LiquidationRecord] = []
-    for rec in events.liquidations_simulated:
-        symbol = str(rec.get("symbol", ""))
-        qty = _as_int(rec.get("qty")) or 0
-        if symbol and qty > 0:
-            buy_price = _as_float(rec.get("buy_price")) or buy_prices.get(symbol)
-            liqs.append(
-                LiquidationRecord(
-                    symbol=symbol,
-                    quantity=qty,
-                    sell_price=_as_float(rec.get("sell_price")),
-                    buy_price=buy_price,
-                    simulated=True,
-                    name=names.get(symbol),
-                )
-            )
-    for rec in events.liquidations_accepted:
-        symbol = str(rec.get("symbol", ""))
-        qty = _as_int(rec.get("qty")) or 0
-        if symbol and qty > 0:
-            buy_price = _as_float(rec.get("buy_price")) or buy_prices.get(symbol)
-            liqs.append(
-                LiquidationRecord(
-                    symbol=symbol,
-                    quantity=qty,
-                    sell_price=_as_float(rec.get("sell_price")),
-                    buy_price=buy_price,
-                    simulated=False,
-                    name=names.get(symbol),
-                )
-            )
+    _collect_liquidation_records(
+        events.liquidations_simulated,
+        simulated=True,
+        names=names,
+        buy_prices=buy_prices,
+        liqs=liqs,
+    )
+    _collect_liquidation_records(
+        events.liquidations_accepted,
+        simulated=False,
+        names=names,
+        buy_prices=buy_prices,
+        liqs=liqs,
+    )
     return buys, sells, liqs
 
 
