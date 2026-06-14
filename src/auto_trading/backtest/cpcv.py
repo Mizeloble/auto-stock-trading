@@ -30,7 +30,7 @@ import pandas as pd
 
 from ..strategy.base import Strategy
 from .engine import Backtester
-from .metrics import PerformanceReport
+from .metrics import PerformanceReport, compute
 
 __all__ = [
     "CPCVFold",
@@ -276,8 +276,17 @@ def combinatorial_purged_kfold(
     - ``n_folds=10, n_test_folds=3`` → 120개
     - ``n_folds=10, n_test_folds=5`` → 252개 (분포 평가에 충분)
 
-    조합 시 fold 들은 시간순으로 정렬·연결 (전략의 시간 순서 가정 유지).
-    각 fold 양 끝 ``embargo_bars`` 만큼 purge.
+    조합 시 fold 들은 시간순으로 정렬되며, 각 fold 를 *독립 백테스트* 하되 직전 fold
+    종료 자본을 다음 fold 시작 자본으로 이어받는다(자본만 연속). 각 fold 양 끝
+    ``embargo_bars`` 만큼 purge.
+
+    fold 경계 처리 (2026-06-14, 제3자 검토):
+    - 종전엔 비연속 fold 들을 ``pd.concat`` 으로 이어 한 번에 백테스트해, 경계에서
+      가격이 점프(예: 1월 fold 끝 1,000원 → 5월 fold 시작 5,000원)하면 그 갭이 통째로
+      가짜 PnL 이 되고 RSI/SMA 내부 상태도 갭을 실제 변동으로 오염시켰다.
+    - 이제 fold 마다 전략을 새로 만들어(상태 reset) 독립 백테스트하므로 경계 갭이
+      손익·지표에 들어가지 않는다. fold 끝 보유분은 다음 fold 로 넘어가지 않아
+      사실상 경계에서 강제 청산(현금화)된다. 표본 수(C(N,k))는 그대로.
 
     경고: C(N,k) 가 큰 조합은 실행 시간 ↑ — 사용자가 의식적으로 선택.
     """
@@ -319,35 +328,46 @@ def combinatorial_purged_kfold(
 
     folds_out: list[CombinatorialFold] = []
     for combo in combinations(range(n_folds), n_test_folds):
-        # 조합의 fold 들을 시간순 concat (combinations() 가 이미 오름차순).
+        # combinations() 가 이미 오름차순 — fold 들을 시간순으로 본다.
         parts = [fold_slices[i] for i in combo]
-        # 빈 fold 가 끼면 skip 그 조합.
-        if any(len(p) < 2 for p in parts):
-            continue
-        combined = pd.concat(parts)
-        if len(combined) < 4:
+        # fold 하나라도 백테스트 최소 길이(4봉) 미만이면 그 조합 skip.
+        if any(len(p) < 4 for p in parts):
             continue
 
-        bt = Backtester(
-            strategy=strategy_factory(),
-            initial_cash=initial_cash,
-            position_sizing=position_sizing,
-            atr_period=atr_period,
-            atr_risk_pct=atr_risk_pct,
-            commission_rate=commission_rate,
-            tax_rate_sell=tax_rate_sell,
-            slippage_bps=slippage_bps,
-            slippage_model=slippage_model,
-            impact_coefficient=impact_coefficient,
-        )
-        result = bt.run(symbol, combined)
+        # 각 fold 를 독립 백테스트하되 자본만 이어받는다 (경계 갭 오염 차단).
+        equity_parts: list[pd.Series] = []
+        all_trades: list = []
+        cash = initial_cash
+        for part in parts:
+            bt = Backtester(
+                strategy=strategy_factory(),  # fold 마다 새 인스턴스 = 상태 reset
+                initial_cash=cash,
+                position_sizing=position_sizing,
+                atr_period=atr_period,
+                atr_risk_pct=atr_risk_pct,
+                commission_rate=commission_rate,
+                tax_rate_sell=tax_rate_sell,
+                slippage_bps=slippage_bps,
+                slippage_model=slippage_model,
+                impact_coefficient=impact_coefficient,
+            )
+            res = bt.run(symbol, part)
+            equity_parts.append(res.equity_curve)
+            all_trades.extend(res.trades)
+            # fold 종료 평가액을 다음 fold 시작 자본으로 — 보유분은 현금화(강제청산).
+            cash = float(res.equity_curve.iloc[-1])
+
+        combined_equity = pd.concat(equity_parts)
+        if len(combined_equity) < 4:
+            continue
+        report = compute(combined_equity, all_trades, initial_cash)
         folds_out.append(
             CombinatorialFold(
                 combination=combo,
-                n_bars=len(combined),
-                start=combined.index[0].to_pydatetime(),
-                end=combined.index[-1].to_pydatetime(),
-                report=result.report,
+                n_bars=len(combined_equity),
+                start=combined_equity.index[0].to_pydatetime(),
+                end=combined_equity.index[-1].to_pydatetime(),
+                report=report,
             )
         )
 
