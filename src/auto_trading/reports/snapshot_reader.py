@@ -157,7 +157,7 @@ def _hhmm_to_minute(hhmm: str | None) -> int | None:
         return None
     try:
         h, m = (int(x) for x in hhmm.split(":"))
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None
     return h * 60 + m
 

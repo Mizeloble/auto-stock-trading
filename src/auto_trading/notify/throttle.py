@@ -38,6 +38,7 @@ _PASSTHROUGH: frozenset[str] = frozenset(
     }
 )
 
+
 def _won_amount(fields: dict) -> str:
     """총 거래대금(수량 곱하기 단가) ' (3,395,000원)'. 가격/수량 없거나 0 이면 빈 문자열.
 

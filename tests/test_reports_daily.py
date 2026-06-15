@@ -286,31 +286,95 @@ def test_timeline_includes_all_sell_stop_liquidation_fills() -> None:
             "timestamp": _ts(9, 1),
         },
         orders_accepted=[
-            {"symbol": "005930", "side": "buy", "qty": 10, "price": 339500.0, "timestamp": _ts(9, 10)},
-            {"symbol": "006800", "side": "buy", "qty": 66, "price": 51500.0, "timestamp": _ts(9, 10)},
-            {"symbol": "093370", "side": "buy", "qty": 159, "price": 20100.0, "timestamp": _ts(9, 10)},
+            {
+                "symbol": "005930",
+                "side": "buy",
+                "qty": 10,
+                "price": 339500.0,
+                "timestamp": _ts(9, 10),
+            },
+            {
+                "symbol": "006800",
+                "side": "buy",
+                "qty": 66,
+                "price": 51500.0,
+                "timestamp": _ts(9, 10),
+            },
+            {
+                "symbol": "093370",
+                "side": "buy",
+                "qty": 159,
+                "price": 20100.0,
+                "timestamp": _ts(9, 10),
+            },
             # 손절 매도.
-            {"symbol": "093370", "side": "sell", "qty": 159, "price": 19660.0, "timestamp": _ts(9, 11)},
+            {
+                "symbol": "093370",
+                "side": "sell",
+                "qty": 159,
+                "price": 19660.0,
+                "timestamp": _ts(9, 11),
+            },
             # 트레일링 매도.
-            {"symbol": "005930", "side": "sell", "qty": 10, "price": 336500.0, "timestamp": _ts(9, 13)},
+            {
+                "symbol": "005930",
+                "side": "sell",
+                "qty": 10,
+                "price": 336500.0,
+                "timestamp": _ts(9, 13),
+            },
             # 부분 익절 매도.
-            {"symbol": "006800", "side": "sell", "qty": 33, "price": 52600.0, "timestamp": _ts(9, 18)},
+            {
+                "symbol": "006800",
+                "side": "sell",
+                "qty": 33,
+                "price": 52600.0,
+                "timestamp": _ts(9, 18),
+            },
             # 트레일링 매도.
-            {"symbol": "006800", "side": "sell", "qty": 33, "price": 52800.0, "timestamp": _ts(9, 26)},
+            {
+                "symbol": "006800",
+                "side": "sell",
+                "qty": 33,
+                "price": 52800.0,
+                "timestamp": _ts(9, 26),
+            },
         ],
         stop_losses=[
-            {"symbol": "093370", "price": 19660.0, "avg_price": 20197.0, "drop_pct": 2.659,
-             "timestamp": _ts(9, 11)},
+            {
+                "symbol": "093370",
+                "price": 19660.0,
+                "avg_price": 20197.0,
+                "drop_pct": 2.659,
+                "timestamp": _ts(9, 11),
+            },
         ],
         partial_takes=[
-            {"symbol": "006800", "price": 52600.0, "avg_price": 51404.0, "gain_pct": 2.327,
-             "qty_to_sell": 33, "qty_remaining": 33, "timestamp": _ts(9, 18)},
+            {
+                "symbol": "006800",
+                "price": 52600.0,
+                "avg_price": 51404.0,
+                "gain_pct": 2.327,
+                "qty_to_sell": 33,
+                "qty_remaining": 33,
+                "timestamp": _ts(9, 18),
+            },
         ],
         trailings=[
-            {"symbol": "005930", "price": 336500.0, "highest": 340000.0, "drop_pct": 1.029,
-             "timestamp": _ts(9, 13)},
-            {"symbol": "006800", "price": 52800.0, "highest": 53300.0, "drop_pct": 0.938,
-             "timestamp": _ts(9, 26)},
+            {
+                "symbol": "005930",
+                "price": 336500.0,
+                "highest": 340000.0,
+                "drop_pct": 1.029,
+                "timestamp": _ts(9, 13),
+            },
+            {
+                "symbol": "006800",
+                "price": 52800.0,
+                "highest": 53300.0,
+                "drop_pct": 0.938,
+                "timestamp": _ts(9, 26),
+            },
         ],
     )
     report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
@@ -334,7 +398,14 @@ def test_timeline_includes_all_sell_stop_liquidation_fills() -> None:
     assert "부분 익절" in by_time["09:18"] and "+2.33%" in by_time["09:18"]
     # 전체 시각순 정렬: 발굴 → 매수 3 → 매도 4.
     assert [ev.kind for ev in timeline] == [
-        "discovery", "buy", "buy", "buy", "stop_loss", "trailing", "partial_take", "trailing",
+        "discovery",
+        "buy",
+        "buy",
+        "buy",
+        "stop_loss",
+        "trailing",
+        "partial_take",
+        "trailing",
     ]
 
 
@@ -343,8 +414,20 @@ def test_timeline_plain_sell_without_guard_event() -> None:
     events = LogEvents(
         symbol_names={"005930": "삼성전자"},
         orders_accepted=[
-            {"symbol": "005930", "side": "buy", "qty": 6, "price": 270000.0, "timestamp": _ts(9, 5)},
-            {"symbol": "005930", "side": "sell", "qty": 6, "price": 280000.0, "timestamp": _ts(9, 30)},
+            {
+                "symbol": "005930",
+                "side": "buy",
+                "qty": 6,
+                "price": 270000.0,
+                "timestamp": _ts(9, 5),
+            },
+            {
+                "symbol": "005930",
+                "side": "sell",
+                "qty": 6,
+                "price": 280000.0,
+                "timestamp": _ts(9, 30),
+            },
         ],
     )
     report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
@@ -703,20 +786,46 @@ def test_snapshot_join_enriches_entry_features_and_mfe_mae(tmp_path: Path) -> No
         tmp_path,
         "2026-06-15",
         [
-            {"ts": "2026-06-15T09:05:00+09:00", "symbol": "A", "price": 100.0,
-             "change_pct": 3.5, "rank": 7},  # 09:05 진입 근처
-            {"ts": "2026-06-15T09:35:00+09:00", "symbol": "A", "price": 130.0,
-             "change_pct": 30.0, "rank": 4},  # 보유구간 고점
-            {"ts": "2026-06-15T09:50:00+09:00", "symbol": "A", "price": 90.0,
-             "change_pct": -10.0, "rank": 9},  # 보유구간 저점
+            {
+                "ts": "2026-06-15T09:05:00+09:00",
+                "symbol": "A",
+                "price": 100.0,
+                "change_pct": 3.5,
+                "rank": 7,
+            },  # 09:05 진입 근처
+            {
+                "ts": "2026-06-15T09:35:00+09:00",
+                "symbol": "A",
+                "price": 130.0,
+                "change_pct": 30.0,
+                "rank": 4,
+            },  # 보유구간 고점
+            {
+                "ts": "2026-06-15T09:50:00+09:00",
+                "symbol": "A",
+                "price": 90.0,
+                "change_pct": -10.0,
+                "rank": 9,
+            },  # 보유구간 저점
         ],
     )
     events = LogEvents(
         orders_simulated=[
-            {"symbol": "A", "side": "buy", "qty": 10, "price": 100.0,
-             "timestamp": "2026-06-15T00:05:00Z"},  # → KST 09:05
-            {"symbol": "A", "side": "sell", "qty": 10, "price": 120.0,
-             "guard_reason": "partial_take", "timestamp": "2026-06-15T00:55:00Z"},  # → 09:55
+            {
+                "symbol": "A",
+                "side": "buy",
+                "qty": 10,
+                "price": 100.0,
+                "timestamp": "2026-06-15T00:05:00Z",
+            },  # → KST 09:05
+            {
+                "symbol": "A",
+                "side": "sell",
+                "qty": 10,
+                "price": 120.0,
+                "guard_reason": "partial_take",
+                "timestamp": "2026-06-15T00:55:00Z",
+            },  # → 09:55
         ],
     )
     report = build_daily_report(
@@ -738,10 +847,20 @@ def test_blocked_outcomes_built_from_snapshot(tmp_path: Path) -> None:
         tmp_path,
         "2026-06-15",
         [
-            {"ts": "2026-06-15T00:01:00+09:00", "symbol": "C", "price": 100.0,
-             "change_pct": 1.0, "rank": 50},
-            {"ts": "2026-06-15T06:30:00+09:00", "symbol": "C", "price": 108.0,
-             "change_pct": 9.0, "rank": 30},
+            {
+                "ts": "2026-06-15T00:01:00+09:00",
+                "symbol": "C",
+                "price": 100.0,
+                "change_pct": 1.0,
+                "rank": 50,
+            },
+            {
+                "ts": "2026-06-15T06:30:00+09:00",
+                "symbol": "C",
+                "price": 108.0,
+                "change_pct": 9.0,
+                "rank": 30,
+            },
         ],
     )
     events = LogEvents(
@@ -769,8 +888,13 @@ def test_snapshot_join_absent_file_leaves_none(tmp_path: Path) -> None:
     """스냅샷 파일 없으면 진입 피처·MFE/MAE·차단결과 모두 None/빈 — 과거 일자 호환."""
     events = LogEvents(
         orders_simulated=[
-            {"symbol": "A", "side": "buy", "qty": 10, "price": 100.0,
-             "timestamp": "2026-06-15T00:05:00Z"},
+            {
+                "symbol": "A",
+                "side": "buy",
+                "qty": 10,
+                "price": 100.0,
+                "timestamp": "2026-06-15T00:05:00Z",
+            },
         ],
         discovery={"event": "daytrade.discovery", "chosen": [], "blocked": [["C", "x"]]},
     )
