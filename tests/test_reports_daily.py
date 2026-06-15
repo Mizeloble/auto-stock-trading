@@ -285,31 +285,95 @@ def test_timeline_includes_all_sell_stop_liquidation_fills() -> None:
             "timestamp": _ts(9, 1),
         },
         orders_accepted=[
-            {"symbol": "005930", "side": "buy", "qty": 10, "price": 339500.0, "timestamp": _ts(9, 10)},
-            {"symbol": "006800", "side": "buy", "qty": 66, "price": 51500.0, "timestamp": _ts(9, 10)},
-            {"symbol": "093370", "side": "buy", "qty": 159, "price": 20100.0, "timestamp": _ts(9, 10)},
+            {
+                "symbol": "005930",
+                "side": "buy",
+                "qty": 10,
+                "price": 339500.0,
+                "timestamp": _ts(9, 10),
+            },
+            {
+                "symbol": "006800",
+                "side": "buy",
+                "qty": 66,
+                "price": 51500.0,
+                "timestamp": _ts(9, 10),
+            },
+            {
+                "symbol": "093370",
+                "side": "buy",
+                "qty": 159,
+                "price": 20100.0,
+                "timestamp": _ts(9, 10),
+            },
             # 손절 매도.
-            {"symbol": "093370", "side": "sell", "qty": 159, "price": 19660.0, "timestamp": _ts(9, 11)},
+            {
+                "symbol": "093370",
+                "side": "sell",
+                "qty": 159,
+                "price": 19660.0,
+                "timestamp": _ts(9, 11),
+            },
             # 트레일링 매도.
-            {"symbol": "005930", "side": "sell", "qty": 10, "price": 336500.0, "timestamp": _ts(9, 13)},
+            {
+                "symbol": "005930",
+                "side": "sell",
+                "qty": 10,
+                "price": 336500.0,
+                "timestamp": _ts(9, 13),
+            },
             # 부분 익절 매도.
-            {"symbol": "006800", "side": "sell", "qty": 33, "price": 52600.0, "timestamp": _ts(9, 18)},
+            {
+                "symbol": "006800",
+                "side": "sell",
+                "qty": 33,
+                "price": 52600.0,
+                "timestamp": _ts(9, 18),
+            },
             # 트레일링 매도.
-            {"symbol": "006800", "side": "sell", "qty": 33, "price": 52800.0, "timestamp": _ts(9, 26)},
+            {
+                "symbol": "006800",
+                "side": "sell",
+                "qty": 33,
+                "price": 52800.0,
+                "timestamp": _ts(9, 26),
+            },
         ],
         stop_losses=[
-            {"symbol": "093370", "price": 19660.0, "avg_price": 20197.0, "drop_pct": 2.659,
-             "timestamp": _ts(9, 11)},
+            {
+                "symbol": "093370",
+                "price": 19660.0,
+                "avg_price": 20197.0,
+                "drop_pct": 2.659,
+                "timestamp": _ts(9, 11),
+            },
         ],
         partial_takes=[
-            {"symbol": "006800", "price": 52600.0, "avg_price": 51404.0, "gain_pct": 2.327,
-             "qty_to_sell": 33, "qty_remaining": 33, "timestamp": _ts(9, 18)},
+            {
+                "symbol": "006800",
+                "price": 52600.0,
+                "avg_price": 51404.0,
+                "gain_pct": 2.327,
+                "qty_to_sell": 33,
+                "qty_remaining": 33,
+                "timestamp": _ts(9, 18),
+            },
         ],
         trailings=[
-            {"symbol": "005930", "price": 336500.0, "highest": 340000.0, "drop_pct": 1.029,
-             "timestamp": _ts(9, 13)},
-            {"symbol": "006800", "price": 52800.0, "highest": 53300.0, "drop_pct": 0.938,
-             "timestamp": _ts(9, 26)},
+            {
+                "symbol": "005930",
+                "price": 336500.0,
+                "highest": 340000.0,
+                "drop_pct": 1.029,
+                "timestamp": _ts(9, 13),
+            },
+            {
+                "symbol": "006800",
+                "price": 52800.0,
+                "highest": 53300.0,
+                "drop_pct": 0.938,
+                "timestamp": _ts(9, 26),
+            },
         ],
     )
     report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
@@ -333,7 +397,14 @@ def test_timeline_includes_all_sell_stop_liquidation_fills() -> None:
     assert "부분 익절" in by_time["09:18"] and "+2.33%" in by_time["09:18"]
     # 전체 시각순 정렬: 발굴 → 매수 3 → 매도 4.
     assert [ev.kind for ev in timeline] == [
-        "discovery", "buy", "buy", "buy", "stop_loss", "trailing", "partial_take", "trailing",
+        "discovery",
+        "buy",
+        "buy",
+        "buy",
+        "stop_loss",
+        "trailing",
+        "partial_take",
+        "trailing",
     ]
 
 
@@ -342,8 +413,20 @@ def test_timeline_plain_sell_without_guard_event() -> None:
     events = LogEvents(
         symbol_names={"005930": "삼성전자"},
         orders_accepted=[
-            {"symbol": "005930", "side": "buy", "qty": 6, "price": 270000.0, "timestamp": _ts(9, 5)},
-            {"symbol": "005930", "side": "sell", "qty": 6, "price": 280000.0, "timestamp": _ts(9, 30)},
+            {
+                "symbol": "005930",
+                "side": "buy",
+                "qty": 6,
+                "price": 270000.0,
+                "timestamp": _ts(9, 5),
+            },
+            {
+                "symbol": "005930",
+                "side": "sell",
+                "qty": 6,
+                "price": 280000.0,
+                "timestamp": _ts(9, 30),
+            },
         ],
     )
     report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
