@@ -420,6 +420,41 @@ def format_last_signal(state: RunnerStateSnapshot) -> str:
     return "\n".join(lines)
 
 
+# 시장 국면(regime) → 초보 친화 한국어. daytrade.regime 로그값(scanner.MarketRegime).
+_REGIME_KO = {
+    "trend_up": "상승 추세",
+    "trend_down": "하락 추세",
+    "range": "박스권",
+    "high_vol": "고변동성",
+}
+
+
+def _daily_market_context_section(payload: dict) -> list[str]:
+    """그날 시장 국면 + 시총200 시장폭(breadth) 한 줄. 데이터 없으면 빈 리스트.
+
+    초보 친화: 'high_vol' 같은 코드 대신 한국어 라벨, 등락률은 %로.
+    """
+    regime = payload.get("regime")
+    adv = payload.get("breadth_advancing_pct")
+    mean = payload.get("breadth_mean_change_pct")
+    passed = payload.get("breadth_passed")
+    parts: list[str] = []
+    if regime:
+        parts.append(f"국면 {_REGIME_KO.get(str(regime), str(regime))}")
+    if adv is not None:
+        breadth = f"시장폭 상승 {float(adv) * 100:.0f}%"
+        if mean is not None:
+            breadth += f"·평균 {_signed_pct(mean)}"
+        if passed is True:
+            breadth += " (통과)"
+        elif passed is False:
+            breadth += " (차단)"
+        parts.append(breadth)
+    if not parts:
+        return []
+    return ["", "🧭 " + " · ".join(parts)]
+
+
 def _daily_discovery_section(payload: dict) -> list[str]:
     """발굴(채택·차단) 섹션. 없으면 빈 리스트."""
     chosen = payload.get("discovery_chosen") or []
@@ -547,6 +582,7 @@ def format_daily_report(payload: dict) -> str:
     buys = payload.get("buys") or []
     liqs = payload.get("liquidations") or []
 
+    lines += _daily_market_context_section(payload)
     lines += _daily_discovery_section(payload)
     lines += _daily_gates_section(payload)
     lines += _daily_timeline_section(payload)
@@ -558,6 +594,11 @@ def format_daily_report(payload: dict) -> str:
         lines.extend(closing_lines)
 
     lines += _daily_summary_section(payload, buys, liqs)
+
+    # 매수 0건인 날은 "왜 안 샀나" 를 한 줄로 — 사용자가 빈 날을 바로 이해하게.
+    no_trade = str(payload.get("no_trade_reason") or "")
+    if no_trade and not buys:
+        lines.append(f"🚫 {no_trade}")
 
     note = str(payload.get("note_ko") or "")
     if note:

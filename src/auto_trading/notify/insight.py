@@ -124,6 +124,14 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
     gate_pass: dict[str, int] = {}
     gate_total: dict[str, int] = {}
     dry_run_days = 0
+    # 데이터 기반 전략 수립용 신규 집계 — 승률·보유시간·사유별 성과·국면·미진입·반사실.
+    regime_days: dict[str, int] = {}
+    breadth_adv: list[float] = []
+    breadth_passed_days = 0
+    breadth_blocked_days = 0
+    no_trade_reasons: dict[str, int] = {}
+    all_round_trips: list[Any] = []
+    blocked_day_changes: list[float] = []
 
     for r in items:
         for sym in r.discovery_chosen:
@@ -141,6 +149,20 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
             gate_total[g.market] = gate_total.get(g.market, 0) + 1
             if g.above:
                 gate_pass[g.market] = gate_pass.get(g.market, 0) + 1
+        if r.regime:
+            regime_days[r.regime] = regime_days.get(r.regime, 0) + 1
+        if r.breadth_advancing_pct is not None:
+            breadth_adv.append(r.breadth_advancing_pct)
+        if r.breadth_passed is True:
+            breadth_passed_days += 1
+        elif r.breadth_passed is False:
+            breadth_blocked_days += 1
+        if r.no_trade_reason and not r.buys:
+            no_trade_reasons[r.no_trade_reason] = no_trade_reasons.get(r.no_trade_reason, 0) + 1
+        all_round_trips.extend(r.round_trips)
+        for bo in r.blocked_outcomes:
+            if bo.day_change_pct is not None:
+                blocked_day_changes.append(bo.day_change_pct)
 
     return {
         "days": days,
@@ -170,6 +192,49 @@ def _summarize_reports(reports: Iterable[DailyReport]) -> dict[str, Any]:
             "max": max(realized_pnls) if realized_pnls else None,
         },
         "daily_notes": [{"date": r.date, "note": r.note_ko} for r in items],
+        # 데이터 기반 전략 수립 — 의사결정 맥락 집계(LLM 이 패턴을 보게).
+        "regime_days": regime_days,
+        "breadth": {
+            "avg_advancing_pct": (
+                round(sum(breadth_adv) / len(breadth_adv), 3) if breadth_adv else None
+            ),
+            "passed_days": breadth_passed_days,
+            "blocked_days": breadth_blocked_days,
+        },
+        "no_trade_days": {
+            "count": sum(no_trade_reasons.values()),
+            "reasons": no_trade_reasons,
+        },
+        "round_trips": _summarize_round_trips(all_round_trips),
+        # 차단 종목 반사실 — 차단된 종목들의 그날 평균 등락률(게이트 기회비용 신호).
+        "blocked_outcome_avg_day_change_pct": (
+            round(sum(blocked_day_changes) / len(blocked_day_changes), 2)
+            if blocked_day_changes
+            else None
+        ),
+    }
+
+
+def _summarize_round_trips(round_trips: list[Any]) -> dict[str, Any]:
+    """왕복 레코드 → 승률·평균 보유시간·청산사유별 성과. 표본 없으면 count=0."""
+    priced = [rt for rt in round_trips if rt.pnl_pct is not None]
+    holding = [rt.holding_minutes for rt in round_trips if rt.holding_minutes is not None]
+    by_reason: dict[str, list[float]] = {}
+    for rt in priced:
+        by_reason.setdefault(rt.exit_reason or "unknown", []).append(rt.pnl_pct)
+    wins = sum(1 for rt in priced if rt.pnl_pct > 0)
+    return {
+        "count": len(round_trips),
+        "priced_samples": len(priced),
+        "win_rate": round(wins / len(priced), 3) if priced else None,
+        "avg_holding_minutes": round(sum(holding) / len(holding), 1) if holding else None,
+        "by_exit_reason": {
+            reason: {
+                "n": len(pcts),
+                "avg_pnl_pct": round(sum(pcts) / len(pcts), 2),
+            }
+            for reason, pcts in sorted(by_reason.items())
+        },
     }
 
 

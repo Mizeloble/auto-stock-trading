@@ -8,6 +8,12 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [x] **데이터 기반 전략 수립용 일일 로그 필드 확충** (2026-06-15, 3 PR 분할)
+  - **무엇**: 일일 리포트가 "결과"만 남기고 "왜 그 결정을 했나=의사결정 맥락"이 빠져 매번 로그 재파싱이 필요하던 문제 해소. **Phase 1**([#143](https://github.com/Mizeloble/auto-stock-trading/pull/143)) 진입 사유·시각·매도 사유(guard 매칭)·왕복 손익(`round_trips`: 보유시간·손익·청산사유)·`regime`·`breadth_*`. **Phase 2**([#144](https://github.com/Mizeloble/auto-stock-trading/pull/144)) 신규 `reports/snapshot_reader.py` 로 topcap 스냅샷 사후 조인 → 진입 등락률·순위·MFE/MAE·차단 기회비용(`blocked_outcomes`). **Phase 3**(이 브랜치) `no_trade_reason`(미진입 사유) + 텔레그램 국면/시장폭 라인·미진입 사유 노출 + 주간 인사이트 LLM 입력에 승률·사유별 성과·국면·반사실 집계.
+  - **왜**: `data/reports/*.json` 만 모으면 승률·사유별 성과·보유시간·게이트 기회비용을 바로 분석. 그간 손으로 하던 ledger 반사실 검증을 리포트에 자동 박제. 실데이터: 2026-06-09 삼성전자가 게이트 차단된 날 실제 +8.97%(기회비용 자동 기록).
+  - **어떻게 확인**: `uv run auto-trade report --date 2026-05-26 --out /tmp/x` → round_trips·청산사유 분포 확인. `uv run pytest && uv run ruff check && uv run mypy src`.
+  - **한계/후속**: topcap 스냅샷은 시총 상위만 담아 거래량 발굴 소형주는 진입 피처·MFE/MAE 가 None(대형주만 커버). 대시보드 daily.html 시각화는 데이터(asdict 자동 노출)만 되고 UI 미반영 — 선택 후속. 전체 커버는 `monitor/price_snapshot.py` 레코더가 발굴 종목까지 담아야 함.
+
 - [x] **일일 리포트 timeline 매도 누락 수정** (2026-06-15)
   - **무엇**: `data/reports/daily-*.json` 의 `timeline[]` 이 매수와 partial_take 가드만 잡고 손절·트레일링·일반 매도·청산 체결을 통째로 빠뜨려 매도 흐름이 착시되던 버그. 파서(`log_parser.py`)에 `position_guard.stop_loss`/`trailing` 추가, 빌더(`daily.py`)가 매도/청산 체결(orders side=sell · liquidations)을 전부 시각순으로 넣고 가드 이벤트로 사유(손절/부분익절/트레일링)를 라벨링. 텔레그램 흐름 섹션에 새 kind 이모지 + 손절 truncate 보존.
   - **어떻게 확인**: 2026-06-15 실로그 재파싱 시 09:11 손절·09:13 트레일링·09:18 부분익절·09:26 트레일링 4건 모두 timeline 에 표시. `uv run pytest`(신규 회귀 5종)·`uv run mypy src` 통과.

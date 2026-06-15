@@ -219,6 +219,8 @@ class DailyReport:
     round_trips: list[RoundTrip] = field(default_factory=list)
     # 차단 종목의 그날 움직임 — 게이트 기회비용(반사실) 분석. 스냅샷 없으면 빈 리스트.
     blocked_outcomes: list[BlockedOutcome] = field(default_factory=list)
+    # 매수 0건인 날의 사유(초보 친화 한국어 1줄). 매수가 있으면 None.
+    no_trade_reason: str | None = None
 
 
 # ---- 빌더 ---------------------------------------------------------------
@@ -267,6 +269,9 @@ def build_daily_report(
     buys = _enrich_buys(buys, snaps)
     round_trips = _enrich_round_trips(round_trips, snaps)
     blocked_outcomes = _build_blocked_outcomes(discovery_blocked, names, snaps)
+    no_trade_reason = _derive_no_trade_reason(
+        events, buys, discovery_chosen, discovery_blocked, breadth_passed
+    )
     closing_cash, closing_equity, closing_total_pnl, closing_holdings = _extract_closing(snapshot)
     # snapshot.holdings 의 name 도 흡수 — discovery 에 없던 종목(swing 등) 보강.
     if snapshot is not None and snapshot.snapshot is not None:
@@ -366,7 +371,36 @@ def build_daily_report(
         breadth_passed=breadth_passed,
         round_trips=round_trips,
         blocked_outcomes=blocked_outcomes,
+        no_trade_reason=no_trade_reason,
     )
+
+
+def _derive_no_trade_reason(
+    events: LogEvents,
+    buys: list[TradeRecord],
+    discovery_chosen: list[str],
+    discovery_blocked: list[tuple[str, str]],
+    breadth_passed: bool | None,
+) -> str | None:
+    """매수 0건인 날의 사유를 초보 친화 한 줄로 분류. 매수가 있으면 None.
+
+    "2주 진입 0" 같은 사건을 리포트만 보고 바로 진단할 수 있게 한다. 신규 데이터
+    없이 기존 events 파생. 우선순위: breadth 차단 → 전 후보 게이트 차단 → 발굴 없음
+    → 일일 손실 한도 중단 → 발굴됐으나 체결 0.
+    """
+    if buys:
+        return None
+    if breadth_passed is False:
+        return "시장 폭 게이트 차단 — 상승 종목이 부족해 오늘은 진입하지 않았어요."
+    if not discovery_chosen and discovery_blocked:
+        return "발굴 후보가 모두 지수 게이트에 막혀 진입하지 않았어요."
+    if events.discovery is None and events.rank is None:
+        return "발굴 기록이 없어요 — 거래일이 아니거나 로그가 없는 날이에요."
+    if events.kill_switches:
+        return "일일 손실 한도에 도달해 매매를 중단했어요."
+    if discovery_chosen:
+        return "종목은 발굴됐지만 매수 신호가 없거나 진입이 막혀 체결 0건이에요."
+    return "오늘은 매수가 없었어요."
 
 
 def _enrich_buys(buys: list[TradeRecord], snaps: TopcapSnapshots) -> list[TradeRecord]:
@@ -1316,6 +1350,7 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
         breadth_passed=payload.get("breadth_passed"),
         round_trips=round_trips,
         blocked_outcomes=blocked_outcomes,
+        no_trade_reason=payload.get("no_trade_reason"),
     )
 
 

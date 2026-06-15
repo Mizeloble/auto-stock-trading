@@ -52,6 +52,38 @@ def test_format_includes_date_mode_and_summary_lines() -> None:
     assert "+10.00%" in msg
 
 
+def test_format_shows_market_context_regime_and_breadth() -> None:
+    """국면·시장폭이 초보 친화 한국어로 노출된다."""
+    msg = format_daily_report(
+        _payload(
+            regime="high_vol",
+            breadth_advancing_pct=0.788,
+            breadth_mean_change_pct=2.62,
+            breadth_passed=True,
+        )
+    )
+    assert "🧭" in msg
+    assert "고변동성" in msg  # high_vol → 한국어
+    assert "high_vol" not in msg  # 코드값은 노출 안 함
+    assert "시장폭 상승 79%" in msg
+    assert "통과" in msg
+
+
+def test_format_shows_no_trade_reason_when_no_buys() -> None:
+    """매수 0건이면 미진입 사유가 한 줄로 노출된다."""
+    msg = format_daily_report(
+        _payload(
+            buys=[],
+            liquidations=[],
+            realized_pnl=None,
+            note_ko="거래 없음.",
+            no_trade_reason="시장 폭 게이트 차단 — 상승 종목이 부족해 오늘은 진입하지 않았어요.",
+        )
+    )
+    assert "🚫" in msg
+    assert "상승 종목이 부족" in msg
+
+
 def test_format_minimal_no_buys_no_liqs() -> None:
     msg = format_daily_report(
         _payload(
