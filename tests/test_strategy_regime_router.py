@@ -18,10 +18,7 @@ def _make_profiles(root: Path, names: list[str]) -> None:
 
 
 def test_routes_each_regime_to_mapped_profile(tmp_path: Path) -> None:
-    _make_profiles(
-        tmp_path,
-        ["daytrade-trend", "daytrade-defensive", "daytrade-range", "daytrade-crash"],
-    )
+    _make_profiles(tmp_path, list(REGIME_PROFILE_MAP.values()))
     for regime, expected_name in REGIME_PROFILE_MAP.items():
         p = select_profile_for_regime(regime, profiles_root=tmp_path)
         assert p is not None

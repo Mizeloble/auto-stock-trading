@@ -13,11 +13,15 @@
 방식:
 1. 1회 라이브 `top_volume(top_n≈40)` 로 바스켓 고정 (현행 발굴이 보는 종목 유형).
 2. 각 종목 ~3년 일봉 → {날짜: {종목: (시가, 종가, 거래량)}} 패널.
-3. 각 거래일 D 마다 4가지 선별로 같은 K개씩 골라 당일 (close-open)/open 평균 비교:
+3. 각 거래일 D 마다 6가지 선별로 같은 K개씩 골라 당일 (close-open)/open 평균 비교:
    - baseline      : D 거래량(주식 수) 상위 K — 현행 근사
    - value         : D 거래대금(거래량x시가) 상위 K
    - value_filtered: 시가 ≥ MIN_PRICE 인 종목 중 거래대금 상위 K
    - volume_filtered: 시가 ≥ MIN_PRICE 인 종목 중 거래량 상위 K (필터 단독 효과 분리)
+   - relvol        : 상대거래량(전일 거래량 / 직전 20일 평균) 상위 K — "평소 대비 급증"
+   - momentum      : 직전 5일 종가 수익률 상위 K — "최근 오른 종목"
+   ※ relvol·momentum 은 D 이전 데이터만 쓰는 후행 지표라 same_day·prev_day 양 모드에서
+     동일하게(룩어헤드 0) 계산된다. 사용자 가설("매번 삼성전자")의 대안 축 검증용.
 4. 페어드 차이(변형-baseline) + 이동블록 부트스트랩 CI/p → 표 + JSON 저장.
 5. `--self-check`: 네트워크 없이 합성 데이터 2종(저가주가 실제로 나쁜 세계 /
    무관한 세계)으로 스크립트 자체를 검증.
@@ -53,6 +57,8 @@ MIN_PRICE = 2_000.0  # 최소가격 필터 (동전주 컷)
 MAX_PAGES = 3  # 일봉 페이지 (페이지당 ~600봉 — 3년 충분)
 BOOT_N = 3_000
 BOOT_BLOCK = 10  # 이동블록 길이 (일 수익률 자기상관 보존)
+AVG_VOL_WINDOW = 20  # 상대거래량 분모 — 직전 N일 평균 거래량
+MOM_WINDOW = 5  # 모멘텀 룩백 — 직전 N일 종가 수익률
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,11 @@ class DayRow:
     # 전일(D-1) 활동량 — 룩어헤드 없는 랭킹 모드용. 첫 봉은 None.
     prev_volume: int | None = None
     prev_value: float | None = None
+    # 후행 지표 (D 이전 데이터만 사용 → 양 모드 공통, 룩어헤드 0). 워밍업 전엔 None.
+    # avg_vol: D-1 까지 직전 AVG_VOL_WINDOW 일 평균 거래량 (상대거래량 분모).
+    # mom: 직전 MOM_WINDOW 일 종가 수익률(D-1 종가 / (MOM_WINDOW+1)일 전 종가 - 1).
+    avg_vol: float | None = None
+    mom: float | None = None
 
     @property
     def oc_return(self) -> float:
@@ -72,6 +83,13 @@ class DayRow:
     def value(self) -> float:
         """당일 거래대금 프록시 — 거래량 x 시가 (시가는 선별 시점에 알 수 있는 가격)."""
         return self.volume * self.open
+
+    @property
+    def relvol(self) -> float | None:
+        """상대거래량 — 전일 거래량 / 직전 평균 거래량. '평소 대비 얼마나 들썩였나'."""
+        if self.prev_volume is None or not self.avg_vol:
+            return None
+        return self.prev_volume / self.avg_vol
 
 
 Panel = dict[date, dict[str, DayRow]]
@@ -88,17 +106,33 @@ def build_panel(bars_by_symbol: dict[str, list[Bar]], *, cutoff: date) -> Panel:
     panel: Panel = {}
     for symbol, bars in bars_by_symbol.items():
         prev: Bar | None = None
+        recent_vol: list[int] = []  # D 이전 거래량 (avg_vol 분모)
+        recent_close: list[float] = []  # D 이전 종가 (mom)
         for bar in sorted(bars, key=lambda b: b.ts):
             d = bar.ts.date()
             if d >= cutoff and bar.open > 0:
+                avg_vol = (
+                    statistics.fmean(recent_vol[-AVG_VOL_WINDOW:])
+                    if len(recent_vol) >= AVG_VOL_WINDOW
+                    else None
+                )
+                mom = (
+                    recent_close[-1] / recent_close[-(MOM_WINDOW + 1)] - 1.0
+                    if len(recent_close) >= MOM_WINDOW + 1 and recent_close[-(MOM_WINDOW + 1)] > 0
+                    else None
+                )
                 panel.setdefault(d, {})[symbol] = DayRow(
                     open=bar.open,
                     close=bar.close,
                     volume=bar.volume,
                     prev_volume=prev.volume if prev else None,
                     prev_value=prev.volume * prev.close if prev else None,
+                    avg_vol=avg_vol,
+                    mom=mom,
                 )
             prev = bar
+            recent_vol.append(bar.volume)
+            recent_close.append(bar.close)
     return panel
 
 
@@ -126,16 +160,31 @@ def select_returns(rows: dict[str, DayRow], *, mode: str) -> dict[str, float | N
     eligible = [r for r in all_rows if r.open >= MIN_PRICE]
     by_value_f = sorted(eligible, key=val_key, reverse=True)
     by_volume_f = sorted(eligible, key=vol_key, reverse=True)
+    # 상대거래량·모멘텀 — 후행 지표라 mode 무관(D 이전 데이터만). 워밍업 안 된 종목 제외.
+    rv_rows = [r for r in all_rows if r.relvol is not None]
+    by_relvol = sorted(rv_rows, key=lambda r: r.relvol, reverse=True)  # type: ignore[arg-type,return-value]
+    mom_rows = [r for r in all_rows if r.mom is not None]
+    by_mom = sorted(mom_rows, key=lambda r: r.mom, reverse=True)  # type: ignore[arg-type,return-value]
     return {
         "baseline": _pick_mean(by_volume[:PICK_K]),
         "value": _pick_mean(by_value[:PICK_K]),
         "value_filtered": _pick_mean(by_value_f[:PICK_K]),
         "volume_filtered": _pick_mean(by_volume_f[:PICK_K]),
+        "relvol": _pick_mean(by_relvol[:PICK_K]),
+        "momentum": _pick_mean(by_mom[:PICK_K]),
         "pool": _pick_mean(all_rows),
     }
 
 
-VARIANTS = ("baseline", "value", "value_filtered", "volume_filtered", "pool")
+VARIANTS = (
+    "baseline",
+    "value",
+    "value_filtered",
+    "volume_filtered",
+    "relvol",
+    "momentum",
+    "pool",
+)
 
 
 def evaluate(panel: Panel, *, mode: str = "same_day") -> dict[str, object]:
@@ -232,6 +281,8 @@ def _synthetic_panel(*, low_price_is_bad: bool, seed: int = 7) -> Panel:
     panel: Panel = {}
     d = date(2025, 1, 1)
     prev_act: dict[str, tuple[int, float]] = {}  # symbol → (어제 거래량, 어제 종가)
+    hist_vol: dict[str, list[int]] = {s: [] for s in symbols}  # D 이전 거래량
+    hist_close: dict[str, list[float]] = {s: [] for s in symbols}  # D 이전 종가
     for _ in range(300):
         d += timedelta(days=1)
         rows: dict[str, DayRow] = {}
@@ -244,14 +295,25 @@ def _synthetic_panel(*, low_price_is_bad: bool, seed: int = 7) -> Panel:
             volume = int(value / px)
             close = px * (1 + ret)
             pv = prev_act.get(s)
+            hv, hc = hist_vol[s], hist_close[s]
+            avg_vol = statistics.fmean(hv[-AVG_VOL_WINDOW:]) if len(hv) >= AVG_VOL_WINDOW else None
+            mom = (
+                hc[-1] / hc[-(MOM_WINDOW + 1)] - 1.0
+                if len(hc) >= MOM_WINDOW + 1 and hc[-(MOM_WINDOW + 1)] > 0
+                else None
+            )
             rows[s] = DayRow(
                 open=px,
                 close=close,
                 volume=volume,
                 prev_volume=pv[0] if pv else None,
                 prev_value=pv[0] * pv[1] if pv else None,
+                avg_vol=avg_vol,
+                mom=mom,
             )
             prev_act[s] = (volume, close)
+            hv.append(volume)
+            hc.append(close)
         panel[d] = rows
     return panel
 
@@ -306,6 +368,8 @@ def _print_report(summary: dict[str, object], cutoff: date, *, mode: str) -> Non
         "value": "거래대금",
         "value_filtered": "거래대금+필터",
         "volume_filtered": "거래량+필터",
+        "relvol": "상대거래량",
+        "momentum": "모멘텀5일",
         "pool": "바스켓 평균",
     }
     for v in VARIANTS:
@@ -365,7 +429,8 @@ def main() -> None:
         "caveats": (
             "open->close approx, no costs; same_day mode has mild lookahead favoring "
             "share-volume ranking, prev_day mode has none — trust only same-direction "
-            "results; fixed survivorship basket, mock data; directional only"
+            "results; relvol/momentum are backward-looking (lookahead-free in both modes); "
+            "fixed survivorship basket, mock data; directional only"
         ),
     }
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
