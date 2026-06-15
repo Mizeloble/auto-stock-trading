@@ -777,9 +777,7 @@ def _aggregate_realized(
     queues: dict[str, list[list[Any]]] = {}
     for b in buys:
         if b.quantity > 0:
-            queues.setdefault(b.symbol, []).append(
-                [float(b.quantity), b.price, b.time_kst, b.name]
-            )
+            queues.setdefault(b.symbol, []).append([float(b.quantity), b.price, b.time_kst, b.name])
 
     total_pnl = 0.0
     total_cost = 0.0
@@ -1217,7 +1215,7 @@ def _as_str(raw: object) -> str | None:
 
 
 def _minutes_between(start_hhmm: str | None, end_hhmm: str | None) -> int | None:
-    """"HH:MM" 두 시각의 분 차이(보유시간). 같은 날 가정 — 음수면 None.
+    """ "HH:MM" 두 시각의 분 차이(보유시간). 같은 날 가정 — 음수면 None.
 
     체결 시각은 모두 같은 거래일이라 단순 분 차이로 충분. 파싱 실패·결손 시 None.
     """
@@ -1226,7 +1224,7 @@ def _minutes_between(start_hhmm: str | None, end_hhmm: str | None) -> int | None
     try:
         sh, sm = (int(x) for x in start_hhmm.split(":"))
         eh, em = (int(x) for x in end_hhmm.split(":"))
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None
     diff = (eh * 60 + em) - (sh * 60 + sm)
     return diff if diff >= 0 else None
