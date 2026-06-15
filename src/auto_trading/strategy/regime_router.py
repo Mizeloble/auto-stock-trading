@@ -10,7 +10,8 @@
 - TREND_UP   → daytrade-trend.yaml
 - TREND_DOWN → daytrade-defensive.yaml (보수적 — 손절 좁게)
 - RANGE      → daytrade-range.yaml (박스권 — 짧은 익절·손절)
-- HIGH_VOL   → daytrade-crash.yaml (고변동성 — 봇 정지 권장)
+- HIGH_VOL   → daytrade-highvol.yaml (고변동성 — 소액 능동매매. 완전정지는
+  daytrade-crash.yaml 로 수동 전환)
 
 설계 결정:
 - 매핑은 정적 dict — 사용자가 새 프로파일 추가 시 ``REGIME_PROFILE_MAP`` 만 수정.
@@ -37,7 +38,10 @@ REGIME_PROFILE_MAP: dict[MarketRegime, str] = {
     MarketRegime.TREND_UP: "daytrade-trend",
     MarketRegime.TREND_DOWN: "daytrade-defensive",
     MarketRegime.RANGE: "daytrade-range",
-    MarketRegime.HIGH_VOL: "daytrade-crash",
+    # 고변동성: 전면정지(crash) 대신 소액 능동매매(highvol). breadth·지수 게이트가
+    # 일별 필터, highvol 프로파일이 사이즈·손절을 변동성장에 맞춰 줄인다. 완전정지가
+    # 필요하면 daytrade-crash.yaml 로 수동 전환 (킬스위치로 보존).
+    MarketRegime.HIGH_VOL: "daytrade-highvol",
 }
 
 

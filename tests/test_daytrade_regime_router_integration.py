@@ -71,7 +71,7 @@ def test_routes_to_defensive_when_classifier_returns_trend_down(tmp_path: Path) 
     current = tmp_path / "daytrade-current.yaml"
     _write_profile(current, name="current")
     # 매핑 파일들 미리 생성 (내용은 비어있어도 select_profile_for_regime 가 존재만 체크).
-    for n in ("daytrade-trend", "daytrade-defensive", "daytrade-range", "daytrade-crash"):
+    for n in ("daytrade-trend", "daytrade-defensive", "daytrade-range", "daytrade-highvol"):
         (tmp_path / f"{n}.yaml").write_text("risk: {}\n", encoding="utf-8")
 
     bars = _make_bars(daily_pct=-0.01)  # 매일 -1% → TREND_DOWN 충족
@@ -89,7 +89,7 @@ def test_routes_to_defensive_when_classifier_returns_trend_down(tmp_path: Path) 
 def test_routes_to_trend_when_classifier_returns_trend_up(tmp_path: Path) -> None:
     current = tmp_path / "daytrade-current.yaml"
     _write_profile(current, name="current")
-    for n in ("daytrade-trend", "daytrade-defensive", "daytrade-range", "daytrade-crash"):
+    for n in ("daytrade-trend", "daytrade-defensive", "daytrade-range", "daytrade-highvol"):
         (tmp_path / f"{n}.yaml").write_text("risk: {}\n", encoding="utf-8")
 
     bars = _make_bars(daily_pct=0.01)  # 매일 +1% → TREND_UP
@@ -133,9 +133,15 @@ def test_fallback_when_mapped_profile_missing(tmp_path: Path) -> None:
 
 
 def test_real_yaml_profiles_load_without_validation_error() -> None:
-    """저장소의 daytrade-{trend,defensive,range,crash}.yaml 4개가 schema 통과 확인."""
+    """저장소의 daytrade-{trend,defensive,range,highvol,crash}.yaml 가 schema 통과 확인."""
     root = Path(__file__).resolve().parent.parent / "strategies" / "profiles"
-    for name in ("daytrade-trend", "daytrade-defensive", "daytrade-range", "daytrade-crash"):
+    for name in (
+        "daytrade-trend",
+        "daytrade-defensive",
+        "daytrade-range",
+        "daytrade-highvol",
+        "daytrade-crash",
+    ):
         path = root / f"{name}.yaml"
         assert path.exists(), f"{path} 미존재 — 신규 프로파일 누락"
         profile = DaytradeProfile.load_yaml(path)

@@ -1,0 +1,61 @@
+# day-trade HIGH_VOL 프로파일 — 고변동성장 "소액 능동매매" (구 daytrade-crash 의 전면정지 대체).
+# 베이스: daytrade-current.yaml.
+#
+# 왜 바뀌었나 (2026-06-14):
+#   기존엔 HIGH_VOL → daytrade-crash.yaml(1원 사이징 = 봇 완전정지) 로 라우팅됐다.
+#   문제: ATR/종가 ≥ 3% 면 무조건 HIGH_VOL 인데, 최근 시장이 2주 내내 그 위라
+#   2주간 단 한 번도 진입을 못 했다. 결정적으로 05-29·06-12 처럼 breadth 게이트가
+#   "오늘은 강세일"(상승종목 63%·76%, 평균 +1.2%·+3.1%) 이라고 통과시킨 좋은 날까지
+#   crash 스위치가 주문을 0원으로 만들어 놓쳤다. breadth 게이트는 이미 나쁜 날을
+#   정확히 거른다고 실측 검증된 장치 → crash 전면정지는 나쁜 날엔 중복, 좋은 날엔 손해.
+#
+# 그래서: HIGH_VOL 에서도 "끄지 말고 작게" 매매한다. breadth·지수 게이트가 일별 필터,
+#   이 프로파일은 변동성장에 맞춰 사이즈를 줄이고 손절을 좁힌다.
+#   조정 (current 대비):
+#     top_n 3 유지 (concentration_study: K↑ → 변동성 std 3.9%→1.8%, 한 종목 쏠림 완화)
+#     stop_loss_pct 0.018→0.010 (변동성장 손절 좁게 — crash 값 계승)
+#     trailing_stop_pct 0.009→0.008
+#     daily_notional_limit 20M→10M (일 매수대금 절반)
+#     max_position_weight 0.10→0.07 / max_portfolio_exposure 0.60→0.40 (포지션 축소)
+#     daily_realized_loss_limit 150k→100k (churn 브레이크 더 빨리)
+#     momentum_threshold_pct 0.3→0.35 (변동성장에서 진입 문턱 살짝 높여 헛매수 억제)
+#
+# ⚠️ 0 = "무제한(비활성)". max_order_value=0 은 종목당 비중(max_position_weight)·
+#   일매수한도(daily_notional_limit)가 대신 사이징을 통제하므로 의도된 값이다.
+# 진짜 패닉장 완전정지가 필요하면 daytrade-crash.yaml 로 수동 전환 (킬스위치로 보존).
+name: daytrade highvol
+strategy: index_momentum_daytrade
+top_n: 3
+exclude_etf: true
+liquidate: '15:15'
+discover_delay_sec: 360
+params:
+  cooldown_min: 45
+  momentum_lookback_min: 15
+  momentum_threshold_pct: 0.35
+risk:
+  stop_loss_pct: 0.010
+  trailing_stop_pct: 0.008
+  partial_take_pct: 0.016
+  partial_take_qty_ratio: 0.5
+  max_order_value: 0.0
+  daily_notional_limit: 10000000.0
+  max_position_weight: 0.07
+  max_portfolio_exposure: 0.4
+  daily_loss_kill: true
+  max_consecutive_losses: 3
+  consecutive_loss_pause_sec: 86400
+  max_position_correlation: 0.7
+  max_buys_per_symbol: 2
+  daily_realized_loss_limit: 100000.0
+breadth_gate:
+  enabled: true
+  min_advancing_pct: 0.5
+  min_mean_change_pct: 0.0
+  snapshot_dir: data/snapshots
+avoid_symbols:
+  - '356680'
+notes: |
+  HIGH_VOL 자동 라우팅 대상. 구 daytrade-crash(전면정지) 대체 — 변동성장에서도
+  breadth·지수 게이트 통과 시 소액으로 진입. 사이즈 축소 + 좁은 손절로 변동성 흡수.
+  완전정지는 daytrade-crash.yaml 로 수동 전환.
