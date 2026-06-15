@@ -203,7 +203,10 @@ def _build_trade_lines(
 _TIMELINE_KIND_PREFIX_KO = {
     "discovery": "🔎",
     "buy": "💰",
+    "sell": "💵",
     "partial_take": "💵",
+    "stop_loss": "🛑",  # text 가 이미 🛑 로 시작해 보통 미사용 — 일관성 차원에서 유지.
+    "trailing": "📉",
     "kill_switch": "🛑",
     "liquidate": "🧹",
 }
@@ -211,7 +214,9 @@ _TIMELINE_KIND_PREFIX_KO = {
 
 # 29단계 PR27 — truncate 보존 우선순위. 마지막 라운드의 강제청산·손절은 사용자가
 # 일일 리포트로 그날의 결말을 파악하는 핵심 신호라 "외 N건" 안쪽에 묻히지 않게 한다.
-_TIMELINE_PRIORITY_KINDS: frozenset[str] = frozenset({"kill_switch", "liquidate"})
+# 2026-06-15: stop_loss 가 이제 timeline 에 별도 kind 로 들어와 손절이 매도 다발에
+# 밀려 잘리지 않도록 우선순위에 포함.
+_TIMELINE_PRIORITY_KINDS: frozenset[str] = frozenset({"kill_switch", "liquidate", "stop_loss"})
 
 
 def _format_timeline_line(ev: dict) -> str:

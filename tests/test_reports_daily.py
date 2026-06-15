@@ -6,6 +6,8 @@ from datetime import UTC
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from auto_trading.account.balance import AccountSnapshot, Holding
 from auto_trading.notify.state import RunnerStateSnapshot
 from auto_trading.reports.daily import (
@@ -13,6 +15,7 @@ from auto_trading.reports.daily import (
     DailyReport,
     LiquidationRecord,
     MarketGateInfo,
+    RoundTrip,
     TimelineEvent,
     TradeRecord,
     build_daily_report,
@@ -264,6 +267,107 @@ def test_timeline_collects_and_sorts_event_types() -> None:
     assert "일일 손실 한도" in liq_text and "005930 삼성전자" in liq_text
 
 
+def test_timeline_includes_all_sell_stop_liquidation_fills() -> None:
+    """2026-06-15 회귀: timeline 이 partial_take 가드만 잡고 손절·트레일링·일반 매도·
+    청산 체결을 통째로 빠뜨려 매도 흐름이 착시됐다.
+
+    실제 그날 흐름 재현: 매수 3건 후 손절(093370)·트레일링(005930)·부분익절(006800)·
+    트레일링(006800) 4건의 매도가 orders_accepted(side=sell) 로 체결됐고, 각각
+    position_guard 가드 이벤트가 (종목, 체결가) 로 매칭된다. 4건 모두 시각순으로
+    timeline 에 들어가고, 가드 사유로 라벨링되며, 중복(가드 줄 + 매도 줄) 이 없어야 한다.
+    """
+    events = LogEvents(
+        symbol_names={"093370": "후성", "005930": "삼성전자", "006800": "미래에셋증권"},
+        discovery={
+            "event": "daytrade.discovery",
+            "chosen": ["005930", "006800", "093370"],
+            "blocked": [],
+            "timestamp": _ts(9, 1),
+        },
+        orders_accepted=[
+            {"symbol": "005930", "side": "buy", "qty": 10, "price": 339500.0, "timestamp": _ts(9, 10)},
+            {"symbol": "006800", "side": "buy", "qty": 66, "price": 51500.0, "timestamp": _ts(9, 10)},
+            {"symbol": "093370", "side": "buy", "qty": 159, "price": 20100.0, "timestamp": _ts(9, 10)},
+            # 손절 매도.
+            {"symbol": "093370", "side": "sell", "qty": 159, "price": 19660.0, "timestamp": _ts(9, 11)},
+            # 트레일링 매도.
+            {"symbol": "005930", "side": "sell", "qty": 10, "price": 336500.0, "timestamp": _ts(9, 13)},
+            # 부분 익절 매도.
+            {"symbol": "006800", "side": "sell", "qty": 33, "price": 52600.0, "timestamp": _ts(9, 18)},
+            # 트레일링 매도.
+            {"symbol": "006800", "side": "sell", "qty": 33, "price": 52800.0, "timestamp": _ts(9, 26)},
+        ],
+        stop_losses=[
+            {"symbol": "093370", "price": 19660.0, "avg_price": 20197.0, "drop_pct": 2.659,
+             "timestamp": _ts(9, 11)},
+        ],
+        partial_takes=[
+            {"symbol": "006800", "price": 52600.0, "avg_price": 51404.0, "gain_pct": 2.327,
+             "qty_to_sell": 33, "qty_remaining": 33, "timestamp": _ts(9, 18)},
+        ],
+        trailings=[
+            {"symbol": "005930", "price": 336500.0, "highest": 340000.0, "drop_pct": 1.029,
+             "timestamp": _ts(9, 13)},
+            {"symbol": "006800", "price": 52800.0, "highest": 53300.0, "drop_pct": 0.938,
+             "timestamp": _ts(9, 26)},
+        ],
+    )
+    report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
+    timeline = report.timeline
+
+    # 매도/손절/청산 계열 줄: 정확히 4건 (체결 1건당 1줄, 가드 줄 중복 없음).
+    sell_kinds = {"sell", "stop_loss", "trailing", "partial_take"}
+    sell_rows = [ev for ev in timeline if ev.kind in sell_kinds]
+    assert len(sell_rows) == 4
+    assert [(ev.time_kst, ev.kind) for ev in sell_rows] == [
+        ("09:11", "stop_loss"),
+        ("09:13", "trailing"),
+        ("09:18", "partial_take"),
+        ("09:26", "trailing"),
+    ]
+    # 사유·수량·가격·등락률 라벨링.
+    by_time = {ev.time_kst: ev.text for ev in sell_rows}
+    assert "🛑 손절" in by_time["09:11"] and "159주" in by_time["09:11"]
+    assert "19,660원" in by_time["09:11"] and "-2.66%" in by_time["09:11"]
+    assert "트레일링 청산" in by_time["09:13"] and "336,500원" in by_time["09:13"]
+    assert "부분 익절" in by_time["09:18"] and "+2.33%" in by_time["09:18"]
+    # 전체 시각순 정렬: 발굴 → 매수 3 → 매도 4.
+    assert [ev.kind for ev in timeline] == [
+        "discovery", "buy", "buy", "buy", "stop_loss", "trailing", "partial_take", "trailing",
+    ]
+
+
+def test_timeline_plain_sell_without_guard_event() -> None:
+    """가드 이벤트 없는 매도(시그널·수동 청산)는 '매도' 로 표시된다."""
+    events = LogEvents(
+        symbol_names={"005930": "삼성전자"},
+        orders_accepted=[
+            {"symbol": "005930", "side": "buy", "qty": 6, "price": 270000.0, "timestamp": _ts(9, 5)},
+            {"symbol": "005930", "side": "sell", "qty": 6, "price": 280000.0, "timestamp": _ts(9, 30)},
+        ],
+    )
+    report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
+    sell_rows = [ev for ev in report.timeline if ev.kind == "sell"]
+    assert len(sell_rows) == 1
+    assert sell_rows[0].time_kst == "09:30"
+    assert "매도 005930 삼성전자 6주" in sell_rows[0].text and "280,000원" in sell_rows[0].text
+
+
+def test_timeline_liquidation_fills_included() -> None:
+    """EOD 강제청산 체결(liquidations_accepted)도 '청산 체결' 줄로 들어간다."""
+    events = LogEvents(
+        symbol_names={"005930": "삼성전자"},
+        liquidations_accepted=[
+            {"symbol": "005930", "qty": 6, "sell_price": 280000.0, "timestamp": _ts(15, 20)},
+        ],
+    )
+    report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
+    liq_rows = [ev for ev in report.timeline if ev.kind == "liquidate"]
+    assert len(liq_rows) == 1
+    assert liq_rows[0].time_kst == "15:20"
+    assert "청산 체결 005930 삼성전자 6주" in liq_rows[0].text and "280,000원" in liq_rows[0].text
+
+
 def test_timeline_skips_events_without_timestamp() -> None:
     events = LogEvents(
         discovery={"event": "daytrade.discovery", "chosen": ["A"]},  # timestamp 없음
@@ -388,10 +492,32 @@ def test_save_load_roundtrip_preserves_every_field(tmp_path: Path) -> None:
         liquidations_failed_count=2,
         balance_failure_count=1,
         fatal_count=4,
+        # 2026-06-15 신규 — 동일 footgun 재발 방지.
+        regime="high_vol",
+        breadth_advancing_pct=0.78,
+        breadth_mean_change_pct=2.62,
+        breadth_passed=True,
+        round_trips=[
+            RoundTrip(
+                symbol="A",
+                name="에이전자",
+                quantity=10,
+                buy_price=100.0,
+                sell_price=110.0,
+                buy_time_kst="09:05",
+                sell_time_kst="10:35",
+                holding_minutes=90,
+                pnl=100.0,
+                pnl_pct=10.0,
+                exit_reason="partial_take",
+            )
+        ],
     )
     loaded = load_daily_report(save_daily_report(report, root=tmp_path))
     assert asdict(loaded) == asdict(report)
     assert loaded.turnover_ratio == 0.21
+    assert loaded.regime == "high_vol"
+    assert loaded.round_trips[0].holding_minutes == 90
 
 
 def test_save_creates_directory(tmp_path: Path) -> None:
@@ -411,6 +537,124 @@ def test_save_creates_directory(tmp_path: Path) -> None:
     )
     save_daily_report(report, root=nested)
     assert (nested / "daily-2026-05-05.json").exists()
+
+
+def test_buy_record_carries_reason_and_time_from_log() -> None:
+    """매수 레코드가 Signal.reason(진입 사유)과 체결 시각(KST)을 흡수한다."""
+    events = LogEvents(
+        orders_simulated=[
+            {
+                "symbol": "A",
+                "side": "buy",
+                "qty": 10,
+                "price": 100.0,
+                "reason": "돌파 모멘텀",
+                "timestamp": "2026-06-15T00:05:00Z",  # UTC 00:05 → KST 09:05
+            }
+        ],
+    )
+    report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
+    assert report.buys[0].reason == "돌파 모멘텀"
+    assert report.buys[0].time_kst == "09:05"
+
+
+def test_sell_record_reason_falls_back_to_guard_reason() -> None:
+    """dry-run guard 매도는 guard_reason 키만 들고 있어 그것을 매도 사유로 흡수한다."""
+    events = LogEvents(
+        orders_simulated=[
+            {"symbol": "A", "side": "sell", "qty": 5, "price": 95.0, "guard_reason": "stop_loss"},
+        ],
+    )
+    report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
+    assert report.sells[0].reason == "stop_loss"
+
+
+def test_round_trips_built_with_holding_minutes_and_exit_reason() -> None:
+    """매수→매도 FIFO 매칭으로 왕복 레코드 1건이 손익·보유시간·사유와 함께 생성된다."""
+    events = LogEvents(
+        orders_simulated=[
+            {
+                "symbol": "A",
+                "side": "buy",
+                "qty": 10,
+                "price": 100.0,
+                "timestamp": "2026-06-15T00:05:00Z",  # 09:05 KST
+            },
+            {
+                "symbol": "A",
+                "side": "sell",
+                "qty": 10,
+                "price": 110.0,
+                "guard_reason": "partial_take",
+                "timestamp": "2026-06-15T01:35:00Z",  # 10:35 KST
+            },
+        ],
+    )
+    report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
+    assert len(report.round_trips) == 1
+    rt = report.round_trips[0]
+    assert rt.symbol == "A"
+    assert rt.pnl == 100.0  # (110-100)*10
+    assert rt.pnl_pct == pytest.approx(10.0)
+    assert rt.buy_time_kst == "09:05"
+    assert rt.sell_time_kst == "10:35"
+    assert rt.holding_minutes == 90
+    assert rt.exit_reason == "partial_take"
+    # 합계 손익도 종전대로 채워진다.
+    assert report.realized_pnl == 100.0
+
+
+def test_round_trip_for_eod_liquidation_defaults_exit_reason() -> None:
+    """EOD 청산은 reason 결손 시 exit_reason='eod' 로 폴백한다."""
+    events = LogEvents(
+        orders_simulated=[{"symbol": "A", "side": "buy", "qty": 10, "price": 100.0}],
+        liquidations_simulated=[{"symbol": "A", "qty": 10, "sell_price": 105.0}],
+    )
+    report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
+    assert len(report.round_trips) == 1
+    assert report.round_trips[0].exit_reason == "eod"
+    assert report.round_trips[0].pnl == 50.0
+
+
+def test_sell_reason_labeled_from_guard_log_on_real_path() -> None:
+    """실거래 경로(order_accepted) 매도는 reason 결손 — position_guard 로그로 라벨링한다."""
+    events = LogEvents(
+        orders_accepted=[
+            {"symbol": "A", "side": "buy", "qty": 10, "price": 100.0},
+            {"symbol": "A", "side": "sell", "qty": 10, "price": 95.0},  # guard_reason 없음
+        ],
+        stop_losses=[{"symbol": "A", "price": 95.0, "drop_pct": 5.0}],
+    )
+    report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
+    assert report.sells[0].reason == "stop_loss"
+    # 왕복 레코드의 exit_reason 도 같이 채워진다.
+    assert report.round_trips[0].exit_reason == "stop_loss"
+
+
+def test_regime_and_breadth_extracted_from_logs() -> None:
+    """daytrade.regime / daytrade.breadth_gate 로그가 DailyReport 최상위로 끌어올려진다."""
+    events = LogEvents(
+        regime={"event": "daytrade.regime", "regime": "high_vol", "routed": True},
+        breadth_gate={
+            "event": "daytrade.breadth_gate",
+            "passed": True,
+            "advancing_pct": 0.788,
+            "mean_change_pct": 2.62,
+        },
+    )
+    report = build_daily_report(date="2026-06-15", events=events, snapshot=None)
+    assert report.regime == "high_vol"
+    assert report.breadth_advancing_pct == 0.788
+    assert report.breadth_mean_change_pct == 2.62
+    assert report.breadth_passed is True
+
+
+def test_regime_breadth_none_when_logs_absent() -> None:
+    """게이트·라우팅 비활성(로그 없음)이면 맥락 필드는 모두 None 으로 안전 폴백."""
+    report = build_daily_report(date="2026-06-15", events=LogEvents(), snapshot=None)
+    assert report.regime is None
+    assert report.breadth_passed is None
+    assert report.round_trips == []
 
 
 def test_pnl_aggregate_when_both_prices_present() -> None:

@@ -533,7 +533,7 @@ class PaperRunner:
             order = await self._evaluate_signal(signal, bar, account)
             if order is None:
                 continue
-            await self._place_and_track(rest, order, bar, account)
+            await self._place_and_track(rest, order, bar, account, signal=signal)
 
         # 23단계 Phase C — 매 봉 끝에 PositionGuard 체크. 보유 0 이면 자동 no-op.
         await self._run_position_guard(rest, bar, account)
@@ -840,6 +840,9 @@ class PaperRunner:
                 side=order.side.value,
                 qty=order.quantity,
                 price=sim_price,
+                # 데이터 기반 분석용 — 진입 사유(전략이 채운 Signal.reason). 사후 리포트가
+                # "왜 이 종목을 샀나"를 매수 레코드에 박제(daily.TradeRecord.reason).
+                reason=signal.reason or None,
             )
             # 23단계 Phase B — dry-run BUY 도 일일 누적에 포함 (한도 검증 회로 똑같이 흘러야).
             if order.side is Side.BUY:
@@ -878,9 +881,19 @@ class PaperRunner:
         )
 
     async def _place_and_track(
-        self, rest: KiwoomRestClient, order: Order, bar: Bar, account: AccountState
+        self,
+        rest: KiwoomRestClient,
+        order: Order,
+        bar: Bar,
+        account: AccountState,
+        *,
+        signal: Signal | None = None,
     ) -> None:
-        """REST 송신 + 성공·실패 분기. 성공 시 로컬 포지션·평단 즉시 갱신, notifier 양방향."""
+        """REST 송신 + 성공·실패 분기. 성공 시 로컬 포지션·평단 즉시 갱신, notifier 양방향.
+
+        signal 은 전략 발 진입 경로에서만 전달된다(guard SELL 은 None). 진입 사유를
+        order_accepted 로그에 남겨 사후 리포트가 매수 레코드에 박제하도록 한다.
+        """
         # 29단계 PR19 — 송신부터 응답까지 시간 측정 (활성 시).
         t0 = _time.monotonic()
         try:
@@ -900,6 +913,7 @@ class PaperRunner:
                 side=order.side.value,
                 qty=order.quantity,
                 price=ref_price,
+                reason=(signal.reason or None) if signal is not None else None,
             )
             await self.notifier.notify(
                 "runner.order_accepted",
@@ -908,6 +922,8 @@ class PaperRunner:
                 name=self._name_of(order.symbol),
                 side=order.side.value,
                 qty=order.quantity,
+                # 2026-06-15 — 체결 알림에 단가·총 거래대금 표시용(시장가는 봉 종가 근사).
+                price=ref_price,
             )
             # 로컬 포지션 즉시 갱신 (다음 snapshot 까지의 공백 메움)
             prev_qty = account.positions.get(order.symbol, 0)

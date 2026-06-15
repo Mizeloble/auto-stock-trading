@@ -378,6 +378,46 @@ async def test_order_accepted_renders_symbol_with_name(notifier: TelegramNotifie
     assert "BUY 11주" in text
 
 
+async def test_order_accepted_includes_unit_price_and_total_amount(
+    notifier: TelegramNotifier,
+) -> None:
+    """2026-06-15 요청 — 체결 알림에 단가 + 총 거래대금(수량 곱하기 단가)이 같이 찍힌다."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.order_accepted",
+            order_no="X",
+            symbol="005930",
+            name="삼성전자",
+            side="buy",
+            qty=10,
+            price=339500.0,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "@339,500원" in text  # 단가
+    assert "3,395,000원" in text  # 총 거래대금 = 10 곱하기 339,500
+
+
+async def test_order_accepted_without_price_omits_amount(notifier: TelegramNotifier) -> None:
+    """price 가 없으면(미기록) 단가·금액 없이 기존 형식 유지 — 회귀 보호."""
+    async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:
+        route = mock.post("/bot12345:SECRETTOKEN/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True}),
+        )
+        await notifier.notify(
+            "runner.order_accepted",
+            order_no="X",
+            symbol="005930",
+            side="buy",
+            qty=10,
+        )
+    text = json.loads(route.calls[0].request.read())["text"]
+    assert "원" not in text  # 금액 표기 없음
+    assert "10주" in text
+
+
 async def test_order_accepted_without_name_keeps_code_only(notifier: TelegramNotifier) -> None:
     """name 이 None/빈 문자열이면 기존처럼 코드만 — 회귀 보호."""
     async with respx.mock(base_url=TELEGRAM_API_BASE) as mock:

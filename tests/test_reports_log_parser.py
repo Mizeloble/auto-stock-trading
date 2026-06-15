@@ -32,6 +32,26 @@ def test_parse_skips_non_json_and_unknown_events() -> None:
     assert events.discovery["chosen"] == ["A", "B"]
 
 
+def test_parse_extracts_breadth_gate_and_regime_single_records() -> None:
+    """daytrade.breadth_gate / daytrade.regime 는 각각 1건짜리 dict 로 흡수된다."""
+    lines = [
+        _line(
+            "daytrade.breadth_gate",
+            passed=True,
+            reason="ok",
+            advancing_pct=0.788,
+            mean_change_pct=2.62,
+            sample=104,
+        ),
+        _line("daytrade.regime", regime="high_vol", routed=True, profile="daytrade-highvol.yaml"),
+    ]
+    events = parse_lines(lines)
+    assert events.breadth_gate is not None
+    assert events.breadth_gate["advancing_pct"] == 0.788
+    assert events.regime is not None
+    assert events.regime["regime"] == "high_vol"
+
+
 def test_parse_extracts_each_event_type_into_correct_bucket() -> None:
     lines = [
         _line(
@@ -102,6 +122,35 @@ def test_parse_extracts_timeline_event_types() -> None:
     assert events.kill_switches[0]["today_change"] == -0.035
     assert len(events.liquidate_starts) == 1
     assert events.liquidate_starts[0]["reason"] == "daily_loss_kill"
+
+
+def test_parse_extracts_stop_loss_and_trailing_guards() -> None:
+    """2026-06-15 회귀: 손절·트레일링 가드 이벤트도 각 버킷에 잡힌다.
+
+    이 둘이 파싱돼야 daily.py timeline 빌더가 매도 체결을 사유로 라벨링한다.
+    """
+    lines = [
+        _line(
+            "position_guard.stop_loss",
+            symbol="093370",
+            price=19660.0,
+            avg_price=20197.0,
+            drop_pct=2.659,
+        ),
+        _line(
+            "position_guard.trailing",
+            symbol="005930",
+            price=336500.0,
+            highest=340000.0,
+            drop_pct=1.029,
+        ),
+    ]
+    events = parse_lines(lines)
+    assert len(events.stop_losses) == 1
+    assert events.stop_losses[0]["symbol"] == "093370"
+    assert events.stop_losses[0]["drop_pct"] == 2.659
+    assert len(events.trailings) == 1
+    assert events.trailings[0]["symbol"] == "005930"
 
 
 def test_parse_log_missing_file_returns_empty_events(tmp_path: Path) -> None:

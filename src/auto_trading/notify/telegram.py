@@ -31,6 +31,28 @@ def _with_name(symbol: str, name: object) -> str:
     return symbol
 
 
+def _fill_amount_part(qty: object, price: object) -> str:
+    """체결 단가 + 총 거래대금 ' @339,500원 = 3,395,000원'. 가격 없으면 빈 문자열.
+
+    2026-06-15 사용자 요청 — 체결 알림이 '몇 주'만 보여줘 투입/회수 금액을 가늠하기
+    어려웠다. 단가(@)와 (수량 곱하기 단가) 총액을 함께 노출. 수량이 없거나 0 이면 단가만.
+    """
+    if price is None:
+        return ""
+    try:
+        unit = float(price)  # type: ignore[arg-type]
+    except TypeError, ValueError:
+        return ""
+    unit_part = f" @{round(unit):,}원"
+    try:
+        shares = int(qty)  # type: ignore[call-overload]
+    except TypeError, ValueError:
+        return unit_part
+    if shares <= 0:
+        return unit_part
+    return f"{unit_part} = {round(unit * shares):,}원"
+
+
 def _format_symbol_list(raw: object, names: object) -> str:
     """`runner.started` 의 'symbols' (콤마/리스트) + symbol_names dict → '005930 삼성전자, …'.
 
@@ -103,9 +125,10 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
         return msg
     if event == "runner.order_accepted":
         sym_label = _with_name(str(fields.get("symbol", "?")), fields.get("name"))
+        amount_part = _fill_amount_part(fields.get("qty"), fields.get("price"))
         return (
             f"✅ 체결 접수 {sym_label} {str(fields.get('side', '?')).upper()}"
-            f" {fields.get('qty', '?')}주"
+            f" {fields.get('qty', '?')}주{amount_part}"
             f" (ord:{fields.get('order_no', '-')})"
         )
     if event == "runner.order_failed":
