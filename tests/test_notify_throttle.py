@@ -86,6 +86,25 @@ async def test_aclose_flushes_remaining_buffer() -> None:
     assert "B BUY 5주" in text
 
 
+async def test_summary_includes_total_amount_when_price_present() -> None:
+    """2026-06-15 요청 — 체결 요약 줄에 총 거래대금(수량 곱하기 단가)이 붙는다."""
+    n, inner, _ = _throttled()
+    await n.notify("runner.order_accepted", symbol="A", side="buy", qty=10, price=339500.0)
+    await n.aclose()
+    text = str(next(c for c in inner.calls if c[0] == "notify.throttled_summary")[1]["text"])
+    assert "A BUY 10주 (3,395,000원)" in text
+
+
+async def test_summary_omits_amount_without_price() -> None:
+    """price 미기록이면 금액 없이 기존 압축 형식 유지 — 회귀 보호."""
+    n, inner, _ = _throttled()
+    await n.notify("runner.order_accepted", symbol="A", side="buy", qty=10)
+    await n.aclose()
+    text = str(next(c for c in inner.calls if c[0] == "notify.throttled_summary")[1]["text"])
+    assert "A BUY 10주" in text
+    assert "원)" not in text
+
+
 async def test_summary_header_shows_count_and_rate() -> None:
     """요약 머리에 건수·분당 빈도 노출, 저빈도면 경고 없음."""
     n, inner, _ = _throttled(window_min=5)

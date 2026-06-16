@@ -38,11 +38,33 @@ _PASSTHROUGH: frozenset[str] = frozenset(
     }
 )
 
+
+def _won_amount(fields: dict) -> str:
+    """총 거래대금(수량 곱하기 단가) ' (3,395,000원)'. 가격/수량 없거나 0 이면 빈 문자열.
+
+    2026-06-15 사용자 요청 — 체결 요약이 '몇 주'만 보여줘 투입/회수 금액을 알기 어려웠다.
+    요약은 압축이 목적이라 단가(@)는 생략하고 총액만 괄호로 덧붙인다.
+    """
+    price = fields.get("price")
+    if price is None:
+        return ""
+    try:
+        unit = float(price)
+        shares = int(fields.get("qty"))  # type: ignore[arg-type]
+    except TypeError, ValueError:
+        return ""
+    total = unit * shares
+    if total <= 0:
+        return ""
+    return f" ({round(total):,}원)"
+
+
 #: 요약 대상 이벤트와 사람이 읽는 한국어 짧은 라벨.
 _LABELS: dict[str, Callable[[dict], str]] = {
     "runner.order_accepted": (
         lambda f: (
-            f"✅ {f.get('symbol', '?')} {str(f.get('side', '?')).upper()} {f.get('qty', '?')}주"
+            f"✅ {f.get('symbol', '?')} {str(f.get('side', '?')).upper()} "
+            f"{f.get('qty', '?')}주{_won_amount(f)}"
         )
     ),
     "runner.order_failed": (

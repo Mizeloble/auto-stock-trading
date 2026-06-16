@@ -37,6 +37,11 @@ class TradeRecord:
     price: float | None
     simulated: bool  # dry-run 시뮬이면 True
     name: str | None = None  # 종목명 — 발굴 로그에서 알 수 있을 때만 채움
+    # 데이터 기반 분석용 — 체결 시각(KST "HH:MM", 로그 timestamp 변환)과 사유.
+    # 매수 reason = 전략 Signal.reason, 매도 reason = guard 사유(손절/트레일링/부분익절)
+    # 또는 전략 매도 사유. 로그에 없으면 None.
+    time_kst: str | None = None
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,9 @@ class LiquidationRecord:
     buy_price: float | None
     simulated: bool
     name: str | None = None
+    # EOD 청산 시각(KST "HH:MM")과 사유("liquidate_at_reached"/"daily_loss_kill" 등).
+    time_kst: str | None = None
+    reason: str | None = None
 
     @property
     def pnl(self) -> float | None:
@@ -61,6 +69,28 @@ class LiquidationRecord:
         if self.sell_price is None or self.buy_price is None or self.buy_price == 0:
             return None
         return (self.sell_price / self.buy_price - 1.0) * 100.0
+
+
+@dataclass(frozen=True)
+class RoundTrip:
+    """종목 왕복(매수→매도/청산) 1건 — 데이터 기반 전략 분석의 기본 단위.
+
+    FIFO 매칭으로 매수 lot 과 매도/청산을 짝지어 만든다. 매수가·매도가가 둘 다
+    있는 분량만 손익이 채워진다(가격 결손 분은 pnl=None). 승률·손익비·보유시간·
+    사유별 성과 분석에 그대로 쓰인다.
+    """
+
+    symbol: str
+    name: str | None
+    quantity: int
+    buy_price: float | None
+    sell_price: float | None
+    buy_time_kst: str | None
+    sell_time_kst: str | None
+    holding_minutes: int | None
+    pnl: float | None
+    pnl_pct: float | None
+    exit_reason: str | None  # guard 사유 / "eod" 계열 / 전략 매도 사유
 
 
 @dataclass(frozen=True)
@@ -84,7 +114,9 @@ class TimelineEvent:
     """
 
     time_kst: str  # "HH:MM" KST. 로그가 UTC ISO 8601 라 빌더가 변환.
-    kind: str  # "discovery" | "buy" | "partial_take" | "kill_switch" | "liquidate"
+    # "discovery" | "buy" | "sell" | "partial_take" | "stop_loss" | "trailing"
+    # | "kill_switch" | "liquidate"
+    kind: str
     text: str  # 한국어 한 줄 — 종목·수량·가격·비율 등 포함
 
 
@@ -153,6 +185,15 @@ class DailyReport:
     liquidations_failed_count: int = 0
     balance_failure_count: int = 0
     fatal_count: int = 0
+    # === 데이터 기반 전략 수립용 맥락(2026-06-15) ===
+    # 그날 시장 국면(daytrade.regime 로그) — regime_router 활성일 때만, 아니면 None.
+    regime: str | None = None
+    # 시총200 breadth 게이트 측정치(daytrade.breadth_gate 로그). 게이트 비활성이면 None.
+    breadth_advancing_pct: float | None = None
+    breadth_mean_change_pct: float | None = None
+    breadth_passed: bool | None = None
+    # 종목 왕복(매수↔매도/청산) 단위 손익 — 승률·보유시간·사유별 성과 분석의 기본 재료.
+    round_trips: list[RoundTrip] = field(default_factory=list)
 
 
 # ---- 빌더 ---------------------------------------------------------------
@@ -191,7 +232,8 @@ def build_daily_report(
         mode = "day-trade" if (events.discovery is not None or events.rank is not None) else "swing"
         dry_run = bool(events.orders_simulated or events.liquidations_simulated)
 
-    realized_pnl, realized_pnl_pct = _aggregate_realized(buys, sells, liquidations)
+    realized_pnl, realized_pnl_pct, round_trips = _aggregate_realized(buys, sells, liquidations)
+    regime, breadth_adv, breadth_mean, breadth_passed = _extract_regime_breadth(events)
     closing_cash, closing_equity, closing_total_pnl, closing_holdings = _extract_closing(snapshot)
     # snapshot.holdings 의 name 도 흡수 — discovery 에 없던 종목(swing 등) 보강.
     if snapshot is not None and snapshot.snapshot is not None:
@@ -285,6 +327,32 @@ def build_daily_report(
         liquidations_failed_count=liquidations_failed_count,
         balance_failure_count=balance_failure_count,
         fatal_count=fatal_count,
+        regime=regime,
+        breadth_advancing_pct=breadth_adv,
+        breadth_mean_change_pct=breadth_mean,
+        breadth_passed=breadth_passed,
+        round_trips=round_trips,
+    )
+
+
+def _extract_regime_breadth(
+    events: LogEvents,
+) -> tuple[str | None, float | None, float | None, bool | None]:
+    """daytrade.regime / daytrade.breadth_gate 로그 → 그날 시장 맥락 4종.
+
+    각 로그는 세션 시작 시 1건만 나온다. 없으면 모두 None(게이트·라우팅 비활성).
+    """
+    regime = _as_str(events.regime.get("regime")) if events.regime is not None else None
+    if events.breadth_gate is None:
+        return regime, None, None, None
+    bg = events.breadth_gate
+    passed_raw = bg.get("passed")
+    passed = bool(passed_raw) if isinstance(passed_raw, bool) else None
+    return (
+        regime,
+        _as_float(bg.get("advancing_pct")),
+        _as_float(bg.get("mean_change_pct")),
+        passed,
     )
 
 
@@ -344,12 +412,38 @@ def _collect_order_records(
         price = _as_float(rec.get("price"))
         if not symbol or qty <= 0:
             continue
+        time_kst = _ts_to_kst_hhmm(rec.get("timestamp"))
         if side == "buy":
-            buys.append(TradeRecord(symbol, "buy", qty, price, simulated, names.get(symbol)))
+            # 진입 사유 = Signal.reason (runner.order_* 가 함께 로깅).
+            buys.append(
+                TradeRecord(
+                    symbol,
+                    "buy",
+                    qty,
+                    price,
+                    simulated,
+                    names.get(symbol),
+                    time_kst=time_kst,
+                    reason=_as_str(rec.get("reason")),
+                )
+            )
             if price is not None:
                 buy_prices[symbol] = price
         elif side == "sell":
-            sells.append(TradeRecord(symbol, "sell", qty, price, simulated, names.get(symbol)))
+            # 매도 사유 = guard 사유(dry-run 의 guard_reason) 또는 전략 매도 reason.
+            reason = _as_str(rec.get("reason")) or _as_str(rec.get("guard_reason"))
+            sells.append(
+                TradeRecord(
+                    symbol,
+                    "sell",
+                    qty,
+                    price,
+                    simulated,
+                    names.get(symbol),
+                    time_kst=time_kst,
+                    reason=reason,
+                )
+            )
 
 
 def _collect_liquidation_records(
@@ -374,6 +468,8 @@ def _collect_liquidation_records(
                     buy_price=buy_price,
                     simulated=simulated,
                     name=names.get(symbol),
+                    time_kst=_ts_to_kst_hhmm(rec.get("timestamp")),
+                    reason=_as_str(rec.get("reason")),
                 )
             )
 
@@ -406,6 +502,7 @@ def _extract_trades(
         sells=sells,
         buy_prices=buy_prices,
     )
+    _label_sell_reasons_from_guards(events, sells)
 
     liqs: list[LiquidationRecord] = []
     _collect_liquidation_records(
@@ -423,6 +520,38 @@ def _extract_trades(
         liqs=liqs,
     )
     return buys, sells, liqs
+
+
+def _label_sell_reasons_from_guards(events: LogEvents, sells: list[TradeRecord]) -> None:
+    """reason 없는 매도 레코드를 position_guard 로그로 사유 라벨링.
+
+    무엇/왜: 실거래 경로(runner.order_accepted) guard 매도는 reason 을 안 들고 온다
+    (guard 사유는 별도 position_guard.* 로그에만 있음). timeline 빌더가 쓰는 것과
+    같은 (symbol, price) 매칭으로 사유를 붙여 "사유별 성과" 분석을 가능케 한다.
+    dry-run(guard_reason 이미 포함)·전략 매도(reason 포함)는 그대로 둔다.
+
+    TradeRecord 는 frozen 이라 매칭된 항목을 dataclasses.replace 로 교체한다.
+    """
+    from dataclasses import replace
+
+    # (symbol, price) → guard 사유 큐. 같은 키 다중 발화는 순서대로 소진.
+    buckets: dict[tuple[str, float | None], list[str]] = {}
+    for kind, recs in (
+        ("partial_take", events.partial_takes),
+        ("stop_loss", events.stop_losses),
+        ("trailing", events.trailings),
+    ):
+        for rec in recs:
+            key = (str(rec.get("symbol", "")), _as_float(rec.get("price")))
+            buckets.setdefault(key, []).append(kind)
+    if not buckets:
+        return
+    for i, trade in enumerate(sells):
+        if trade.reason is not None:
+            continue
+        bucket = buckets.get((trade.symbol, trade.price))
+        if bucket:
+            sells[i] = replace(trade, reason=bucket.pop(0))
 
 
 def _extract_closing(
@@ -537,8 +666,8 @@ def _aggregate_realized(
     buys: list[TradeRecord],
     sells: list[TradeRecord],
     liqs: list[LiquidationRecord],
-) -> tuple[float | None, float | None]:
-    """종목별 FIFO 로 매수↔(장중매도+EOD청산) 라운드트립 실현손익 집계.
+) -> tuple[float | None, float | None, list[RoundTrip]]:
+    """종목별 FIFO 로 매수↔(장중매도+EOD청산) 라운드트립 실현손익 집계 + 왕복 레코드.
 
     무엇/왜:
     - 2026-05-16: 이전 `_aggregate_pnl` 은 EOD liquidations 만 봤고, 게다가
@@ -548,36 +677,70 @@ def _aggregate_realized(
     - 새 규칙: 매수를 종목별 FIFO 큐로 쌓고 매도/청산이 순서대로 소진. 매수가·
       매도가가 **둘 다** 있는 체결분만 손익에 합산하고, 한쪽 가격이 없는 분량은
       재고만 소진하고 손익에서 제외(부분 가시성 — 전부 버리지 않음). 가격이
-      잡힌 매칭이 0이면 (None, None).
+      잡힌 매칭이 0이면 (None, None, [...]).
     - 청산가 우선순위: li.sell_price → 없으면 손익 미산정(매수가만으론 불가).
       매수가 우선순위: FIFO 큐의 매수가 → 큐가 비면 li.buy_price(로그 필드).
+    - 2026-06-15: 매칭이 일어난 segment 마다 RoundTrip 을 부수적으로 수집한다
+      (데이터 기반 전략 분석용). 합계 손익 계산은 종전과 동일 — 가격 결손 segment 도
+      RoundTrip 으로 남되 pnl=None.
 
     리포트는 사후 추정이라 정확 체결가가 아닌 봉 종가 근사를 쓸 수 있다(주석 범위).
     """
-    queues: dict[str, list[list[float | None]]] = {}  # symbol -> [[qty, price], ...]
+    # symbol -> [[qty, price, time_kst, name], ...]
+    queues: dict[str, list[list[Any]]] = {}
     for b in buys:
         if b.quantity > 0:
-            queues.setdefault(b.symbol, []).append([float(b.quantity), b.price])
+            queues.setdefault(b.symbol, []).append([float(b.quantity), b.price, b.time_kst, b.name])
 
     total_pnl = 0.0
     total_cost = 0.0
     matched_any = False
+    round_trips: list[RoundTrip] = []
 
-    def _drain(symbol: str, qty: float) -> None:
-        """FIFO 큐에서 qty 만큼 재고만 소진(손익 계산 없이) — 명시 buy_price 사용 시."""
-        q = queues.get(symbol) or []
-        remaining = qty
-        while remaining > 0 and q:
-            lot = q[0]
-            lot_qty = lot[0] or 0.0
-            take = min(remaining, lot_qty)
-            remaining -= take
-            lot[0] = lot_qty - take
-            if (lot[0] or 0.0) <= 0:
-                q.pop(0)
+    def _emit(
+        symbol: str,
+        qty: float,
+        buy_price: float | None,
+        sell_price: float | None,
+        buy_time: str | None,
+        sell_time: str | None,
+        name: str | None,
+        exit_reason: str | None,
+    ) -> None:
+        pnl: float | None = None
+        pnl_pct: float | None = None
+        if buy_price is not None and sell_price is not None:
+            pnl = (sell_price - buy_price) * qty
+            if buy_price != 0:
+                pnl_pct = (sell_price / buy_price - 1.0) * 100.0
+        round_trips.append(
+            RoundTrip(
+                symbol=symbol,
+                name=name,
+                quantity=int(qty),
+                buy_price=buy_price,
+                sell_price=sell_price,
+                buy_time_kst=buy_time,
+                sell_time_kst=sell_time,
+                holding_minutes=_minutes_between(buy_time, sell_time),
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+                exit_reason=exit_reason,
+            )
+        )
 
-    def _consume(symbol: str, qty: int, sell_price: float | None, liq_buy: float | None) -> None:
+    def _consume(
+        symbol: str,
+        qty: int,
+        sell_price: float | None,
+        sell_time: str | None,
+        exit_reason: str | None,
+        liq_buy: float | None,
+        fallback_name: str | None,
+    ) -> None:
         nonlocal total_pnl, total_cost, matched_any
+        remaining = float(qty)
+        q = queues.get(symbol) or []
         # EOD 청산이 자체 매수단가(브로커 평균원가)를 명시하면 그것을 권위로 삼고
         # FIFO 큐는 재고만 소진 — buys 매핑보다 우선(문서화된 precedence 유지).
         if liq_buy is not None:
@@ -585,10 +748,28 @@ def _aggregate_realized(
                 total_pnl += (sell_price - liq_buy) * qty
                 total_cost += liq_buy * qty
                 matched_any = True
-            _drain(symbol, float(qty))
+            # 왕복 레코드 1건 — 매수 시각/이름은 가능하면 드레인되는 lot 에서 빌려온다.
+            lot_time = q[0][2] if q else None
+            lot_name = q[0][3] if q else None
+            _emit(
+                symbol,
+                float(qty),
+                liq_buy,
+                sell_price,
+                lot_time,
+                sell_time,
+                lot_name or fallback_name,
+                exit_reason,
+            )
+            while remaining > 0 and q:  # 재고만 소진(손익 계산 없이)
+                lot = q[0]
+                lot_qty = lot[0] or 0.0
+                take = min(remaining, lot_qty)
+                remaining -= take
+                lot[0] = lot_qty - take
+                if (lot[0] or 0.0) <= 0:
+                    q.pop(0)
             return
-        remaining = float(qty)
-        q = queues.get(symbol) or []
         while remaining > 0 and q:
             lot = q[0]
             lot_qty = lot[0] or 0.0
@@ -598,6 +779,16 @@ def _aggregate_realized(
                 total_pnl += (sell_price - buy_price) * take
                 total_cost += buy_price * take
                 matched_any = True
+            _emit(
+                symbol,
+                take,
+                buy_price,
+                sell_price,
+                lot[2],
+                sell_time,
+                lot[3] or fallback_name,
+                exit_reason,
+            )
             remaining -= take
             lot[0] = lot_qty - take
             if (lot[0] or 0.0) <= 0:
@@ -605,14 +796,22 @@ def _aggregate_realized(
 
     for s in sells:
         if s.quantity > 0:
-            _consume(s.symbol, s.quantity, s.price, None)
+            _consume(s.symbol, s.quantity, s.price, s.time_kst, s.reason, None, s.name)
     for li in liqs:
         if li.quantity > 0:
-            _consume(li.symbol, li.quantity, li.sell_price, li.buy_price)
+            _consume(
+                li.symbol,
+                li.quantity,
+                li.sell_price,
+                li.time_kst,
+                li.reason or "eod",
+                li.buy_price,
+                li.name,
+            )
 
     if not matched_any or total_cost == 0:
-        return None, None
-    return total_pnl, total_pnl / total_cost * 100.0
+        return None, None, round_trips
+    return total_pnl, total_pnl / total_cost * 100.0, round_trips
 
 
 def _summary_ko(
@@ -705,6 +904,26 @@ def _format_won_int(value: object) -> str:
         return "?원"
 
 
+# 가드 사유 라벨 — 매도 체결 timeline 줄에 붙는 사람용 한국어.
+_GUARD_REASON_KO = {
+    "partial_take": "부분 익절",
+    "stop_loss": "🛑 손절",
+    "trailing": "트레일링 청산",
+}
+
+
+def _guard_pct_part(kind: str, raw: dict[str, Any]) -> str:
+    """가드 이벤트의 등락률을 ' +2.33%' / ' -2.66%' 형태로. 없으면 빈 문자열.
+
+    partial_take 는 gain_pct(이득, +), stop_loss·trailing 은 drop_pct(하락폭, -)로 라벨링.
+    """
+    if kind == "partial_take":
+        gain = _as_float(raw.get("gain_pct"))
+        return f" +{gain:.2f}%" if gain is not None else ""
+    drop = _as_float(raw.get("drop_pct"))
+    return f" -{drop:.2f}%" if drop is not None else ""
+
+
 _KILL_SWITCH_REASON_KO = {"daily_loss_kill": "일일 손실 한도"}
 _LIQUIDATE_REASON_KO = {
     "liquidate_at_reached": "장 마감",
@@ -717,10 +936,17 @@ def _build_timeline(events: LogEvents, names: dict[str, str]) -> list[TimelineEv
 
     포함 이벤트(시각 있는 것만):
     - 발굴 완료 (daytrade.discovery)
-    - 매수 체결 (runner.order_simulated / runner.order_accepted) — side=buy 만
-    - 부분 익절 (position_guard.partial_take)
+    - 매수 체결 (runner.order_simulated / runner.order_accepted) — side=buy
+    - 매도 체결 (runner.order_simulated / runner.order_accepted) — side=sell.
+      가드 이벤트(손절·부분익절·트레일링)와 (종목, 가격)으로 매칭해 사유를 라벨링.
+    - 청산 체결 (runner.liquidate_simulated / runner.liquidate_accepted)
     - kill switch (runner.kill_switch_triggered)
     - 청산 시작 (runner.liquidate_start)
+
+    2026-06-15 회귀: 이전엔 side=buy 매수와 partial_take 가드만 timeline 에 넣어
+    손절·트레일링·일반 매도·청산 체결이 통째로 빠졌다(매도 흐름 착시). 이제 매도/청산
+    체결을 모두 시각순으로 넣고, 가드 이벤트로 사유를 붙인다. 체결 로그가 따로 없는
+    가드 이벤트만 가드 자신의 정보로 폴백 한 줄을 emit.
 
     체결 가격은 시뮬에선 봉 종가 근사. 사용자에게 "실제 체결가가 아닐 수 있음" 은 코드 주석
     범위 — UI 에서 따로 표시하지 않음.
@@ -774,18 +1000,78 @@ def _build_timeline(events: LogEvents, names: dict[str, str]) -> list[TimelineEv
             f"매수 {_with_name_label(symbol, names)} {qty}주{price_part}",
         )
 
-    for rec in events.partial_takes:
+    # 매도 체결을 사유(손절/부분익절/트레일링)로 라벨링하기 위한 가드 색인.
+    # (종목, 체결가) → 가드 이벤트 큐. 체결과 1:1 로 소진하고, 남은 가드는 폴백 emit.
+    guard_buckets: dict[tuple[str, float | None], list[tuple[str, dict[str, Any]]]] = {}
+    for kind, guard_recs in (
+        ("partial_take", events.partial_takes),
+        ("stop_loss", events.stop_losses),
+        ("trailing", events.trailings),
+    ):
+        for rec in guard_recs:
+            symbol = str(rec.get("symbol", ""))
+            price = _as_float(rec.get("price"))
+            guard_buckets.setdefault((symbol, price), []).append((kind, rec))
+
+    def _add_sell(rec: dict[str, Any], *, simulated: bool) -> None:
         symbol = str(rec.get("symbol", ""))
-        qty = _as_int(rec.get("qty_to_sell")) or 0
-        gain_pct = _as_float(rec.get("gain_pct"))
+        qty = _as_int(rec.get("qty")) or 0
         price = _as_float(rec.get("price"))
-        gain_part = f" +{gain_pct:.2f}%" if gain_pct is not None else ""
+        if not symbol or qty <= 0:
+            return
+        label = _with_name_label(symbol, names)
         price_part = f" @{_format_won_int(price)}" if price is not None else ""
-        _add(
-            rec.get("timestamp"),
-            "partial_take",
-            f"부분 익절 {_with_name_label(symbol, names)} {qty}주{price_part}{gain_part}",
-        )
+        sim_part = " (시뮬)" if simulated else ""
+        bucket = guard_buckets.get((symbol, price))
+        if bucket:
+            # 같은 종목·가격의 가드 이벤트와 매칭 → 사유 라벨 + 등락률.
+            kind, guard = bucket.pop(0)
+            reason = _GUARD_REASON_KO[kind]
+            pct_part = _guard_pct_part(kind, guard)
+            _add(
+                rec.get("timestamp"),
+                kind,
+                f"{reason} {label} {qty}주{price_part}{pct_part}{sim_part}",
+            )
+        else:
+            # 가드 없는 일반 매도(시그널·수동 청산 등).
+            _add(rec.get("timestamp"), "sell", f"매도 {label} {qty}주{price_part}{sim_part}")
+
+    for rec in events.orders_simulated:
+        if str(rec.get("side", "")) == "sell":
+            _add_sell(rec, simulated=True)
+    for rec in events.orders_accepted:
+        if str(rec.get("side", "")) == "sell":
+            _add_sell(rec, simulated=False)
+
+    # EOD 강제청산 체결 — orders_* 와 이벤트명이 달라 매도와 겹치지 않는다.
+    def _add_liq_fill(rec: dict[str, Any], *, simulated: bool) -> None:
+        symbol = str(rec.get("symbol", ""))
+        qty = _as_int(rec.get("qty")) or 0
+        if not symbol or qty <= 0:
+            return
+        price = _as_float(rec.get("sell_price"))
+        label = _with_name_label(symbol, names)
+        price_part = f" @{_format_won_int(price)}" if price is not None else ""
+        sim_part = " (시뮬)" if simulated else ""
+        _add(rec.get("timestamp"), "liquidate", f"청산 체결 {label} {qty}주{price_part}{sim_part}")
+
+    for rec in events.liquidations_simulated:
+        _add_liq_fill(rec, simulated=True)
+    for rec in events.liquidations_accepted:
+        _add_liq_fill(rec, simulated=False)
+
+    # 체결 로그가 따로 안 남은 가드 이벤트만 폴백으로 emit(가드의 qty/price 사용).
+    # partial_take 만 qty_to_sell 을 들고 있어 수량 표기 가능 — 손절/트레일링은 수량 생략.
+    for (symbol, price), bucket in guard_buckets.items():
+        label = _with_name_label(symbol, names)
+        price_part = f" @{_format_won_int(price)}" if price is not None else ""
+        for kind, guard in bucket:
+            qty = _as_int(guard.get("qty_to_sell")) or 0 if kind == "partial_take" else 0
+            qty_part = f" {qty}주" if qty else ""
+            reason = _GUARD_REASON_KO[kind]
+            pct_part = _guard_pct_part(kind, guard)
+            _add(guard.get("timestamp"), kind, f"{reason} {label}{qty_part}{price_part}{pct_part}")
 
     for rec in events.kill_switches:
         change = _as_float(rec.get("today_change"))
@@ -834,6 +1120,29 @@ def _as_int(raw: object) -> int | None:
         return None
 
 
+def _as_str(raw: object) -> str | None:
+    """비어있지 않은 문자열만 통과. 그 외(None·빈문자열·비문자열)는 None."""
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
+def _minutes_between(start_hhmm: str | None, end_hhmm: str | None) -> int | None:
+    """ "HH:MM" 두 시각의 분 차이(보유시간). 같은 날 가정 — 음수면 None.
+
+    체결 시각은 모두 같은 거래일이라 단순 분 차이로 충분. 파싱 실패·결손 시 None.
+    """
+    if not start_hhmm or not end_hhmm:
+        return None
+    try:
+        sh, sm = (int(x) for x in start_hhmm.split(":"))
+        eh, em = (int(x) for x in end_hhmm.split(":"))
+    except ValueError, AttributeError:
+        return None
+    diff = (eh * 60 + em) - (sh * 60 + sm)
+    return diff if diff >= 0 else None
+
+
 # ---- I/O -----------------------------------------------------------------
 
 
@@ -868,6 +1177,8 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
     closing_holdings = [ClosingHolding(**h) for h in closing_holdings_raw]
     timeline_raw = payload.get("timeline") or []
     timeline = [TimelineEvent(**ev) for ev in timeline_raw if isinstance(ev, dict)]
+    round_trips_raw = payload.get("round_trips") or []
+    round_trips = [RoundTrip(**rt) for rt in round_trips_raw if isinstance(rt, dict)]
     return DailyReport(
         date=payload["date"],
         mode=payload["mode"],
@@ -907,6 +1218,12 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
         liquidations_failed_count=int(payload.get("liquidations_failed_count") or 0),
         balance_failure_count=int(payload.get("balance_failure_count") or 0),
         fatal_count=int(payload.get("fatal_count") or 0),
+        # 2026-06-15 신규 — 직렬화 footgun 회귀 방지: asdict 는 자동이지만 복원은 수동.
+        regime=payload.get("regime"),
+        breadth_advancing_pct=payload.get("breadth_advancing_pct"),
+        breadth_mean_change_pct=payload.get("breadth_mean_change_pct"),
+        breadth_passed=payload.get("breadth_passed"),
+        round_trips=round_trips,
     )
 
 
@@ -936,6 +1253,7 @@ __all__ = [
     "DailyReport",
     "LiquidationRecord",
     "MarketGateInfo",
+    "RoundTrip",
     "TimelineEvent",
     "TradeRecord",
     "build_daily_report",

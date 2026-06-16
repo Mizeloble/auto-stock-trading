@@ -22,6 +22,10 @@ class LogEvents:
 
     discovery: dict[str, Any] | None = None  # daytrade.discovery (있으면 1건)
     rank: dict[str, Any] | None = None  # market.rank.top_volume (있으면 1건)
+    # 데이터 기반 전략 수립용 일일 맥락(둘 다 하루 1건, 세션 시작 시점). 빌더가
+    # DailyReport 최상위 regime/breadth_* 필드로 끌어올린다. 없으면 None.
+    breadth_gate: dict[str, Any] | None = None  # daytrade.breadth_gate
+    regime: dict[str, Any] | None = None  # daytrade.regime
     market_gates: list[dict[str, Any]] = field(default_factory=list)  # market.index.gate
     orders_simulated: list[dict[str, Any]] = field(default_factory=list)  # runner.order_simulated
     orders_accepted: list[dict[str, Any]] = field(default_factory=list)  # runner.order_accepted
@@ -36,9 +40,14 @@ class LogEvents:
         default_factory=list
     )  # runner.liquidate_failed
     signal_rejected: list[dict[str, Any]] = field(default_factory=list)  # runner.signal_rejected
-    # 2026-05-11 회귀 후속 — 일일 리포트에 시계열 표시용. 부분 익절·kill switch·청산
-    # 시작 이벤트는 reports/daily.py 의 timeline 빌더가 매수/청산 체결과 합쳐 시각 순으로 정렬.
+    # 2026-05-11 회귀 후속 — 일일 리포트에 시계열 표시용. 부분 익절·손절·트레일링·
+    # kill switch·청산 시작 이벤트는 reports/daily.py 의 timeline 빌더가 매수/매도/청산
+    # 체결과 합쳐 시각 순으로 정렬한다.
     partial_takes: list[dict[str, Any]] = field(default_factory=list)  # position_guard.partial_take
+    # 2026-06-15 회귀 후속 — 손절·트레일링 청산 가드 이벤트. 매도 체결(orders side=sell)을
+    # timeline 에서 사유(손절/트레일링)로 라벨링하기 위해 파싱한다.
+    stop_losses: list[dict[str, Any]] = field(default_factory=list)  # position_guard.stop_loss
+    trailings: list[dict[str, Any]] = field(default_factory=list)  # position_guard.trailing
     kill_switches: list[dict[str, Any]] = field(
         default_factory=list
     )  # runner.kill_switch_triggered
@@ -52,6 +61,8 @@ class LogEvents:
 
 _INTEREST: dict[str, str] = {
     "daytrade.discovery": "discovery",
+    "daytrade.breadth_gate": "breadth_gate",
+    "daytrade.regime": "regime",
     "daytrade.universe_chosen": "_universe_chosen",
     "market.rank.top_volume": "rank",
     "market.index.gate": "market_gates",
@@ -63,6 +74,8 @@ _INTEREST: dict[str, str] = {
     "runner.liquidate_failed": "liquidations_failed",
     "runner.signal_rejected": "signal_rejected",
     "position_guard.partial_take": "partial_takes",
+    "position_guard.stop_loss": "stop_losses",
+    "position_guard.trailing": "trailings",
     "runner.kill_switch_triggered": "kill_switches",
     "runner.liquidate_start": "liquidate_starts",
     "runner.balance_fetch_failed": "_balance_failed",
@@ -119,6 +132,12 @@ def _ingest_line(events: LogEvents, line: str) -> None:
         return
     if target == "rank":
         events.rank = record
+        return
+    if target == "breadth_gate":
+        events.breadth_gate = record
+        return
+    if target == "regime":
+        events.regime = record
         return
     bucket = getattr(events, target)
     if isinstance(bucket, list):

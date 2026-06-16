@@ -45,6 +45,11 @@ from .profile import DaytradeBreadthGate, DaytradeProfile
 
 console = Console()
 
+# 데이터 기반 전략 수립용 — 그날 시장 국면(regime)을 일자별 로그에 1줄 박제한다.
+# reports/daily.py 가 이를 DailyReport.regime 으로 끌어올려 "어떤 국면에서 성과가
+# 좋/나빴나" 를 사후 분석할 수 있게 한다. paper-day 시동 시 regime_router 활성일 때만.
+_regime_log = structlog.get_logger("daytrade.regime")
+
 
 # 사용자 노출용 regime → (정의, 무엇을 조정했나, 👍 장점, 👎 단점)
 # `feedback_user_facing_tone.md` — YAML 키 금지, 변경마다 정의+👍+👎+이유.
@@ -128,6 +133,12 @@ def route_profile_by_regime(
     )
     if selected is None or selected == current_path:
         # 매핑된 파일 없음 → fallback 유지. 사용자에게 어떤 파일이 빠졌는지 알림.
+        _regime_log.info(
+            "daytrade.regime",
+            regime=report.regime.value,
+            routed=False,
+            profile=current_path.name,
+        )
         return RegimeRoutingResult(
             profile_path=current_path,
             regime=report.regime,
@@ -143,6 +154,12 @@ def route_profile_by_regime(
     )
     summary = (
         f"📊 시장 국면 자동 라우팅: {label} → {selected.name} ({change}). 👍 {pros}. 👎 {cons}."
+    )
+    _regime_log.info(
+        "daytrade.regime",
+        regime=report.regime.value,
+        routed=True,
+        profile=selected.name,
     )
     return RegimeRoutingResult(
         profile_path=selected,
