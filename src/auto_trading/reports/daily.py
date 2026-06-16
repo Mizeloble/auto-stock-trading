@@ -18,6 +18,7 @@ from typing import Any
 
 from ..notify.state import RunnerStateSnapshot
 from .log_parser import LogEvents
+from .snapshot_reader import TopcapSnapshots, parse_topcap_for_date
 
 # 비용 추정 상수 — backtest/broker.py 의 기본값과 일치시킨다 (단일 진실 출처).
 # 두 모듈을 import 로 묶지 않는 이유: reports/ 는 외부 호출 금지(CLAUDE.md), 의존 최소화.
@@ -42,6 +43,9 @@ class TradeRecord:
     # 또는 전략 매도 사유. 로그에 없으면 None.
     time_kst: str | None = None
     reason: str | None = None
+    # 진입 시점 피처(매수 레코드만) — topcap 스냅샷 조인. 스냅샷 10분 캐던스라 근사.
+    change_pct_at_entry: float | None = None  # 진입 무렵 종목 등락률(%)
+    rank_at_entry: int | None = None  # 진입 무렵 시총 순위
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,25 @@ class RoundTrip:
     pnl: float | None
     pnl_pct: float | None
     exit_reason: str | None  # guard 사유 / "eod" 계열 / 전략 매도 사유
+    # 보유구간 미실현 최대이익/최대손실(%) — topcap 스냅샷 조인. 매수가 기준.
+    # "익절을 너무 빨리/늦게 했나" 진단용. 스냅샷 10분 캐던스라 거친 추정.
+    mfe_pct: float | None = None
+    mae_pct: float | None = None
+
+
+@dataclass(frozen=True)
+class BlockedOutcome:
+    """발굴에서 차단된 종목의 그날 실제 움직임 — 게이트 기회비용(반사실) 분석용.
+
+    "차단 안 했으면 진입했을 텐데" 의 사후 검증: 진입했다면 일중(시초→종가)·
+    일간(전일대비) 수익률이 얼마였는지. topcap 스냅샷에 그 종목이 없으면 None.
+    """
+
+    symbol: str
+    name: str | None
+    reason: str  # 차단 사유 (breadth_* / *_below_sma / avoid_symbols 등)
+    intraday_pct: float | None  # 그날 시초→종가 변화율(%)
+    day_change_pct: float | None  # 종가 기준 전일대비 등락률(%)
 
 
 @dataclass(frozen=True)
@@ -194,6 +217,8 @@ class DailyReport:
     breadth_passed: bool | None = None
     # 종목 왕복(매수↔매도/청산) 단위 손익 — 승률·보유시간·사유별 성과 분석의 기본 재료.
     round_trips: list[RoundTrip] = field(default_factory=list)
+    # 차단 종목의 그날 움직임 — 게이트 기회비용(반사실) 분석. 스냅샷 없으면 빈 리스트.
+    blocked_outcomes: list[BlockedOutcome] = field(default_factory=list)
 
 
 # ---- 빌더 ---------------------------------------------------------------
@@ -204,6 +229,7 @@ def build_daily_report(
     date: str,
     events: LogEvents,
     snapshot: RunnerStateSnapshot | None,
+    snapshot_root: Path | str = "data/snapshots",
 ) -> DailyReport:
     """LogEvents + 옵셔널 snapshot 으로 DailyReport 생성.
 
@@ -211,6 +237,8 @@ def build_daily_report(
     - 자동 호출(러너 종료 직후) 은 snapshot 이 있어 mode/dry_run 을 알 수 있음.
     - 수동 재생성(`auto-trade report --date …`) 은 snapshot=None — 로그만 보고 추정.
     - day-trade 가 아닌 일자(레거시 swing 또는 데이터 없음) 도 빈 DailyReport 로 안전하게 만듦.
+    - snapshot_root: topcap 일중 스냅샷 폴더. 파일 없으면 진입 피처·MFE/MAE·차단
+      기회비용은 모두 None/빈 리스트로 폴백(과거 일자 재생성 호환).
     """
     discovery_chosen, discovery_blocked = _extract_discovery(events)
     market_gates = _extract_gates(events)
@@ -234,6 +262,11 @@ def build_daily_report(
 
     realized_pnl, realized_pnl_pct, round_trips = _aggregate_realized(buys, sells, liquidations)
     regime, breadth_adv, breadth_mean, breadth_passed = _extract_regime_breadth(events)
+    # topcap 일중 스냅샷 조인 — 진입 피처·MFE/MAE·차단 기회비용. 파일 없으면 무영향.
+    snaps = parse_topcap_for_date(date, root=snapshot_root)
+    buys = _enrich_buys(buys, snaps)
+    round_trips = _enrich_round_trips(round_trips, snaps)
+    blocked_outcomes = _build_blocked_outcomes(discovery_blocked, names, snaps)
     closing_cash, closing_equity, closing_total_pnl, closing_holdings = _extract_closing(snapshot)
     # snapshot.holdings 의 name 도 흡수 — discovery 에 없던 종목(swing 등) 보강.
     if snapshot is not None and snapshot.snapshot is not None:
@@ -332,7 +365,61 @@ def build_daily_report(
         breadth_mean_change_pct=breadth_mean,
         breadth_passed=breadth_passed,
         round_trips=round_trips,
+        blocked_outcomes=blocked_outcomes,
     )
+
+
+def _enrich_buys(buys: list[TradeRecord], snaps: TopcapSnapshots) -> list[TradeRecord]:
+    """매수 레코드에 진입 시점 등락률·순위(스냅샷 조인)를 채운다. 결손은 None 유지."""
+    from dataclasses import replace
+
+    out: list[TradeRecord] = []
+    for b in buys:
+        out.append(
+            replace(
+                b,
+                change_pct_at_entry=snaps.change_pct_at(b.symbol, b.time_kst),
+                rank_at_entry=snaps.rank_at(b.symbol, b.time_kst),
+            )
+        )
+    return out
+
+
+def _enrich_round_trips(round_trips: list[RoundTrip], snaps: TopcapSnapshots) -> list[RoundTrip]:
+    """왕복 레코드에 보유구간 MFE/MAE(%)를 채운다. 매수가·구간 결손이면 None 유지."""
+    from dataclasses import replace
+
+    out: list[RoundTrip] = []
+    for rt in round_trips:
+        rng = snaps.range_during(rt.symbol, rt.buy_time_kst, rt.sell_time_kst)
+        mfe = mae = None
+        if rng is not None and rt.buy_price:
+            low, high = rng
+            mfe = (high / rt.buy_price - 1.0) * 100.0
+            mae = (low / rt.buy_price - 1.0) * 100.0
+        out.append(replace(rt, mfe_pct=mfe, mae_pct=mae))
+    return out
+
+
+def _build_blocked_outcomes(
+    discovery_blocked: list[tuple[str, str]],
+    names: dict[str, str],
+    snaps: TopcapSnapshots,
+) -> list[BlockedOutcome]:
+    """차단 종목별 그날 움직임(시초→종가·전일대비) — 게이트 기회비용 반사실."""
+    out: list[BlockedOutcome] = []
+    for symbol, reason in discovery_blocked:
+        intraday, day_change = snaps.day_outcome(symbol)
+        out.append(
+            BlockedOutcome(
+                symbol=symbol,
+                name=names.get(symbol),
+                reason=reason,
+                intraday_pct=intraday,
+                day_change_pct=day_change,
+            )
+        )
+    return out
 
 
 def _extract_regime_breadth(
@@ -1179,6 +1266,8 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
     timeline = [TimelineEvent(**ev) for ev in timeline_raw if isinstance(ev, dict)]
     round_trips_raw = payload.get("round_trips") or []
     round_trips = [RoundTrip(**rt) for rt in round_trips_raw if isinstance(rt, dict)]
+    blocked_outcomes_raw = payload.get("blocked_outcomes") or []
+    blocked_outcomes = [BlockedOutcome(**b) for b in blocked_outcomes_raw if isinstance(b, dict)]
     return DailyReport(
         date=payload["date"],
         mode=payload["mode"],
@@ -1224,6 +1313,7 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
         breadth_mean_change_pct=payload.get("breadth_mean_change_pct"),
         breadth_passed=payload.get("breadth_passed"),
         round_trips=round_trips,
+        blocked_outcomes=blocked_outcomes,
     )
 
 
@@ -1249,6 +1339,7 @@ def with_symbol_name(symbol: str, name: str | None) -> str:
 
 
 __all__ = [
+    "BlockedOutcome",
     "ClosingHolding",
     "DailyReport",
     "LiquidationRecord",

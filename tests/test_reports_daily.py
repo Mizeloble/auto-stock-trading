@@ -11,6 +11,7 @@ import pytest
 from auto_trading.account.balance import AccountSnapshot, Holding
 from auto_trading.notify.state import RunnerStateSnapshot
 from auto_trading.reports.daily import (
+    BlockedOutcome,
     ClosingHolding,
     DailyReport,
     LiquidationRecord,
@@ -529,7 +530,7 @@ def test_save_load_roundtrip_preserves_every_field(tmp_path: Path) -> None:
     등 6개 필드가 빠져, 과매매 진단 지표가 주간 인사이트·대시보드에서 항상
     None/0 으로 떨어졌다. dataclass 동등성으로 향후 필드 추가 누락도 잡는다.
     """
-    from dataclasses import asdict
+    from dataclasses import asdict, replace
 
     report = DailyReport(
         date="2026-06-09",
@@ -593,6 +594,34 @@ def test_save_load_roundtrip_preserves_every_field(tmp_path: Path) -> None:
                 pnl=100.0,
                 pnl_pct=10.0,
                 exit_reason="partial_take",
+                mfe_pct=12.0,
+                mae_pct=-3.0,
+            )
+        ],
+        blocked_outcomes=[
+            BlockedOutcome(
+                symbol="C",
+                name="씨전자",
+                reason="kospi_below_sma",
+                intraday_pct=8.0,
+                day_change_pct=9.0,
+            )
+        ],
+    )
+    # 진입 피처도 포함해 라운드트립 동등성 검증.
+    report = replace(
+        report,
+        buys=[
+            TradeRecord(
+                symbol="A",
+                side="buy",
+                quantity=10,
+                price=100.0,
+                simulated=False,
+                time_kst="09:05",
+                reason="돌파",
+                change_pct_at_entry=3.5,
+                rank_at_entry=7,
             )
         ],
     )
@@ -601,6 +630,9 @@ def test_save_load_roundtrip_preserves_every_field(tmp_path: Path) -> None:
     assert loaded.turnover_ratio == 0.21
     assert loaded.regime == "high_vol"
     assert loaded.round_trips[0].holding_minutes == 90
+    assert loaded.round_trips[0].mfe_pct == 12.0
+    assert loaded.blocked_outcomes[0].intraday_pct == 8.0
+    assert loaded.buys[0].rank_at_entry == 7
 
 
 def test_save_creates_directory(tmp_path: Path) -> None:
@@ -738,6 +770,141 @@ def test_regime_breadth_none_when_logs_absent() -> None:
     assert report.regime is None
     assert report.breadth_passed is None
     assert report.round_trips == []
+
+
+def _write_topcap(tmp_path: Path, date: str, rows: list[dict]) -> None:
+    import json
+
+    lines = [json.dumps(r) for r in rows]
+    (tmp_path / f"topcap-{date}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_snapshot_join_enriches_entry_features_and_mfe_mae(tmp_path: Path) -> None:
+    """topcap 스냅샷 조인으로 매수 진입 피처 + 왕복 MFE/MAE 가 채워진다."""
+    # 스냅샷 ts 는 KST 오프셋. 매수 timestamp 00:05Z → KST 09:05 와 매칭되게 09:xx 로 둔다.
+    _write_topcap(
+        tmp_path,
+        "2026-06-15",
+        [
+            {
+                "ts": "2026-06-15T09:05:00+09:00",
+                "symbol": "A",
+                "price": 100.0,
+                "change_pct": 3.5,
+                "rank": 7,
+            },  # 09:05 진입 근처
+            {
+                "ts": "2026-06-15T09:35:00+09:00",
+                "symbol": "A",
+                "price": 130.0,
+                "change_pct": 30.0,
+                "rank": 4,
+            },  # 보유구간 고점
+            {
+                "ts": "2026-06-15T09:50:00+09:00",
+                "symbol": "A",
+                "price": 90.0,
+                "change_pct": -10.0,
+                "rank": 9,
+            },  # 보유구간 저점
+        ],
+    )
+    events = LogEvents(
+        orders_simulated=[
+            {
+                "symbol": "A",
+                "side": "buy",
+                "qty": 10,
+                "price": 100.0,
+                "timestamp": "2026-06-15T00:05:00Z",
+            },  # → KST 09:05
+            {
+                "symbol": "A",
+                "side": "sell",
+                "qty": 10,
+                "price": 120.0,
+                "guard_reason": "partial_take",
+                "timestamp": "2026-06-15T00:55:00Z",
+            },  # → 09:55
+        ],
+    )
+    report = build_daily_report(
+        date="2026-06-15", events=events, snapshot=None, snapshot_root=tmp_path
+    )
+    # 진입 피처: 09:05 스냅샷(여기 ts 09:05 == 09:05) 근처
+    buy = report.buys[0]
+    assert buy.change_pct_at_entry == 3.5
+    assert buy.rank_at_entry == 7
+    # MFE/MAE: 보유구간(09:05~09:55) 고점130·저점90, 매수가100 기준
+    rt = report.round_trips[0]
+    assert rt.mfe_pct == pytest.approx(30.0)  # (130/100-1)*100
+    assert rt.mae_pct == pytest.approx(-10.0)  # (90/100-1)*100
+
+
+def test_blocked_outcomes_built_from_snapshot(tmp_path: Path) -> None:
+    """차단 종목의 그날 시초→종가·전일대비 움직임이 반사실로 기록된다."""
+    _write_topcap(
+        tmp_path,
+        "2026-06-15",
+        [
+            {
+                "ts": "2026-06-15T00:01:00+09:00",
+                "symbol": "C",
+                "price": 100.0,
+                "change_pct": 1.0,
+                "rank": 50,
+            },
+            {
+                "ts": "2026-06-15T06:30:00+09:00",
+                "symbol": "C",
+                "price": 108.0,
+                "change_pct": 9.0,
+                "rank": 30,
+            },
+        ],
+    )
+    events = LogEvents(
+        discovery={
+            "event": "daytrade.discovery",
+            "chosen": [],
+            "blocked": [["C", "kospi_below_sma"]],
+        },
+        # log_parser 가 discovery names 를 symbol_names 로 흡수하는 흐름을 모사.
+        symbol_names={"C": "씨전자"},
+    )
+    report = build_daily_report(
+        date="2026-06-15", events=events, snapshot=None, snapshot_root=tmp_path
+    )
+    assert len(report.blocked_outcomes) == 1
+    bo = report.blocked_outcomes[0]
+    assert bo.symbol == "C"
+    assert bo.name == "씨전자"
+    assert bo.reason == "kospi_below_sma"
+    assert bo.intraday_pct == pytest.approx(8.0)  # 100 → 108
+    assert bo.day_change_pct == 9.0
+
+
+def test_snapshot_join_absent_file_leaves_none(tmp_path: Path) -> None:
+    """스냅샷 파일 없으면 진입 피처·MFE/MAE·차단결과 모두 None/빈 — 과거 일자 호환."""
+    events = LogEvents(
+        orders_simulated=[
+            {
+                "symbol": "A",
+                "side": "buy",
+                "qty": 10,
+                "price": 100.0,
+                "timestamp": "2026-06-15T00:05:00Z",
+            },
+        ],
+        discovery={"event": "daytrade.discovery", "chosen": [], "blocked": [["C", "x"]]},
+    )
+    report = build_daily_report(
+        date="2026-06-15", events=events, snapshot=None, snapshot_root=tmp_path
+    )
+    assert report.buys[0].change_pct_at_entry is None
+    assert report.buys[0].rank_at_entry is None
+    # 차단 결과 레코드는 만들되 스냅샷 없으니 수치는 None
+    assert report.blocked_outcomes[0].intraday_pct is None
 
 
 def test_pnl_aggregate_when_both_prices_present() -> None:
