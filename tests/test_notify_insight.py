@@ -114,6 +114,81 @@ def test_summarize_aggregates_chosen_freq_and_pnl_stats() -> None:
     assert payload["realized_pnl"]["sum"] == 10.0
 
 
+def test_summarize_aggregates_round_trips_regime_breadth_and_no_trade() -> None:
+    """신규 데이터 기반 집계 — 승률·사유별 성과·국면·시장폭·미진입·반사실."""
+    from auto_trading.reports.daily import BlockedOutcome, RoundTrip
+
+    reports = [
+        _report(
+            "2026-05-01",
+            regime="high_vol",
+            breadth_advancing_pct=0.8,
+            breadth_passed=True,
+            round_trips=[
+                RoundTrip(
+                    symbol="A",
+                    name="에이",
+                    quantity=1,
+                    buy_price=100.0,
+                    sell_price=110.0,
+                    buy_time_kst="09:05",
+                    sell_time_kst="09:35",
+                    holding_minutes=30,
+                    pnl=10.0,
+                    pnl_pct=10.0,
+                    exit_reason="partial_take",
+                ),
+                RoundTrip(
+                    symbol="B",
+                    name="비",
+                    quantity=1,
+                    buy_price=100.0,
+                    sell_price=95.0,
+                    buy_time_kst="10:00",
+                    sell_time_kst="10:10",
+                    holding_minutes=10,
+                    pnl=-5.0,
+                    pnl_pct=-5.0,
+                    exit_reason="stop_loss",
+                ),
+            ],
+        ),
+        _report(
+            "2026-05-02",
+            buys=[],
+            liquidations=[],
+            realized_pnl=None,
+            realized_pnl_pct=None,
+            regime="high_vol",
+            breadth_passed=False,
+            no_trade_reason="시장 폭 게이트 차단",
+            discovery_blocked=[("C", "breadth_low")],
+            blocked_outcomes=[
+                BlockedOutcome(
+                    symbol="C",
+                    name="씨",
+                    reason="breadth_low",
+                    intraday_pct=4.0,
+                    day_change_pct=5.0,
+                ),
+            ],
+        ),
+    ]
+    payload = _summarize_reports(reports)
+    assert payload["regime_days"] == {"high_vol": 2}
+    assert payload["breadth"]["passed_days"] == 1
+    assert payload["breadth"]["blocked_days"] == 1
+    assert payload["no_trade_days"]["count"] == 1
+    rt = payload["round_trips"]
+    assert rt["count"] == 2
+    assert rt["win_rate"] == 0.5  # 1승 1패
+    assert rt["avg_holding_minutes"] == 20.0  # (30+10)/2
+    assert rt["by_exit_reason"]["partial_take"]["avg_pnl_pct"] == 10.0
+    assert rt["by_exit_reason"]["stop_loss"]["avg_pnl_pct"] == -5.0
+    # 차단 종목이 그날 평균 +5% — 게이트 기회비용 신호.
+    assert payload["blocked_outcome_avg_day_change_pct"] == 5.0
+
+
 def test_summarize_zero_days_returns_minimal_payload() -> None:
     payload = _summarize_reports([])
     assert payload == {"days": 0}
