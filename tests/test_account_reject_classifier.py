@@ -33,6 +33,10 @@ from auto_trading.account.reject_classifier import (
         ("해당 종목은 거래정지 상태입니다", "0", RejectCategory.TRADING_HALT),
         ("매매정지 종목", "0", RejectCategory.TRADING_HALT),
         ("정지종목 주문 불가", "0", RejectCategory.TRADING_HALT),
+        # 모의투자 매매제한 — RC4007 (2026-06-16 실측). 메시지·코드 어느 쪽으로도.
+        ("[2000](RC4007:모의투자 매매제한 종목입니다.)", "20", RejectCategory.TRADING_HALT),
+        ("모의투자 매매제한 종목입니다", "0", RejectCategory.TRADING_HALT),
+        ("주문 불가", "RC4007", RejectCategory.TRADING_HALT),
         # VI
         ("VI 발동중 — 신규 주문 차단", "0", RejectCategory.VI_TRIGGERED),
         ("동적VI 발동으로 거래 일시 중단", "0", RejectCategory.VI_TRIGGERED),

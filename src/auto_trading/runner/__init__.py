@@ -31,6 +31,7 @@ from ..account.order_journal import OrderJournal
 from ..account.orders import Order, OrderType, place_order
 from ..account.recovery import find_suspect_orders
 from ..account.reject_classifier import RejectCategory, classify_reject
+from ..account.untradeable import UntradeableStore
 from ..config import Settings, get_settings
 from ..heartbeat import Heartbeat
 from ..kiwoom.rest import KiwoomRestClient
@@ -106,6 +107,10 @@ class PaperRunner:
     # 누적)을 디스크에 보존. 장중 비정상 재시동 시 한도가 희석되지 않게 같은 날짜면 복원.
     # None 이면 비활성 (테스트·기존 호환).
     day_state: DayStateStore | None = None
+    # 2026-06-16 — 종목 단위 거래불가(매매제한·거래정지·무효코드) 이력을 디스크에
+    # 누적. 주입 시 발주 거부가 해당 카테고리면 기록 → 다음 거래일 발굴이 사전 회피.
+    # None 이면 비활성 (테스트·기존 호환).
+    untradeable: UntradeableStore | None = None
     # 29단계 PR10 (#14 2차) — 연속 손절 자동 일시중지. None 이면 비활성.
     # __post_init__ 에서 risk.limits.max_consecutive_losses > 0 면 자동 생성.
     loss_tracker: ConsecutiveLossTracker | None = None
@@ -1035,6 +1040,19 @@ class PaperRunner:
             if skip_seconds > 0:
                 self._skipped_until[order.symbol] = datetime.now(KST) + timedelta(
                     seconds=skip_seconds
+                )
+            # 종목 단위 거래불가(매매제한·거래정지·무효코드)는 다음 거래일 발굴이
+            # 사전 회피하도록 디스크에 누적. 휴장(HOLIDAY)·잔고부족은 종목 탓이
+            # 아니므로 제외 — 시장/계좌 사유라 영속화하면 멀쩡한 종목을 묻는다.
+            if self.untradeable is not None and category in (
+                RejectCategory.TRADING_HALT,
+                RejectCategory.INVALID_SYMBOL,
+            ):
+                self.untradeable.record(
+                    order.symbol,
+                    today=datetime.now(KST).date(),
+                    name=self._name_of(order.symbol) or "",
+                    reason=category.value,
                 )
         # 5/14 회귀 — SELL 발주가 매도가능수량 부족으로 실패하는 케이스는
         # in-flight race(아직 _pending_sells 가 적용 안 된 봉) 가 절대다수.

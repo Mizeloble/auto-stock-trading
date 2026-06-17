@@ -197,3 +197,54 @@ async def test_evaluate_signal_passes_unblocked_symbol() -> None:
     # signal_skipped_reject 로그가 *안* 찍혔다는 간접 확인 — 더 정확히는 risk 까지 도달했다는 것.
     # (실 동작: SmaCrossover 의 BUY 가 risk 를 통과하면 Order, 통과 못하면 None — 양쪽 모두 OK)
     _ = result  # unused
+
+
+# ---- 거래불가 이력 영속 (2026-06-16) -------------------------------------
+
+
+async def test_trading_halt_reject_records_untradeable(tmp_path) -> None:
+    """매매제한(TRADING_HALT) 거부 → untradeable 스토어에 기록(다음날 발굴 회피)."""
+    from auto_trading.account.untradeable import UntradeableStore
+
+    store = UntradeableStore(path=tmp_path / "untradeable.json")
+    r = _runner()
+    r.untradeable = store
+    r._symbol_names["004870"] = "티웨이홀딩스"
+    r.notifier = AsyncMock()
+    order = Order(symbol="004870", side=Side.BUY, quantity=1, order_type=OrderType.MARKET)
+
+    with patch.object(
+        runner_module,
+        "place_order",
+        AsyncMock(side_effect=KiwoomError(code="20", message="모의투자 매매제한 종목입니다")),
+    ):
+        await r._place_and_track(rest=object(), order=order, bar=_bar("004870"), account=_account())  # type: ignore[arg-type]
+
+    from datetime import date
+
+    today = datetime.now(KST).date()
+    assert isinstance(today, date)
+    entry = store.load().get("004870")
+    assert entry is not None
+    assert entry.reason == RejectCategory.TRADING_HALT.value
+    assert entry.name == "티웨이홀딩스"
+
+
+async def test_insufficient_balance_reject_not_recorded(tmp_path) -> None:
+    """잔고부족 등 종목 무관 사유는 영속화하지 않는다(멀쩡한 종목 보호)."""
+    from auto_trading.account.untradeable import UntradeableStore
+
+    store = UntradeableStore(path=tmp_path / "untradeable.json")
+    r = _runner()
+    r.untradeable = store
+    r.notifier = AsyncMock()
+    order = Order(symbol="005930", side=Side.BUY, quantity=1, order_type=OrderType.MARKET)
+
+    with patch.object(
+        runner_module,
+        "place_order",
+        AsyncMock(side_effect=KiwoomError(code="0", message="주문가능금액 부족")),
+    ):
+        await r._place_and_track(rest=object(), order=order, bar=_bar(), account=_account())  # type: ignore[arg-type]
+
+    assert store.load() == {}

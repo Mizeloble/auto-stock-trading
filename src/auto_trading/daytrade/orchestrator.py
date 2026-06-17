@@ -67,6 +67,7 @@ async def discover_and_arm(
     exclude_etf: bool = True,
     breadth_gate_config: DaytradeBreadthGate | None = None,
     avoid_symbols: tuple[str, ...] | list[str] = (),
+    untradeable_symbols: tuple[str, ...] | list[str] = (),
 ) -> DiscoveryResult:
     """발굴 → 게이트 → set_universe 한 번에. 통과 종목 0건이면 set_universe 호출 X.
 
@@ -75,10 +76,23 @@ async def discover_and_arm(
     - strategy_factory 가 None 이면 IntradayMomentum(weight=1/top_n) 균등 분할.
     - exclude_etf=True (기본) 면 거래량 상위에 끼는 인버스 ETF/ETN/SPAC 제외 — 일반
       주식 day-trade 의도와 일치. False 면 키움 거래량 순위 그대로.
+    - **발굴 보강**: 후보를 top_n 보다 넉넉히(pool) 받아, 거래불가 이력
+      (`untradeable_symbols`)·회피(`avoid_symbols`)·지수 게이트 차단을 건너뛰고
+      *다음 순위* 로 top_n 을 채운다. 거래불가 종목이 슬롯을 통째로 낭비하던
+      문제(2026-06-16 004870 매매제한)를 사전에 차단.
 
     어떻게 확인: 단위 테스트가 fake top_volume/index_gate 결과로 chosen/blocked 분기 검증.
     """
-    candidates = await top_volume(rest, top_n=top_n, markets=markets, exclude_etf=exclude_etf)
+    # 거래불가 이력은 후보 풀에서 통째로 제외(슬롯 낭비 방지). avoid 는 아래에서
+    # blocked 로 명시 라벨링하려고 풀에는 남겨 둔다.
+    pool_n = max(top_n * 3, top_n + 7)
+    candidates = await top_volume(
+        rest,
+        top_n=pool_n,
+        markets=markets,
+        exclude_etf=exclude_etf,
+        exclude_symbols=tuple(untradeable_symbols),
+    )
     if not candidates:
         msg = "거래량 상위 후보를 가져오지 못했습니다 — universe 비움."
         log.warning("daytrade.discovery_empty")
@@ -123,6 +137,8 @@ async def discover_and_arm(
     blocked: list[tuple[str, str]] = []
     avoid_set = {s for s in avoid_symbols if s}
     for cand in candidates:
+        if len(chosen) >= top_n:
+            break  # top_n 충족 — 나머지 풀은 미사용(차단 아님).
         if cand.symbol in avoid_set:
             blocked.append((cand.symbol, "avoid_symbols"))
             continue

@@ -8,6 +8,12 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [x] **거래불가 종목 사전 회피 + 발굴 보강** (2026-06-16)
+  - **무엇**: 2026-06-16 로그에서 모의투자 매매제한 종목(004870 티웨이홀딩스)이 발굴에 채택돼 09:10~15:14 매분 주문 거부(RC4007)되며 에러 62건·슬롯 낭비. ① 거절 분류기(`reject_classifier`)에 `"매매제한"`·RC4007 패턴 추가 → `TRADING_HALT`(당일 skip)로 첫 거부 즉시 재시도 차단(62→1). ② 신규 `account/untradeable.py`(`UntradeableStore`, `data/state/untradeable.json`) — 러너가 종목 단위 거부(매매제한·거래정지·무효코드)를 디스크에 누적, within_days(기본 30일) 노화. ③ `top_volume(exclude_symbols=)` + `discover_and_arm` 가 후보를 top_n 보다 넉넉히(pool=max(top_n*3, top_n+7)) 받아 거래불가 이력·avoid·게이트 차단을 건너뛰고 다음 순위로 top_n 을 채움(슬롯 낭비 방지). `delayed_discover` 가 발굴 시 `active_symbols` 로드해 회피.
+  - **왜**: 모의투자 매매제한은 실거래선 정상 거래되는 종목이라 시세/거래량 TR 응답에 사전 플래그가 없음 → "한 번 거부당하면 그날 차단 + 다음날 발굴 제외"가 유일한 견고한 해법. 라이브 러너의 universe 는 장 시작 후 변경 불가(set_universe 가드)라 장중 재발굴 대신 *발굴 시점 보강* 으로 설계(사용자 결정).
+  - **어떻게 확인**: `uv run pytest`(신규 회귀 — 분류기 3·rank exclude·orchestrator top-up·untradeable store 7·runner 기록 2) 1236 통과. `uv run ruff check && uv run mypy src` 통과. 다음 paper-day 거부 발생 시 `data/state/untradeable.json` 생성 + 로그 `daytrade.untradeable_avoided`.
+  - **한계/후속**: "오늘 처음" 거부당한 종목의 빈 슬롯은 그날은 못 메우고 다음날부터 자동 회피(장중 재발굴은 범위 밖). 별건으로 429 rate-limit 재시도 228건(ka20009 시세 폴링)·EOD 청산 리포트 sell_price null 정합성은 미해결.
+
 - [x] **데이터 기반 전략 수립용 일일 로그 필드 확충** (2026-06-15, 3 PR 분할)
   - **무엇**: 일일 리포트가 "결과"만 남기고 "왜 그 결정을 했나=의사결정 맥락"이 빠져 매번 로그 재파싱이 필요하던 문제 해소. **Phase 1**([#143](https://github.com/Mizeloble/auto-stock-trading/pull/143)) 진입 사유·시각·매도 사유(guard 매칭)·왕복 손익(`round_trips`: 보유시간·손익·청산사유)·`regime`·`breadth_*`. **Phase 2**([#144](https://github.com/Mizeloble/auto-stock-trading/pull/144)) 신규 `reports/snapshot_reader.py` 로 topcap 스냅샷 사후 조인 → 진입 등락률·순위·MFE/MAE·차단 기회비용(`blocked_outcomes`). **Phase 3**(이 브랜치) `no_trade_reason`(미진입 사유) + 텔레그램 국면/시장폭 라인·미진입 사유 노출 + 주간 인사이트 LLM 입력에 승률·사유별 성과·국면·반사실 집계.
   - **왜**: `data/reports/*.json` 만 모으면 승률·사유별 성과·보유시간·게이트 기회비용을 바로 분석. 그간 손으로 하던 ledger 반사실 검증을 리포트에 자동 박제. 실데이터: 2026-06-09 삼성전자가 게이트 차단된 날 실제 +8.97%(기회비용 자동 기록).
