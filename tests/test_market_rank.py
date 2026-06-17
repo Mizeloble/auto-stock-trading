@@ -111,6 +111,25 @@ async def test_top_volume_top_n_truncates(settings: Settings) -> None:
     assert chosen[0].volume > chosen[1].volume
 
 
+async def test_top_volume_exclude_symbols_fills_from_next_rank(settings: Settings) -> None:
+    """거래불가 종목을 빼면 단순 절사가 아니라 다음 순위가 슬롯을 메운다."""
+    rows = [
+        {"stk_cd": "111111", "stk_nm": "1등", "trde_qty": "900", "cur_prc": "100"},
+        {"stk_cd": "222222", "stk_nm": "2등", "trde_qty": "800", "cur_prc": "100"},
+        {"stk_cd": "333333", "stk_nm": "3등", "trde_qty": "700", "cur_prc": "100"},
+        {"stk_cd": "444444", "stk_nm": "4등", "trde_qty": "600", "cur_prc": "100"},
+    ]
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_RANK).mock(return_value=httpx.Response(200, json=_rank_payload(rows)))
+        async with KiwoomRestClient(settings=settings) as client:
+            chosen = await top_volume(
+                client, top_n=2, markets=("KOSPI",), exclude_symbols=("222222",)
+            )
+    # 2등이 빠지고 1·3등이 top_n=2 를 채운다 (2등 자리를 3등이 메움).
+    assert [r.symbol for r in chosen] == ["111111", "333333"]
+
+
 async def test_top_volume_one_market_failure_does_not_block_other(settings: Settings) -> None:
     """KOSPI 응답이 깨져도 KOSDAQ 결과만으로 진행되어야 한다."""
     kosdaq_rows = [

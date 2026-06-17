@@ -17,14 +17,16 @@ import asyncio
 import contextlib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 
 import structlog
 from rich.console import Console
 
+from .._common import KST
 from ..account.order_journal import DEFAULT_JOURNAL_PATH, OrderJournal
+from ..account.untradeable import UntradeableStore
 from ..heartbeat import Heartbeat
 from ..kiwoom.rest import KiwoomRestClient
 from ..market.chart import bars_to_dataframe
@@ -263,6 +265,9 @@ def build_paper_day_runner(
         journal=OrderJournal(path=DEFAULT_JOURNAL_PATH),
         # 비정상 재시동 시 일일 한도 기준(baseline·매수대금·BUY 카운트·churn) 복원.
         day_state=DayStateStore(),
+        # 2026-06-16 — 종목 단위 거래불가(매매제한·거래정지·무효코드)를 디스크에
+        # 누적해 다음 거래일 발굴이 사전 회피(delayed_discover 가 같은 파일을 읽음).
+        untradeable=UntradeableStore(),
     )
 
     momentum_tracker: IndexMomentumTracker | None = None
@@ -493,6 +498,14 @@ async def delayed_discover(
     log = structlog.get_logger("daytrade.cli")
     if delay > 0:
         await asyncio.sleep(delay)
+    # 거래불가 이력(매매제한·거래정지 등)을 발굴 사전 회피 목록으로 — 러너가
+    # 거부 시 같은 파일에 누적. within_days 안에 다시 안 걸리면 자동 만료.
+    try:
+        untradeable_symbols = tuple(UntradeableStore().active_symbols(datetime.now(KST).date()))
+    except Exception:
+        untradeable_symbols = ()
+    if untradeable_symbols:
+        log.info("daytrade.untradeable_avoided", symbols=list(untradeable_symbols))
     try:
         async with KiwoomRestClient() as rest:
             result = await discover_and_arm(
@@ -503,6 +516,7 @@ async def delayed_discover(
                 strategy_factory=strategy_factory,
                 breadth_gate_config=breadth_gate_config,
                 avoid_symbols=avoid_symbols,
+                untradeable_symbols=untradeable_symbols,
             )
         console.print(f"[cyan]발굴 결과:[/cyan] {result.note_ko}")
         # 종목명도 함께 — 텔레그램이 코드+이름 ("005930 삼성전자") 으로 표시.

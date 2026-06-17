@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Literal
 
@@ -151,14 +152,20 @@ async def top_volume(
     top_n: int = 3,
     markets: tuple[Market, ...] = ("KOSPI", "KOSDAQ"),
     exclude_etf: bool = True,
+    exclude_symbols: Collection[str] = (),
 ) -> list[RankedSymbol]:
     """KOSPI/KOSDAQ 거래량 상위를 합쳐 거래량 desc 정렬 후 상위 `top_n` 반환.
 
     `exclude_etf=True` (기본) 면 ETF/ETN/SPAC 류 종목을 사전에 제외 — day-trade 의 일반
     주식 매매 의도에 맞게. 반대로 인버스 ETF 도 매매 대상으로 두려면 False.
 
+    `exclude_symbols` 에 든 종목은 순위에서 통째로 빼고 다음 순위가 그 자리를
+    메운다(거래불가 이력·회피 목록 등). 단순 절사가 아니라 *제외 후 top_n* 이라
+    슬롯을 낭비하지 않는다.
+
     필터 후 부족할 일은 거의 없음 — 키움이 시장당 100개를 돌려주므로.
     """
+    avoid = {s for s in exclude_symbols if s}
     merged: list[RankedSymbol] = []
     for market in markets:
         try:
@@ -169,10 +176,13 @@ async def top_volume(
         merged.extend(rows)
 
     excluded: list[tuple[str, str]] = []
-    if exclude_etf:
+    skipped_known = 0
+    if exclude_etf or avoid:
         kept: list[RankedSymbol] = []
         for r in merged:
-            if _is_etf_or_etn(r.name):
+            if r.symbol in avoid:
+                skipped_known += 1
+            elif exclude_etf and _is_etf_or_etn(r.name):
                 excluded.append((r.symbol, r.name))
             else:
                 kept.append(r)
@@ -187,6 +197,7 @@ async def top_volume(
         exclude_etf=exclude_etf,
         chosen=[(r.symbol, r.market, r.volume) for r in chosen],
         excluded_count=len(excluded),
+        skipped_known=skipped_known,
     )
     return chosen
 

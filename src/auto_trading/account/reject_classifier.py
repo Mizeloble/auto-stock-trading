@@ -78,8 +78,17 @@ def classify_reject(message: str, code: str = "") -> RejectClassification:
     if "1902" in rc or "1902" in text or ("종목" in text and ("정보" in text or "없" in text)):
         return _make(RejectCategory.INVALID_SYMBOL)
 
-    # 거래정지/매매정지 — 한국 시장 특이.
-    if "거래정지" in text or "매매정지" in text or "정지종목" in text:
+    # 거래정지/매매정지/매매제한 — 한국 시장 특이.
+    # "매매제한"·RC4007 은 모의투자에서 특정 종목 거래를 막는 케이스(실거래선 정상).
+    # 종목 단위로 당일 거래 불가이므로 거래정지와 동일하게 하루 skip + 발굴 회피.
+    if (
+        "거래정지" in text
+        or "매매정지" in text
+        or "정지종목" in text
+        or "매매제한" in text
+        or "RC4007" in rc  # rc 는 .upper() 된 코드 — 대문자로 비교
+        or "rc4007" in text
+    ):
         return _make(RejectCategory.TRADING_HALT)
 
     # VI(변동성완화장치) 발동 — 동적/정적 둘 다 같은 카테고리. 영문은 단어 경계 필수.

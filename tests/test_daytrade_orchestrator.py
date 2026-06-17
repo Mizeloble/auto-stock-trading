@@ -361,3 +361,63 @@ async def test_breadth_gate_fail_open_when_no_data(monkeypatch) -> None:
     )
 
     assert [c.symbol for c in result.chosen] == ["005930"]
+
+
+# ---- 발굴 보강 (2026-06-16) ----------------------------------------------
+
+
+async def test_discover_fills_top_n_skipping_gate_blocked(monkeypatch) -> None:
+    """게이트 차단 종목을 건너뛰고 다음 순위로 top_n 을 채운다."""
+    runner = _runner()
+    # 1등(KOSPI)은 게이트 차단, 2~4등(KOSDAQ)은 통과. top_n=2.
+    candidates = [
+        RankedSymbol(symbol="005930", market="KOSPI", name="삼성전자", volume=100, price=70000),
+        RankedSymbol(
+            symbol="247540", market="KOSDAQ", name="에코프로비엠", volume=90, price=200000
+        ),
+        RankedSymbol(symbol="086520", market="KOSDAQ", name="에코프로", volume=80, price=80000),
+        RankedSymbol(
+            symbol="091990", market="KOSDAQ", name="셀트리온헬스케어", volume=70, price=50000
+        ),
+    ]
+    monkeypatch.setattr(orch, "top_volume", AsyncMock(return_value=candidates))
+    monkeypatch.setattr(
+        orch,
+        "index_gate",
+        AsyncMock(side_effect=lambda _r, m: _gate(m, above=(m == "KOSDAQ"))),
+    )
+
+    result = await orch.discover_and_arm(rest=object(), runner=runner, top_n=2)  # type: ignore[arg-type]
+
+    # KOSPI 1등이 막혀도 KOSDAQ 2·3등이 슬롯을 메워 정확히 top_n=2.
+    assert [c.symbol for c in result.chosen] == ["247540", "086520"]
+    assert ("005930", "KOSPI_below_sma") in result.blocked
+    # 충족 후 남은 4등은 평가하지 않으므로 blocked 에도 안 들어간다.
+    assert "091990" not in [s for s, _ in result.blocked]
+    assert runner.symbols == ["247540", "086520"]
+
+
+async def test_discover_forwards_untradeable_to_top_volume(monkeypatch) -> None:
+    """untradeable_symbols 가 top_volume(exclude_symbols=) 로 전달돼 풀에서 빠진다."""
+    runner = _runner()
+    tv = AsyncMock(
+        return_value=[
+            RankedSymbol(symbol="247540", market="KOSDAQ", name="에코프로비엠", volume=90, price=1),
+        ]
+    )
+    monkeypatch.setattr(orch, "top_volume", tv)
+    monkeypatch.setattr(
+        orch, "index_gate", AsyncMock(side_effect=lambda _r, m: _gate(m, above=True))
+    )
+
+    await orch.discover_and_arm(
+        rest=object(),  # type: ignore[arg-type]
+        runner=runner,
+        top_n=2,
+        untradeable_symbols=("004870",),
+    )
+
+    kwargs = tv.await_args.kwargs
+    assert "004870" in tuple(kwargs["exclude_symbols"])
+    # 풀은 top_n 보다 넉넉히 요청한다(보강용).
+    assert kwargs["top_n"] > 2
