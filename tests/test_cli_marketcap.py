@@ -107,6 +107,9 @@ def test_snapshot_top200_appends_jsonl(isolated_cwd: Path, monkeypatch: pytest.M
 
     # 가짜 키움 client (with async context manager) — 실제 토큰 발급 안 함.
     class _FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
         async def __aenter__(self):
             return self
 
@@ -188,6 +191,9 @@ def test_snapshot_top200_falls_back_to_yesterday(
     _seed_universe(universe_dir, when=yesterday)
 
     class _FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
         async def __aenter__(self):
             return self
 

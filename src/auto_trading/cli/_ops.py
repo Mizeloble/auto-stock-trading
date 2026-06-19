@@ -620,7 +620,11 @@ def snapshot_top200(
     index_recorder = IndexSnapshotRecorder(path=index_path)
 
     async def _run() -> tuple[int, int]:
-        async with cli.KiwoomRestClient() as client:
+        # 200종목을 10분 윈도우 안에 천천히 스윕 — 기본 0.15s 페이싱은 키움 ka10001
+        # 초당 한도보다 빨라 거의 모든 호출이 429→재시도였다(2026-06-17 관측: 하루
+        # ~7,600회 헛재시도). 매매 루프와 달리 시간 여유가 크므로 0.5s 로 늦춰 버스트
+        # 자체를 없앤다. 200콜 x 0.5s ≈ 100s 로 10분 윈도우에 넉넉.
+        async with cli.KiwoomRestClient(min_request_interval_sec=0.5) as client:
             entries = await recorder.record_round(client, universe)
             indices = await index_recorder.record_round(client)
             return len(entries), len(indices)
