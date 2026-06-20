@@ -147,6 +147,28 @@ def test_note_ko_uses_actual_buys_not_discovery_count() -> None:
     assert "매수 3건" not in report.note_ko
 
 
+def test_reentry_blocked_count_from_signal_rejected() -> None:
+    """매수여력 부족(일 매수대금 한도 소진 등) 거부만 세고, 다른 거부는 제외.
+
+    2026-06-19 — "장 초반 쏠림" 가시화. 개장 웨이브가 한도를 소진하면 오후
+    재진입이 budget too small / quantity 0 로 막힌다. 이를 리포트에 카운트.
+    """
+    events = LogEvents(
+        signal_rejected=[
+            {"symbol": "005930", "reason": "budget too small (6420)"},
+            {"symbol": "010690", "reason": "quantity 0 after sizing"},
+            {"symbol": "100090", "reason": "daily notional limit reached (10,000,000/10,000,000)"},
+            # 매수여력과 무관한 거부 — 세면 안 됨.
+            {"symbol": "000660", "reason": "correlation guard (000660 vs 005930 corr=0.80 >= 0.70)"},
+            {"symbol": "005930", "reason": "daily loss limit hit (-3.20%)"},
+        ],
+    )
+    report = build_daily_report(date="2026-06-17", events=events, snapshot=None)
+    assert report.reentry_blocked_count == 3
+    # snapshot 없는 수동 재생성은 today_notional_used 미가용(None).
+    assert report.today_notional_used is None
+
+
 def test_note_ko_says_discovery_when_buys_empty_but_chosen_present() -> None:
     """2026-05-11 회귀: 발굴 3건 + 매수 0건(kill switch 등) + 청산 1건.
 
@@ -607,6 +629,9 @@ def test_save_load_roundtrip_preserves_every_field(tmp_path: Path) -> None:
                 day_change_pct=9.0,
             )
         ],
+        # 2026-06-19 신규 — 동일 footgun 재발 방지.
+        today_notional_used=9_993_580,
+        reentry_blocked_count=174,
     )
     # 진입 피처도 포함해 라운드트립 동등성 검증.
     report = replace(
@@ -633,6 +658,8 @@ def test_save_load_roundtrip_preserves_every_field(tmp_path: Path) -> None:
     assert loaded.round_trips[0].mfe_pct == 12.0
     assert loaded.blocked_outcomes[0].intraday_pct == 8.0
     assert loaded.buys[0].rank_at_entry == 7
+    assert loaded.today_notional_used == 9_993_580
+    assert loaded.reentry_blocked_count == 174
 
 
 def test_save_creates_directory(tmp_path: Path) -> None:
