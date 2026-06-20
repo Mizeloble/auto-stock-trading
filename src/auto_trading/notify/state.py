@@ -541,6 +541,13 @@ def _daily_summary_section(payload: dict, buys: list, liqs: list) -> list[str]:
     turnover = payload.get("turnover_ratio")
     if turnover is not None:
         summary_parts.append(f"회전 {float(turnover):.1f}배")
+    # "장 초반 쏠림" 가시화 — 개장 웨이브가 일 매수대금 한도를 소진하면 오후 재진입이
+    # 전부 막힌다. 막힌 신호 수 + 소진된 매수대금을 함께 노출해 원인이 보이게.
+    reentry_blocked = int(payload.get("reentry_blocked_count") or 0)
+    if reentry_blocked:
+        used = payload.get("today_notional_used")
+        used_part = f" · 매수대금 {_won(used)} 소진" if used else ""
+        summary_parts.append(f"재진입 차단 {reentry_blocked}건{used_part}")
     if err:
         # 통짜 "에러 N건" 은 진단 불가 → 유형별 분해(0 인 항목은 생략).
         o = int(payload.get("orders_failed_count") or 0)

@@ -221,6 +221,12 @@ class DailyReport:
     blocked_outcomes: list[BlockedOutcome] = field(default_factory=list)
     # 매수 0건인 날의 사유(초보 친화 한국어 1줄). 매수가 있으면 None.
     no_trade_reason: str | None = None
+    # 2026-06-19 — "장 초반 쏠림" 가시화. 개장 웨이브가 일일 매수대금 한도를 소진하면
+    # 오후 재진입 신호가 매수여력 부족(budget too small/quantity 0)으로 전부 막힌다.
+    # today_notional_used: 그날 누적 매수대금(snapshot 가용 시만 — 수동 재생성은 None).
+    # reentry_blocked_count: 매수여력 부족으로 거부된 재진입 신호 수(로그만으로 산출).
+    today_notional_used: int | None = None
+    reentry_blocked_count: int = 0
 
 
 # ---- 빌더 ---------------------------------------------------------------
@@ -248,6 +254,10 @@ def build_daily_report(
     buys, sells, liquidations = _extract_trades(events, names)
     orders_failed_count = len(events.orders_failed)
     liquidations_failed_count = len(events.liquidations_failed)
+    # 매수여력 부족(일 매수대금 한도 소진 등)으로 막힌 재진입 신호 수 — "장 초반 쏠림" 진단용.
+    reentry_blocked_count = sum(
+        1 for ev in events.signal_rejected if _is_buying_power_reject(str(ev.get("reason") or ""))
+    )
     fatal_count = len(events.fatal)
     balance_failure_count = 1 if events.balance_failures > 0 else 0
     error_count = (
@@ -303,6 +313,14 @@ def build_daily_report(
     turnover_ratio = (
         traded_notional / day_start_equity
         if traded_notional is not None and day_start_equity
+        else None
+    )
+    # 그날 누적 매수대금 — 일 매수대금 한도 소진 여부를 사용자가 보게. snapshot 가용 시만.
+    today_notional_used = (
+        round(snapshot.account.today_notional_used)
+        if snapshot is not None
+        and snapshot.account is not None
+        and snapshot.account.today_notional_used > 0
         else None
     )
 
@@ -372,6 +390,21 @@ def build_daily_report(
         round_trips=round_trips,
         blocked_outcomes=blocked_outcomes,
         no_trade_reason=no_trade_reason,
+        today_notional_used=today_notional_used,
+        reentry_blocked_count=reentry_blocked_count,
+    )
+
+
+def _is_buying_power_reject(reason: str) -> bool:
+    """매수여력 부족 계열 거부인지 — 일 매수대금 한도 소진/예산 부족/수량0.
+
+    runner.signal_rejected 의 reason 문자열로 판별. 상관·일손실·거래불가 등 다른
+    거부는 제외(이건 "재진입을 한도가 막았나" 진단용이라 매수여력 계열만 센다).
+    """
+    return (
+        reason.startswith("budget too small")
+        or reason == "quantity 0 after sizing"
+        or reason.startswith("daily notional limit reached")
     )
 
 
@@ -1349,6 +1382,8 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
         round_trips=round_trips,
         blocked_outcomes=blocked_outcomes,
         no_trade_reason=payload.get("no_trade_reason"),
+        today_notional_used=payload.get("today_notional_used"),
+        reentry_blocked_count=int(payload.get("reentry_blocked_count") or 0),
     )
 
 
