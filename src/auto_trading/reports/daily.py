@@ -256,9 +256,7 @@ def build_daily_report(
     liquidations_failed_count = len(events.liquidations_failed)
     # 매수여력 부족(일 매수대금 한도 소진 등)으로 막힌 재진입 신호 수 — "장 초반 쏠림" 진단용.
     reentry_blocked_count = sum(
-        1
-        for ev in events.signal_rejected
-        if _is_buying_power_reject(str(ev.get("reason") or ""))
+        1 for ev in events.signal_rejected if _is_buying_power_reject(str(ev.get("reason") or ""))
     )
     fatal_count = len(events.fatal)
     balance_failure_count = 1 if events.balance_failures > 0 else 0

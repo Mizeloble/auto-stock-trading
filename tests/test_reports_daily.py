@@ -159,7 +159,10 @@ def test_reentry_blocked_count_from_signal_rejected() -> None:
             {"symbol": "010690", "reason": "quantity 0 after sizing"},
             {"symbol": "100090", "reason": "daily notional limit reached (10,000,000/10,000,000)"},
             # 매수여력과 무관한 거부 — 세면 안 됨.
-            {"symbol": "000660", "reason": "correlation guard (000660 vs 005930 corr=0.80 >= 0.70)"},
+            {
+                "symbol": "000660",
+                "reason": "correlation guard (000660 vs 005930 corr=0.80 >= 0.70)",
+            },
             {"symbol": "005930", "reason": "daily loss limit hit (-3.20%)"},
         ],
     )
