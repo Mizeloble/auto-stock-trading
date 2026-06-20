@@ -44,6 +44,9 @@ class TR:
     ORDER_MODIFY = "kt10002"  # 주식 정정주문
     ORDER_CANCEL = "kt10003"  # 주식 취소주문
 
+    # 위험신호 (read-only 로깅용 — probe 2026-06-21 mock 실측 확정)
+    VI_TRIGGERED = "ka10054"  # 변동성완화장치(VI) 발동종목 (path=stkinfo, 필수 12 — market/vi.py)
+
     # 순위 / 지수 (day-trade 발굴·게이트용 — probe 2026-05-03 확정)
     RANK_VOLUME = "ka10030"  # 당일 거래량 상위 (필수: crd_tp 등 — market/rank.py 참고)
     # ka20006 은 "업종현재가" 라 일봉 미지원 — ka20009 "업종일봉조회" 가 정답.
