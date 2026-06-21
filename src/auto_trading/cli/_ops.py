@@ -9,6 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import typer
 from rich.table import Table
@@ -632,6 +633,64 @@ def snapshot_top200(
     ok, idx_ok = asyncio.run(_run())
     cli.console.print(f"[green]✓ 스냅샷 1라운드:[/green] 종목 {ok}/{len(universe)}건 → {out_path}")
     cli.console.print(f"[green]✓ 지수 스냅샷:[/green] {idx_ok}/2건 (KOSPI/KOSDAQ) → {index_path}")
+
+
+@cli.app.command("vi")
+def vi(
+    market: str = typer.Option(
+        "ALL",
+        "--market",
+        help="시장 구분: ALL / KOSPI / KOSDAQ.",
+    ),
+) -> None:
+    """현재 VI(변동성완화장치) 발동 종목 1회 스냅샷 — 위험신호 로깅용.
+
+    무엇/왜:
+    - 키움 `ka10054` 로 지금 VI 가 걸린 종목(급변동으로 거래가 잠시 멈춘 종목)을
+      읽어 표로 보여주고 `market.vi.triggered` 구조화 로그를 남긴다. 매매엔 쓰지 않는
+      read-only 관찰 도구.
+    - 연속 로깅이 필요하면 launchd/cron 으로 이 명령을 주기 호출(예: 장중 5분마다)
+      — `snapshot-top200` 과 동일한 운영 패턴.
+
+    어떻게 확인:
+    - 장중 1회 실행: `uv run auto-trade vi` → 발동 종목 표 + 건수 출력.
+    - 장 마감 후엔 보통 0건(또는 직전 잔여)일 수 있음.
+    """
+    mkt = market.strip().upper()
+    if mkt not in ("ALL", "KOSPI", "KOSDAQ"):
+        cli.console.print("[red]--market 는 ALL / KOSPI / KOSDAQ 중 하나여야 합니다.[/red]")
+        raise typer.Exit(code=1)
+
+    from ..market.vi import Market, ViStock, vi_triggered
+
+    async def _run() -> list[ViStock]:
+        async with cli.KiwoomRestClient() as client:
+            return await vi_triggered(client, market=cast(Market, mkt))
+
+    stocks = asyncio.run(_run())
+    if not stocks:
+        cli.console.print(f"[green]✓ VI 발동 종목 없음[/green] (시장={mkt})")
+        return
+
+    table = Table(title=f"VI 발동 종목 ({mkt}) — {len(stocks)}건")
+    table.add_column("종목", style="cyan")
+    table.add_column("이름")
+    table.add_column("유형")
+    table.add_column("발동가", justify="right")
+    table.add_column("괴리율%", justify="right")
+    table.add_column("해제시각")
+    table.add_column("발동수", justify="right")
+    for s in stocks:
+        table.add_row(
+            s.symbol,
+            s.name,
+            s.kind,
+            f"{s.trigger_price:,}",
+            f"{s.disparity_pct}",
+            s.release_time,
+            str(s.trigger_count),
+        )
+    cli.console.print(table)
 
 
 # ---------------------------------------------------------------------------
