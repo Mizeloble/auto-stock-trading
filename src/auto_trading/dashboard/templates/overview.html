@@ -28,7 +28,7 @@
         <p class="text-xl font-semibold" :class="kpi.cumulative_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'" x-text="formatPnl(kpi.cumulative_pnl)"></p>
       </div>
       <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
-        <p class="text-xs text-slate-400 mb-1">승률 (청산 기준)</p>
+        <p class="text-xs text-slate-400 mb-1">승률 (왕복 기준)</p>
         <p class="text-xl font-semibold text-slate-100" x-text="kpi.win_rate"></p>
         <p class="text-xs text-slate-500 mt-1" x-text="kpi.win_loss_label"></p>
       </div>
@@ -56,7 +56,7 @@
           <tr>
             <th class="py-2 font-medium">날짜</th>
             <th class="py-2 font-medium text-right">매수</th>
-            <th class="py-2 font-medium text-right">청산</th>
+            <th class="py-2 font-medium text-right">왕복</th>
             <th class="py-2 font-medium text-right">실현손익</th>
             <th class="py-2 font-medium text-right">에러</th>
             <th class="py-2 font-medium">메모</th>
@@ -67,7 +67,7 @@
             <tr class="border-b border-slate-800 hover:bg-slate-800/30">
               <td class="py-2"><a class="text-indigo-400 hover:underline" :href="`/daily?date=${row.date}`" x-text="row.date"></a></td>
               <td class="py-2 text-right" x-text="row.buys"></td>
-              <td class="py-2 text-right" x-text="row.liquidations"></td>
+              <td class="py-2 text-right" x-text="row.roundtrips"></td>
               <td class="py-2 text-right" :class="row.pnl == null ? 'text-slate-500' : (row.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400')" x-text="formatPnl(row.pnl)"></td>
               <td class="py-2 text-right" :class="row.errors > 0 ? 'text-amber-400' : 'text-slate-500'" x-text="row.errors"></td>
               <td class="py-2 text-slate-400 truncate max-w-[24rem]" :title="row.note" x-text="row.note"></td>

@@ -36,9 +36,13 @@
       <template x-if="detail">
         <div class="space-y-4">
           <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
-            <div class="flex items-baseline justify-between mb-3">
+            <div class="flex items-baseline justify-between mb-3 gap-2 flex-wrap">
               <h3 class="font-semibold text-lg" x-text="detail.date"></h3>
-              <span class="text-xs px-2 py-0.5 rounded" :class="detail.dry_run ? 'bg-amber-700/40 text-amber-300' : 'bg-emerald-700/40 text-emerald-300'" x-text="(detail.dry_run ? '시뮬' : '실거래') + ' · ' + detail.mode"></span>
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="text-xs px-2 py-0.5 rounded" :class="detail.dry_run ? 'bg-amber-700/40 text-amber-300' : 'bg-emerald-700/40 text-emerald-300'" x-text="(detail.dry_run ? '시뮬' : '실거래') + ' · ' + detail.mode"></span>
+                <span x-show="detail.regime" class="text-xs px-2 py-0.5 rounded bg-slate-700/50 text-slate-300" x-text="'국면 ' + detail.regime"></span>
+                <span x-show="detail.breadth_passed !== null" class="text-xs px-2 py-0.5 rounded" :class="detail.breadth_passed ? 'bg-emerald-700/40 text-emerald-300' : 'bg-rose-700/40 text-rose-300'" x-text="detail.breadth_passed ? '시장폭 통과' : '시장폭 차단'"></span>
+              </div>
             </div>
             <p class="text-slate-300 mb-3" x-text="detail.note_ko"></p>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -60,6 +64,12 @@
               <div class="bg-slate-950/50 rounded p-3">
                 <p class="text-xs text-slate-400">에러</p>
                 <p class="text-lg font-semibold" :class="detail.error_count > 0 ? 'text-amber-400' : 'text-slate-300'" x-text="detail.error_count"></p>
+                <p class="text-xs text-slate-500 mt-0.5 leading-snug" x-show="detail.error_count > 0">
+                  <span x-show="detail.orders_failed_count" x-text="`주문실패 ${detail.orders_failed_count} `"></span>
+                  <span x-show="detail.liquidations_failed_count" x-text="`청산실패 ${detail.liquidations_failed_count} `"></span>
+                  <span x-show="detail.balance_failure_count" x-text="`잔고조회실패 ${detail.balance_failure_count} `"></span>
+                  <span x-show="detail.fatal_count" class="text-rose-400" x-text="`치명 ${detail.fatal_count}`"></span>
+                </p>
               </div>
             </div>
           </div>
@@ -108,6 +118,78 @@
             </div>
           </div>
 
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4" x-show="(detail.round_trips||[]).length > 0">
+            <div class="flex items-baseline justify-between mb-2">
+              <h4 class="font-semibold text-sm text-slate-300">종목 왕복 <span class="text-slate-500" x-text="`(${(detail.round_trips||[]).length})`"></span></h4>
+              <p class="text-xs text-slate-400">
+                <span class="text-emerald-400" x-text="`${tripSummary().wins}승`"></span>
+                <span class="text-rose-400" x-text="`${tripSummary().losses}패`"></span>
+                · 승률 <span class="text-slate-200" x-text="tripSummary().rate"></span>
+              </p>
+            </div>
+            <table class="w-full text-xs">
+              <thead class="text-slate-500 border-b border-slate-800">
+                <tr>
+                  <th class="py-1 text-left">종목</th>
+                  <th class="py-1 text-right">보유</th>
+                  <th class="py-1 text-right">매수→매도</th>
+                  <th class="py-1 text-right">손익</th>
+                  <th class="py-1 text-left pl-3">사유</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="(t, i) in detail.round_trips" :key="t.symbol+'-'+t.sell_time_kst+'-'+i">
+                  <tr class="border-b border-slate-800/50">
+                    <td class="py-1" x-text="(t.name || '') + ' (' + t.symbol + ')'"></td>
+                    <td class="py-1 text-right text-slate-400" x-text="formatHold(t.holding_minutes)"></td>
+                    <td class="py-1 text-right text-slate-400" x-text="`${formatNum(t.buy_price)} → ${formatNum(t.sell_price)}`"></td>
+                    <td class="py-1 text-right" :class="t.pnl == null ? 'text-slate-400' : (t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400')" x-text="formatPnl(t.pnl) + ' (' + formatPct(t.pnl_pct) + ')'"></td>
+                    <td class="py-1 text-left pl-3 text-slate-400" x-text="reasonKo(t.exit_reason)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4" x-show="(detail.timeline||[]).length > 0">
+            <h4 class="font-semibold text-sm text-slate-300 mb-2">시계열</h4>
+            <ul class="space-y-1.5">
+              <template x-for="(ev, i) in detail.timeline" :key="i">
+                <li class="flex gap-3 text-xs">
+                  <span class="text-slate-500 tabular-nums shrink-0 w-12" x-text="ev.time_kst"></span>
+                  <span class="text-slate-300" x-text="ev.text"></span>
+                </li>
+              </template>
+            </ul>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4"
+               x-show="detail.turnover_ratio != null || detail.traded_notional != null || detail.today_notional_used != null || detail.reentry_blocked_count > 0">
+            <h4 class="font-semibold text-sm text-slate-300 mb-2">과매매 · 자금</h4>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div class="bg-slate-950/50 rounded p-3">
+                <p class="text-xs text-slate-400">회전율</p>
+                <p class="text-sm font-semibold text-slate-100" x-text="formatTurnover(detail.turnover_ratio)"></p>
+                <p class="text-[10px] text-slate-500 mt-0.5">거래대금÷시작자본</p>
+              </div>
+              <div class="bg-slate-950/50 rounded p-3">
+                <p class="text-xs text-slate-400">거래대금</p>
+                <p class="text-sm font-semibold text-slate-100" x-text="formatPnl(detail.traded_notional)"></p>
+                <p class="text-[10px] text-slate-500 mt-0.5">매수+매도 합</p>
+              </div>
+              <div class="bg-slate-950/50 rounded p-3">
+                <p class="text-xs text-slate-400">당일 매수대금</p>
+                <p class="text-sm font-semibold text-slate-100" x-text="formatPnl(detail.today_notional_used)"></p>
+                <p class="text-[10px] text-slate-500 mt-0.5">한도 소진 여부</p>
+              </div>
+              <div class="bg-slate-950/50 rounded p-3">
+                <p class="text-xs text-slate-400">재진입 차단</p>
+                <p class="text-sm font-semibold" :class="detail.reentry_blocked_count > 0 ? 'text-amber-400' : 'text-slate-300'" x-text="(detail.reentry_blocked_count || 0) + '건'"></p>
+                <p class="text-[10px] text-slate-500 mt-0.5">매수여력 부족 거부</p>
+              </div>
+            </div>
+          </div>
+
           <div class="bg-slate-900 border border-slate-800 rounded-lg p-4">
             <h4 class="font-semibold text-sm text-slate-300 mb-2">시장 게이트</h4>
             <div class="grid grid-cols-2 gap-3">
@@ -124,6 +206,29 @@
                 <p class="text-slate-500 text-xs">기록 없음.</p>
               </template>
             </div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-lg p-4" x-show="(detail.blocked_outcomes||[]).length > 0">
+            <h4 class="font-semibold text-sm text-slate-300 mb-1">게이트가 막은 종목 <span class="text-slate-500" x-text="`(${(detail.blocked_outcomes||[]).length})`"></span></h4>
+            <p class="text-[10px] text-slate-500 mb-2">막은 게 이득이었는지 확인 — 그날 등락률(소형주는 데이터 없어 — 로 표시)</p>
+            <table class="w-full text-xs">
+              <thead class="text-slate-500 border-b border-slate-800">
+                <tr>
+                  <th class="py-1 text-left">종목</th>
+                  <th class="py-1 text-left">차단 사유</th>
+                  <th class="py-1 text-right">당일 등락률</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="(b, i) in detail.blocked_outcomes" :key="b.symbol+'-'+i">
+                  <tr class="border-b border-slate-800/50">
+                    <td class="py-1" x-text="(b.name || '') + ' (' + b.symbol + ')'"></td>
+                    <td class="py-1 text-slate-400" x-text="reasonKo(b.reason)"></td>
+                    <td class="py-1 text-right" :class="b.day_change_pct == null ? 'text-slate-500' : (b.day_change_pct >= 0 ? 'text-emerald-400' : 'text-rose-400')" x-text="formatPct(b.day_change_pct)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
           </div>
 
           <div class="bg-slate-900 border border-slate-800 rounded-lg p-4" x-show="(detail.closing_holdings||[]).length > 0">
