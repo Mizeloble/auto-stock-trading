@@ -35,6 +35,43 @@ function liquidationPnl(li) {
   return (li.sell_price - li.buy_price) * li.quantity;
 }
 
+// 청산/진입 사유 코드 → 초보 친화 한국어. 모르는 코드는 원문 그대로.
+const REASON_KO = {
+  partial_take: "부분 익절",
+  trailing: "트레일링 청산",
+  stop_loss: "손절",
+  take_profit: "익절",
+  eod: "마감 청산",
+  eod_liquidation: "마감 청산",
+  time_exit: "시간 청산",
+  index_momentum_daytrade_entry: "지수 모멘텀 진입",
+};
+function reasonKo(code) {
+  if (!code) return "—";
+  if (REASON_KO[code]) return REASON_KO[code];
+  // 차단 사유 패턴(시장 게이트·발굴 필터) — 동적 시장명이 붙어 표로 못 만든다.
+  if (code.endsWith("_below_sma")) return `${code.replace("_below_sma", "")} 추세 이탈(이동평균 아래)`;
+  if (code.startsWith("breadth_")) return "시장폭 미달";
+  if (code === "avoid_symbols") return "회피 종목";
+  if (code === "daily_notional_limit") return "일일 매수대금 한도 소진";
+  return code;
+}
+
+// 보유시간(분) → "2분" / "1시간 5분".
+function formatHold(mins) {
+  if (mins == null || Number.isNaN(mins)) return "—";
+  if (mins < 60) return `${mins}분`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h}시간 ${m}분` : `${h}시간`;
+}
+
+// 회전율(거래대금÷시작자본)을 "0.41배 (41%)" 로.
+function formatTurnover(v) {
+  if (v == null || Number.isNaN(v)) return "—";
+  return `${v.toFixed(2)}배 (${(v * 100).toFixed(0)}%)`;
+}
+
 let equityChartInstance = null;
 let backtestEquityChart = null;
 let backtestSymbolChart = null;
@@ -68,30 +105,32 @@ function overviewPage() {
           const payload = await api(`/api/daily/${d}`);
           if (!payload) continue;
           const buys = (payload.buys || []).length;
-          const liqs = (payload.liquidations || []).length;
+          const tripCount = (payload.round_trips || []).length;
           const pnl = payload.realized_pnl_after_cost ?? payload.realized_pnl ?? null;
           recent.push({
             date: d,
             buys,
-            liquidations: liqs,
+            roundtrips: tripCount,
             pnl,
             errors: payload.error_count || 0,
             note: payload.note_ko || "",
           });
-          totalTrades += buys + liqs;
+          // 왕복(round_trips)이 매수↔매도/청산을 짝지은 단위 — day-trade 는 liquidations 가
+          // 비어 있어 청산표 기준 승률이 항상 "—" 였다. round_trips 로 승/패를 센다.
+          const trips = payload.round_trips || [];
+          totalTrades += buys + trips.length;
           errors += payload.error_count || 0;
-          for (const li of payload.liquidations || []) {
-            const p = liquidationPnl(li);
-            if (p == null) continue;
-            if (p > 0) wins++;
-            else if (p < 0) losses++;
+          for (const rt of trips) {
+            if (rt.pnl == null) continue;
+            if (rt.pnl > 0) wins++;
+            else if (rt.pnl < 0) losses++;
           }
         }
         const wlTotal = wins + losses;
         this.kpi = {
           cumulative_pnl: equity[equity.length - 1].cumulative_pnl,
           win_rate: wlTotal > 0 ? `${((wins / wlTotal) * 100).toFixed(1)}%` : "—",
-          win_loss_label: wlTotal > 0 ? `${wins}승 ${losses}패` : "청산 기록 없음",
+          win_loss_label: wlTotal > 0 ? `${wins}승 ${losses}패` : "왕복 기록 없음",
           total_trades: totalTrades,
           errors,
         };
@@ -181,6 +220,27 @@ function dailyPage() {
     formatPct,
     formatNum,
     liquidationPnl,
+    reasonKo,
+    formatHold,
+    formatTurnover,
+    // 왕복(round_trips) 승/패 요약 — day-trade 성과의 핵심.
+    tripSummary() {
+      const trips = this.detail?.round_trips || [];
+      let wins = 0;
+      let losses = 0;
+      for (const t of trips) {
+        if (t.pnl == null) continue;
+        if (t.pnl > 0) wins++;
+        else if (t.pnl < 0) losses++;
+      }
+      const total = wins + losses;
+      return {
+        wins,
+        losses,
+        count: trips.length,
+        rate: total > 0 ? `${((wins / total) * 100).toFixed(0)}%` : "—",
+      };
+    },
     async load() {
       try {
         const data = await api("/api/daily");
