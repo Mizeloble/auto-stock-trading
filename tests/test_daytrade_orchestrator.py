@@ -421,3 +421,75 @@ async def test_discover_forwards_untradeable_to_top_volume(monkeypatch) -> None:
     assert "004870" in tuple(kwargs["exclude_symbols"])
     # 풀은 top_n 보다 넉넉히 요청한다(보강용).
     assert kwargs["top_n"] > 2
+
+
+# --- _read_settled_breadth: 개장 라운드 완성 대기 -----------------------------
+
+
+def _fake_compute(sizes: list[int]):
+    """compute_breadth 대역. 호출 순서대로 sizes 의 줄 수를 돌려주되,
+    실제 compute_breadth 처럼 min_sample 컷오프를 적용. 소진 후엔 마지막 값 유지."""
+    seq = list(sizes)
+    state = {"i": 0}
+
+    def _f(_snapshot_dir, *, when=None, min_sample: int = 0):
+        i = state["i"]
+        n = seq[i] if i < len(seq) else seq[-1]
+        state["i"] = i + 1
+        if n == 0:
+            return orch.Breadth.unavailable_instance("no_round")
+        if min_sample > 0 and n < min_sample:
+            return orch.Breadth.unavailable_instance(f"incomplete:{n}")
+        return orch.Breadth(
+            ts="X",
+            sample_size=n,
+            advancing_pct=0.6,
+            declining_pct=0.4,
+            mean_change_pct=1.0,
+        )
+
+    return _f
+
+
+async def test_settled_breadth_returns_immediately_when_round_complete(monkeypatch) -> None:
+    monkeypatch.setattr(orch, "compute_breadth", _fake_compute([200]))
+    sleep = AsyncMock()
+    monkeypatch.setattr(orch.asyncio, "sleep", sleep)
+
+    b = await orch._read_settled_breadth(
+        object(),  # type: ignore[arg-type]
+        min_sample=180,
+        timeout_sec=90,
+    )
+    assert b.unavailable is False
+    assert b.sample_size == 200
+    sleep.assert_not_awaited()  # 이미 완성 → 대기 없음
+
+
+async def test_settled_breadth_waits_until_round_stops_growing(monkeypatch) -> None:
+    # 112(미완성) → 폴링 중 200 으로 커졌다가 200 으로 안정 → 채택.
+    monkeypatch.setattr(orch, "compute_breadth", _fake_compute([112, 112, 200, 200]))
+    monkeypatch.setattr(orch.asyncio, "sleep", AsyncMock())
+
+    b = await orch._read_settled_breadth(
+        object(),  # type: ignore[arg-type]
+        min_sample=180,
+        timeout_sec=90,
+        poll_sec=5.0,
+    )
+    assert b.unavailable is False
+    assert b.sample_size == 200
+
+
+async def test_settled_breadth_fail_open_on_timeout(monkeypatch) -> None:
+    # 끝까지 112 에 머물면(미완성) 타임아웃 → unavailable 로 fail-open.
+    monkeypatch.setattr(orch, "compute_breadth", _fake_compute([112]))
+    monkeypatch.setattr(orch.asyncio, "sleep", AsyncMock())
+
+    b = await orch._read_settled_breadth(
+        object(),  # type: ignore[arg-type]
+        min_sample=180,
+        timeout_sec=10,
+        poll_sec=5.0,
+    )
+    assert b.unavailable is True

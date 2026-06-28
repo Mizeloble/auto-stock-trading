@@ -53,6 +53,11 @@ breadth_gate:
   min_advancing_pct: 0.5
   min_mean_change_pct: 0.0
   snapshot_dir: data/snapshots
+  # 개장 스냅샷이 시총 1→200위 순서로 채워지는 도중 읽으면 대형주만 표본에 잡혀
+  # 시장 폭이 편향됨. 최소 이만큼 모이고 줄 수가 안정될 때까지(최대 settle_timeout_sec)
+  # 기다렸다 판단. 못 모으면 게이트 통과(fail-open).
+  min_sample: 180
+  settle_timeout_sec: 90
 avoid_symbols:
   - '356680'
 notes: |
