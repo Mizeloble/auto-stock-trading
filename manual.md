@@ -126,7 +126,9 @@ day-trade(`paper-day`) 가 메인 운영, swing(`paper`) 은 학습·단일 종�
 09:00      paper-day 시동 → 텔레그램 시작 푸시
 09:00:30   거래량 상위 N종목 발굴 (KOSPI+KOSDAQ 통합)
            → ETF/ETN/SPAC 자동 제외 (인버스 ETF 가 거래량 상위 자주 점령)
+           → 거래불가 이력 종목 제외 (전날까지 매매제한·거래정지로 거부당한 종목)
            → 종목 소속 시장(KOSPI/KOSDAQ) 5/20일선 게이트 통과 종목만
+           → 후보를 top_n 보다 넉넉히 받아 차단분을 다음 순위로 메움 (슬롯 낭비 방지)
 09:00~     첫 봉에 균등 분할 매수 (weight=1/N, 리스크 매니저가 종목당 20% 캡)
 15:15      보유 전부 시장가 매도 → graceful 종료
            → 텔레그램 청산 완료 + 종료 푸시
@@ -153,6 +155,7 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 |---|---|
 | `runner.awaiting_universe` | 발굴 대기 중. 09:00:30 까지 기다림. |
 | `market.rank.top_volume excluded_count=N` | 거래량 상위에서 ETF/ETN/SPAC N개 자동 제외됨. |
+| `daytrade.untradeable_avoided` | 거래불가 이력(매매제한·거래정지) 종목을 발굴 단계에서 회피함. |
 | `market.index.gate above=true/false` | 시장 5/20일선 게이트 결과. False 면 그 시장 종목 매수 차단. |
 | `daytrade.universe_chosen symbols=[...]` | 게이트 통과해 매수 대상이 된 종목들. |
 | `runner.order_simulated side=buy ...` | dry-run 매수 시뮬 (×N). |
@@ -173,6 +176,8 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 - **모든 후보가 게이트 차단**: 약세장(시장 5/20일선 아래) 이라 보호 차원. **매수 0** + 즉시 종료. 정상.
 - **발굴 결과 0건**: 키움 응답 이상 — 로그 `daytrade.discovery_failed` 확인.
 - 예: KOSPI/KOSDAQ 둘 다 5일선 아래면 후보 전부 차단 → 매수 없이 종료.
+
+> **거래불가 종목 자동 회피** — 모의투자에선 매매제한·거래정지 종목이 시세/거래량 응답엔 정상으로 보여 발굴에 뽑힐 수 있습니다. 주문이 한 번 거부(RC4007 등)되면 그날은 즉시 재시도를 차단하고, 종목 단위로 `data/state/untradeable.json` 에 기록해 **다음 발굴부터 자동 제외**합니다(30일 노화). "오늘 처음" 거부당한 종목의 빈 슬롯은 그날은 못 메우고 다음날부터 회피됩니다.
 
 ### 정통 데이트레이딩 풀 패키지 — `--profile`
 
@@ -496,8 +501,9 @@ launchd 는 평일 08:55 만 보고 시동하지만, 한국 법정공휴일·임
 | 명령 | 무엇 | 언제 쓰나 |
 |---|---|---|
 | `auto-trade ops` | launchd 자동 잡 8종의 마지막 실행 시각·종료 코드 표 | "어제 cron 이 제대로 돌았나?" 한눈에 확인 (§12) |
-| `auto-trade dashboard` | 투자 결과 분석 웹 (FastAPI, 로컬 전용). `--host/--port` 옵션 | 며칠 운영 후 자산곡선·일별 상세를 브라우저로 보고 싶을 때 |
+| `auto-trade dashboard` | 투자 결과 분석 웹 (FastAPI, 로컬 전용). `--host/--port` 옵션. 일별 상세 페이지에 왕복 손익·체결 시계열·과매매(회전율)·게이트 차단 기회비용 시각화 | 며칠 운영 후 자산곡선·일별 상세를 브라우저로 보고 싶을 때 |
 | `auto-trade detect-regime` | 현재 시장국면(추세상승/추세하락/박스/고변동성) 분류 | 어떤 day-trade 프로파일이 어울릴지 감 잡을 때 |
+| `auto-trade vi` | 현재 VI(변동성완화장치) 발동 종목 1회 스냅샷. `--market ALL/KOSPI/KOSDAQ`. 매매엔 안 쓰는 read-only 위험신호 로깅(`market.vi.triggered`) | 장중 급변동으로 거래가 잠시 멈춘 종목을 관찰·로깅하고 싶을 때 (cron 으로 주기 호출도 가능) |
 | `auto-trade heartbeat-check` | 봇 heartbeat 누락 검사 (cron 5분 간격 가정) | launchd 가 자동 호출. 수동으로 생존 확인할 때 |
 | `auto-trade latency` | 주문 송신 지연 일별 통계 (p50/p95/p99) | 주문이 느리게 나가는 게 의심될 때 |
 | `auto-trade orders inspect` | 주문 저널 진단·복구 (`--suspect-only`, `--tail`) | preflight 의 미해결 주문 게이트가 실패했을 때 무엇이 미해결인지 확인 |
@@ -561,12 +567,12 @@ auto-stock-trading/
     ├── heartbeat.py       ← 봇 생존 신호 (dead-man switch)
     ├── preflight.py       ← 실거래 전환 전 안전 게이트
     ├── kiwoom/            ← 키움 API 클라이언트
-    ├── market/            ← 시세·거래량 순위·지수 일봉·휴장일
-    ├── account/           ← 잔고·주문·저널·복구
+    ├── market/            ← 시세·거래량 순위·지수 일봉·휴장일·시총200·breadth·VI
+    ├── account/           ← 잔고·주문·저널·복구·거래불가 종목(untradeable)
     ├── strategy/          ← 전략 + 추천 + Claude 조언
     ├── daytrade/          ← day-trade 발굴·게이트·universe 오케스트레이터
     ├── backtest/          ← 백테스트 엔진
-    ├── reports/           ← 일일·주간 리포트
+    ├── reports/           ← 일일·주간 리포트 (daily/ 패키지 + snapshot_reader)
     ├── llm/               ← Claude API 호출 래퍼·비용 추적
     ├── news/              ← 뉴스 수집·LLM 프로파일 갱신
     ├── shadow/            ← 섀도우(미체결 가정) 추적

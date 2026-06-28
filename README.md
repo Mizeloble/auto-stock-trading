@@ -39,6 +39,7 @@ uv run auto-trade detect-regime                # 시장국면 진단
 uv run auto-trade orders inspect               # 주문 저널 진단
 uv run auto-trade heartbeat-check              # 러너 생존(heartbeat) 점검
 uv run auto-trade latency --days 7             # 신호→주문 지연 통계
+uv run auto-trade vi                           # VI(변동성완화장치) 발동종목 1회 스냅샷 (read-only)
 
 # 시총 200 breadth 인프라 (평일 launchd 자동 — 수동 호출은 디버그용)
 uv run auto-trade build-marketcap-universe     # 시총 상위 200 마스터 갱신 (08:50)
@@ -73,6 +74,7 @@ uv run auto-trade strategy advise …            # (LLM) 프로파일 조정
 
 - 기본 `KIWOOM_MODE=mock`. 실거래 전환은 `KIWOOM_MODE=real` + `--allow-real` 둘 다 + 사용자 명시 승인 후에만.
 - 모든 주문 경로에 리스크 한도 강제(종목 20% / 포트폴리오 80% / 일일 손실 3% + stop/트레일링/부분익절/kill switch). 회전율 가드로 종목당 일일 매수 횟수도 제한 가능.
+- 거래불가 종목 자동 회피 — 모의투자 매매제한·거래정지 등으로 한 번 거부당한 종목은 그날 즉시 재시도 차단 + 다음 발굴부터 제외(`data/state/untradeable.json`, 30일 노화). 발굴은 후보를 넉넉히 받아 차단분을 다음 순위로 메움(슬롯 낭비 방지).
 - (선택·기본 OFF) 시장국면 자동 라우팅(KODEX 200) · 시총 200 breadth 게이트 · 회피 종목 목록 — 약세장·과매매에서 매수 자체를 줄이는 추가 게이트(§7).
 - LLM 호출은 사람 명시 트리거 또는 합의된 주 1회 cron 만 (월 상한 $5). 매일·매시간 금지.
 - `paper-day` / `paper` 모두 `--dry-run` 기본. 시크릿은 git 제외 + 로그 마스킹.
