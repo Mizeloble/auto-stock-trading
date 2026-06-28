@@ -101,16 +101,24 @@ def compute_breadth(
     out_dir: Path,
     *,
     when: date | None = None,
+    min_sample: int = 0,
 ) -> Breadth:
     """`out_dir/topcap-YYYY-MM-DD.jsonl` 의 마지막 라운드 → Breadth.
 
     `when` 미지정 시 오늘. 오늘 파일이 없으면 unavailable 반환.
+
+    `min_sample` > 0 이면, 마지막 라운드 줄 수가 그보다 적을 때
+    *아직 작성 중인 미완성 라운드*로 보고 unavailable 반환 — 스냅샷 잡이
+    개장 라운드(시총 1→200위 순서)를 다 쓰기 전에 읽으면 시총 상위만 표본에
+    잡혀 시장 폭이 대형주로 편향되기 때문 (읽기-쓰기 경합 방지).
     """
     target_day = when or datetime.now(tz=KST).date()
     path = snapshot_path_for(out_dir, when=target_day)
     rows = _load_latest_round(path)
     if not rows:
         return Breadth.unavailable_instance(f"no_round_in:{path.name}")
+    if min_sample > 0 and len(rows) < min_sample:
+        return Breadth.unavailable_instance(f"incomplete_round:{len(rows)}/{min_sample}")
 
     total = len(rows)
     up = sum(1 for r in rows if float(r.get("change_pct", 0) or 0) > 0)

@@ -15,11 +15,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import structlog
 
 from ..kiwoom.rest import KiwoomRestClient
-from ..market.breadth import compute_breadth, evaluate_breadth_gate
+from ..market.breadth import Breadth, compute_breadth, evaluate_breadth_gate
 from ..market.index import IndexGate, IndexMomentumTracker, index_gate, update_index_momentum
 from ..market.rank import Market, RankedSymbol, top_volume
 from ..runner import PaperRunner
@@ -55,6 +56,48 @@ def _default_strategy_factory(weight: float) -> Callable[..., Strategy]:
         return IntradayMomentum(weight=weight)
 
     return _factory
+
+
+async def _read_settled_breadth(
+    snapshot_dir: Path,
+    *,
+    min_sample: int,
+    timeout_sec: int,
+    poll_sec: float = 5.0,
+) -> Breadth:
+    """스냅샷 라운드가 다 채워질 때까지 기다렸다 breadth 측정.
+
+    무엇/왜: 스냅샷 잡은 개장 라운드를 시총 1→200위 순서로 한 줄씩 append 하므로,
+    작성 도중 읽으면 시총 상위만 표본에 잡혀 시장 폭이 대형주로 편향된다.
+    표본 수가 **두 번 연속 같으면**(=작성 완료) 채택 — 그날 유니버스가 200 미만이어도
+    자동 대응. `timeout_sec` 안에 `min_sample` 도 못 채우면 마지막 측정을 그대로 반환
+    (대개 unavailable → 호출자 fail-open).
+
+    market/ 규칙(읽기 전용·sleep 없음)을 지키려 대기 루프는 여기(daytrade)에 둔다.
+    """
+    breadth = compute_breadth(snapshot_dir, min_sample=min_sample)
+    if not breadth.unavailable or timeout_sec <= 0:
+        return breadth
+
+    # 안정 여부는 min_sample 컷오프 없이 원시 줄 수로 판단해야 정확하다.
+    prev_sample = compute_breadth(snapshot_dir).sample_size
+    waited = 0.0
+    while waited < timeout_sec:
+        await asyncio.sleep(poll_sec)
+        waited += poll_sec
+        raw = compute_breadth(snapshot_dir)
+        if raw.sample_size >= min_sample and raw.sample_size == prev_sample:
+            log.info("market.breadth.settled", sample=raw.sample_size, waited=waited)
+            return raw
+        prev_sample = raw.sample_size
+
+    log.warning(
+        "market.breadth.settle_timeout",
+        sample=prev_sample,
+        min_sample=min_sample,
+        waited=waited,
+    )
+    return compute_breadth(snapshot_dir, min_sample=min_sample)
 
 
 async def discover_and_arm(
@@ -106,9 +149,11 @@ async def discover_and_arm(
 
     # Phase 1 — 시총 200 breadth 게이트. enabled=False (기본) 면 skip → 회귀 0.
     if breadth_gate_config is not None and breadth_gate_config.enabled:
-        from pathlib import Path
-
-        breadth = compute_breadth(Path(breadth_gate_config.snapshot_dir))
+        breadth = await _read_settled_breadth(
+            Path(breadth_gate_config.snapshot_dir),
+            min_sample=breadth_gate_config.min_sample,
+            timeout_sec=breadth_gate_config.settle_timeout_sec,
+        )
         result = evaluate_breadth_gate(
             breadth,
             min_advancing_pct=breadth_gate_config.min_advancing_pct,

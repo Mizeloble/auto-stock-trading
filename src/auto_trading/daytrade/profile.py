@@ -63,6 +63,11 @@ class DaytradeBreadthGate(BaseModel):
     min_advancing_pct: float = Field(default=0.5, ge=0.0, le=1.0)
     min_mean_change_pct: float = Field(default=0.0, ge=-10.0, le=10.0)
     snapshot_dir: str = "data/snapshots"
+    # 개장 라운드가 다 채워질 때까지 대기 — 스냅샷 잡이 시총 1→200위 순서로 쓰는데,
+    # 다 쓰기 전에 읽으면 상위 대형주만 표본에 잡혀 시장 폭이 편향됨. 최소 이만큼
+    # 모여야(또는 줄 수가 안정되어야) 판단하고, 못 모으면 fail-open(게이트 통과).
+    min_sample: int = Field(default=180, ge=0)
+    settle_timeout_sec: int = Field(default=90, ge=0)
 
 
 class DaytradeRiskLimits(BaseModel):

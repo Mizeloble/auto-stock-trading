@@ -73,6 +73,28 @@ def test_compute_breadth_skips_corrupt_lines(tmp_path: Path) -> None:
     assert b.advancing_pct == 0.5
 
 
+def test_compute_breadth_unavailable_when_round_below_min_sample(tmp_path: Path) -> None:
+    """min_sample 미만(=작성 중 미완성 라운드)이면 unavailable 로 막아 fail-open."""
+    path = tmp_path / "topcap-2026-05-20.jsonl"
+    rows = _round("2026-05-20T09:00:00+09:00", [("A", 1.0), ("B", 2.0), ("C", -1.0)])
+    _write_jsonl(path, rows)
+
+    b = bd.compute_breadth(tmp_path, when=date(2026, 5, 20), min_sample=10)
+    assert b.unavailable is True
+    assert b.sample_size == 0
+
+
+def test_compute_breadth_available_when_round_meets_min_sample(tmp_path: Path) -> None:
+    """줄 수가 min_sample 이상이면 정상 계산."""
+    path = tmp_path / "topcap-2026-05-20.jsonl"
+    rows = _round("2026-05-20T09:10:00+09:00", [("A", 1.0), ("B", 2.0), ("C", -1.0)])
+    _write_jsonl(path, rows)
+
+    b = bd.compute_breadth(tmp_path, when=date(2026, 5, 20), min_sample=3)
+    assert b.unavailable is False
+    assert b.sample_size == 3
+
+
 def test_gate_passes_when_both_thresholds_met() -> None:
     breadth = bd.Breadth(
         ts="X",
