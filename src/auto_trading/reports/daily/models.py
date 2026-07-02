@@ -118,7 +118,7 @@ class TimelineEvent:
 
     time_kst: str  # "HH:MM" KST. 로그가 UTC ISO 8601 라 빌더가 변환.
     # "discovery" | "buy" | "sell" | "partial_take" | "stop_loss" | "trailing"
-    # | "kill_switch" | "liquidate"
+    # | "kill_switch" | "liquidate" | "daily_loss_block"
     kind: str
     text: str  # 한국어 한 줄 — 종목·수량·가격·비율 등 포함
 
@@ -207,3 +207,9 @@ class DailyReport:
     # reentry_blocked_count: 매수여력 부족으로 거부된 재진입 신호 수(로그만으로 산출).
     today_notional_used: int | None = None
     reentry_blocked_count: int = 0
+    # 2026-07-01 — churn 브레이크(일일 실현손실 한도) 발동 가시화. 발동하면 그날 남은
+    # 시간 신규 매수 신호가 전부 차단되는데(SELL 은 영향 없음) 리포트에 흔적이 없었다.
+    # reentry_blocked_count(매수여력 부족)와는 별개 카운트 — 차단 사유가 다르다.
+    # count = 차단된 매수 신호 수, first_time = 최초 발동 시각(KST "HH:MM").
+    daily_loss_blocked_count: int = 0
+    daily_loss_blocked_first_time: str | None = None

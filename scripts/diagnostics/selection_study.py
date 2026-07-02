@@ -167,9 +167,9 @@ def _evaluate(panel: dict[date, dict[str, DayRow]]) -> dict[str, object]:
 
         baseline = pool[:PICK_K]
         # improved: 같은 풀을 (추세점수 desc, 거래량 desc)로 재정렬
-        improved = sorted(
-            pool, key=lambda kv: (kv[1].trend_score, kv[1].volume), reverse=True
-        )[:PICK_K]
+        improved = sorted(pool, key=lambda kv: (kv[1].trend_score, kv[1].volume), reverse=True)[
+            :PICK_K
+        ]
 
         base_r = statistics.fmean(_open_close_return(r) for _, r in baseline)
         impr_r = statistics.fmean(_open_close_return(r) for _, r in improved)
@@ -225,20 +225,26 @@ def _print_report(
     print("\n" + "=" * 64)
     print("선별 검증: 거래량만(baseline) vs 거래량+추세(improved)")
     print("=" * 64)
-    print(f"바스켓: {len(basket)}종목 | 평가구간: {cutoff} ~ 오늘 | 평가일수: {result['eval_days']}")
+    print(
+        f"바스켓: {len(basket)}종목 | 평가구간: {cutoff} ~ 오늘 | 평가일수: {result['eval_days']}"
+    )
     print(f"풀 P={POOL_P}, 매수 K={PICK_K}, RSI밴드 [{RSI_LO},{RSI_HI}], SMA {SMA_FAST}/{SMA_SLOW}")
     print("-" * 64)
     print(f"{'전략':<22}{'평균일수익%':>12}{'승률%':>10}{'표준편차%':>12}")
-    print(f"{'baseline(거래량만)':<22}{base.mean_pct:>12.4f}{base.win_rate_pct:>10.1f}{base.std_pct:>12.4f}")
-    print(f"{'improved(거래량+추세)':<22}{impr.mean_pct:>12.4f}{impr.win_rate_pct:>10.1f}{impr.std_pct:>12.4f}")
-    print(f"{'pool(풀 전체 평균)':<22}{pool.mean_pct:>12.4f}{pool.win_rate_pct:>10.1f}{pool.std_pct:>12.4f}")
+    print(
+        f"{'baseline(거래량만)':<22}{base.mean_pct:>12.4f}{base.win_rate_pct:>10.1f}{base.std_pct:>12.4f}"
+    )
+    print(
+        f"{'improved(거래량+추세)':<22}{impr.mean_pct:>12.4f}{impr.win_rate_pct:>10.1f}{impr.std_pct:>12.4f}"
+    )
+    print(
+        f"{'pool(풀 전체 평균)':<22}{pool.mean_pct:>12.4f}{pool.win_rate_pct:>10.1f}{pool.std_pct:>12.4f}"
+    )
     print("-" * 64)
     diff = result["paired_mean_diff_pct"]
     t = result["paired_t"]
     print(f"페어드 평균차(improved-baseline): {diff:>+.4f}%/일   t≈{t:>+.2f}")
-    verdict = (
-        "improved 우위 (t≈|2|↑면 주목)" if diff > 0 else "개선 없음/악화 → 구현 보류 근거"
-    )
+    verdict = "improved 우위 (t≈|2|↑면 주목)" if diff > 0 else "개선 없음/악화 → 구현 보류 근거"
     print(f"판정 힌트: {verdict}")
     print("=" * 64)
     print("⚠️ 한계: 시가→종가 근사(장중 진입 무시)·비용 제외·고정 바스켓·생존편향·소표본.")
@@ -281,9 +287,21 @@ def main() -> None:
         ],
         "eval_days": result["eval_days"],
         "results": {
-            "baseline": {"mean_pct": base.mean_pct, "win_rate_pct": base.win_rate_pct, "std_pct": base.std_pct},
-            "improved": {"mean_pct": impr.mean_pct, "win_rate_pct": impr.win_rate_pct, "std_pct": impr.std_pct},
-            "pool": {"mean_pct": pool.mean_pct, "win_rate_pct": pool.win_rate_pct, "std_pct": pool.std_pct},
+            "baseline": {
+                "mean_pct": base.mean_pct,
+                "win_rate_pct": base.win_rate_pct,
+                "std_pct": base.std_pct,
+            },
+            "improved": {
+                "mean_pct": impr.mean_pct,
+                "win_rate_pct": impr.win_rate_pct,
+                "std_pct": impr.std_pct,
+            },
+            "pool": {
+                "mean_pct": pool.mean_pct,
+                "win_rate_pct": pool.win_rate_pct,
+                "std_pct": pool.std_pct,
+            },
         },
         "paired_mean_diff_pct": result["paired_mean_diff_pct"],
         "paired_t": result["paired_t"],

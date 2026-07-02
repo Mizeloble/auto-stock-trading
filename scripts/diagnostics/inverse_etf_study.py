@@ -112,7 +112,9 @@ def _summary(rows: list[DayRow], code: str) -> dict:
     """한 자산의 gated/open 그룹별 평균·승률 요약."""
     out: dict = {"name": ASSETS.get(code, code)}
     for label, want_gated in (("gated", True), ("open", False)):
-        vals = [r.intraday_pct[code] for r in rows if r.gated is want_gated and code in r.intraday_pct]
+        vals = [
+            r.intraday_pct[code] for r in rows if r.gated is want_gated and code in r.intraday_pct
+        ]
         if not vals:
             out[label] = {"n": 0}
             continue
@@ -135,7 +137,7 @@ def _summary(rows: list[DayRow], code: str) -> dict:
 
 def build_rows(years: float) -> list[DayRow]:
     """fdr 로 지수·자산 일봉을 받아 게이트 + 당일 수익률 패널 구성."""
-    import FinanceDataReader as fdr  # noqa: PLC0415  (스크립트 로컬 import)
+    import FinanceDataReader as fdr  # 스크립트 로컬 import — fdr 미설치 환경에서도 --help 는 되게
 
     today = datetime.now(KST).date()
     start = today - timedelta(days=int(365 * years) + 40)  # SMA 워밍업 여유
@@ -205,7 +207,9 @@ def run(years: float) -> dict:
 
 def _print(result: dict) -> None:
     print("\n" + "=" * 72)
-    print(f"약세장 인버스 ETF 검증 — 최근 {result['years']}년, {result['total_trading_days']}거래일")
+    print(
+        f"약세장 인버스 ETF 검증 — 최근 {result['years']}년, {result['total_trading_days']}거래일"
+    )
     print(
         f"게이트 차단(약세) {result['gated_days']}일 ({result['gated_pct']:.0%}) / "
         f"통과 {result['open_days']}일"
@@ -213,7 +217,7 @@ def _print(result: dict) -> None:
     print("=" * 72)
     print(f"\n{'자산':28} {'그룹':6} {'표본':>5} {'평균%':>8} {'승률':>6} {'CI95':>20} {'p':>6}")
     print("-" * 80)
-    for code, s in result["assets"].items():
+    for _code, s in result["assets"].items():
         for label in ("gated", "open"):
             g = s[label]
             if g.get("n", 0) == 0:

@@ -170,6 +170,67 @@ def test_reentry_blocked_count_from_signal_rejected() -> None:
     assert report.reentry_blocked_count == 3
     # snapshot 없는 수동 재생성은 today_notional_used 미가용(None).
     assert report.today_notional_used is None
+    # 일손실 거부(reason="daily loss limit hit")는 risk 필터 경로 — churn 브레이크
+    # 카운트(daily_loss_blocked_count)와 무관해야 한다.
+    assert report.daily_loss_blocked_count == 0
+    assert report.daily_loss_blocked_first_time is None
+
+
+def test_daily_loss_blocked_count_and_first_time_and_note() -> None:
+    """2026-07-01 후속: churn 브레이크(일일 실현손실 한도) 발동이 리포트에 보인다.
+
+    발동 후 매수 신호마다 runner.signal_blocked_daily_loss 가 반복 기록된다(그날 252건).
+    기존 리포트엔 흔적이 없어 "오후에 왜 매수가 없지?" 를 로그 없이 알 수 없었다.
+    건수 + 최초 발동 시각(KST) + note_ko 문구 + timeline 한 줄(최초 발동만)로 노출.
+    """
+    events = LogEvents(
+        orders_simulated=[
+            {
+                "symbol": "005930",
+                "side": "buy",
+                "qty": 1,
+                "price": 100.0,
+                "timestamp": "2026-06-30T23:10:00Z",  # KST 08:10... 장전이지만 테스트론 무방
+            },
+            {
+                "symbol": "005930",
+                "side": "sell",
+                "qty": 1,
+                "price": 90.0,
+                "timestamp": "2026-07-01T01:20:00Z",
+            },
+        ],
+        daily_loss_blocks=[
+            {
+                "symbol": "005930",
+                "realized_loss": 202646,
+                "limit": 100000,
+                "timestamp": "2026-07-01T01:27:00Z",  # UTC 01:27 → KST 10:27
+            },
+            {
+                "symbol": "001210",
+                "realized_loss": 202646,
+                "limit": 100000,
+                "timestamp": "2026-07-01T02:30:00Z",
+            },
+        ],
+    )
+    report = build_daily_report(date="2026-07-01", events=events, snapshot=None)
+    assert report.daily_loss_blocked_count == 2
+    assert report.daily_loss_blocked_first_time == "10:27"
+    # note_ko 는 초보자 친화 한국어 — 발동 시각과 차단 건수를 함께.
+    assert "일일 손실 한도 도달" in report.note_ko
+    assert "10:27" in report.note_ko
+    assert "신규 매수 중단" in report.note_ko
+    assert "2건" in report.note_ko
+    # timeline 은 최초 발동 1건만 — 252건 반복이 시계열을 잠그지 않게.
+    block_lines = [ev for ev in report.timeline if ev.kind == "daily_loss_block"]
+    assert len(block_lines) == 1
+    assert block_lines[0].time_kst == "10:27"
+    assert "일일 손실 한도 도달" in block_lines[0].text
+    assert "202,646원" in block_lines[0].text
+    assert "100,000원" in block_lines[0].text
+    assert "신규 매수 중단" in block_lines[0].text
 
 
 def test_note_ko_says_discovery_when_buys_empty_but_chosen_present() -> None:
@@ -635,6 +696,9 @@ def test_save_load_roundtrip_preserves_every_field(tmp_path: Path) -> None:
         # 2026-06-19 신규 — 동일 footgun 재발 방지.
         today_notional_used=9_993_580,
         reentry_blocked_count=174,
+        # 2026-07-01 신규 — 동일 footgun 재발 방지.
+        daily_loss_blocked_count=252,
+        daily_loss_blocked_first_time="10:27",
     )
     # 진입 피처도 포함해 라운드트립 동등성 검증.
     report = replace(
@@ -663,6 +727,8 @@ def test_save_load_roundtrip_preserves_every_field(tmp_path: Path) -> None:
     assert loaded.buys[0].rank_at_entry == 7
     assert loaded.today_notional_used == 9_993_580
     assert loaded.reentry_blocked_count == 174
+    assert loaded.daily_loss_blocked_count == 252
+    assert loaded.daily_loss_blocked_first_time == "10:27"
 
 
 def test_save_creates_directory(tmp_path: Path) -> None:
