@@ -39,6 +39,7 @@ from ..kiwoom.schemas import KiwoomError
 from ..kiwoom.ws import KiwoomWebSocket, Subscription
 from ..market.feed import ticks
 from ..monitor.latency import LatencyTracker, get_default_latency_tracker
+from ..monitor.tick_recorder import TickRecorder, get_default_tick_recorder
 from ..notify.base import NoopNotifier, Notifier
 from ..notify.state import RunnerStateSnapshot
 from ..risk.consecutive_loss import ConsecutiveLossTracker
@@ -117,6 +118,10 @@ class PaperRunner:
     # 29단계 PR19 (#20) — 주문 송신 latency 모니터. None 이면 비활성.
     # __post_init__ 에서 Settings.latency_log_path 활성 시 자동 생성.
     latency_tracker: LatencyTracker | None = None
+    # 2026-07-02 diag — 0B 틱 원본 JSONL 기록(틱 기반 PositionGuard 반사실 분석용
+    # 수집). None 이면 비활성. __post_init__ 에서 Settings.tick_log_dir 활성 시
+    # 자동 생성. 전략·리스크·주문 경로와 완전 무관 — 버퍼 append 후 묶음 write.
+    tick_recorder: TickRecorder | None = None
     _settings: Settings = field(default_factory=get_settings)
     _balance_failures: int = field(default=0, init=False)
     # 텔레그램 인커밍 명령 응답용 인메모리 상태 (runner 가 매 사이클 갱신)
@@ -197,6 +202,10 @@ class PaperRunner:
         # 29단계 PR19 — latency 트래커 자동 생성 (Settings 의 path 활성 시).
         if self.latency_tracker is None:
             self.latency_tracker = get_default_latency_tracker(self._settings)
+
+        # 2026-07-02 diag — 틱 레코더 자동 생성 (Settings 의 dir 활성 시).
+        if self.tick_recorder is None:
+            self.tick_recorder = get_default_tick_recorder(self._settings)
 
         # day-trade 모드(liquidate_at 설정)는 시작 시 universe 미정 허용.
         # set_universe() 호출 전까지 run() 이 대기.
@@ -328,6 +337,12 @@ class PaperRunner:
 
                 try:
                     async for tick in ticks(ws):
+                        # === diag: 틱 원본 기록 ===
+                        # 버퍼 append 만 — 디스크 write 는 임계/간격 도달 시 묶음.
+                        # 트레이딩 판단에 어떤 영향도 없다 (반사실 분석용 수집).
+                        if self.tick_recorder is not None:
+                            self.tick_recorder.record(tick)
+
                         # === STOPPING 체크 ===
                         # 외부 /stop 으로 STOPPING 진입 시 다음 tick 경계에서 graceful break.
                         if self._control_state is RunnerControlState.STOPPING:
@@ -346,6 +361,9 @@ class PaperRunner:
                         await self._on_bar(rest, bar, account)
                 finally:
                     self._ws = None
+                    # diag — 틱 버퍼 잔여분 flush (best-effort, 오류 swallow).
+                    if self.tick_recorder is not None:
+                        self.tick_recorder.flush()
                     await ws.stop()
                     # 5/14 회귀 — 청산이 발사된 채로 main loop 가 종료되면 self._snapshot 이
                     # 청산 직전 상태로 굳어 텔레그램 일일 리포트가 "보유 N주" 로 stale 표시.

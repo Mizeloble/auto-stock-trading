@@ -8,6 +8,12 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [x] **틱 원본 JSONL 로깅 — 틱 기반 손절 가드 반사실 검증 데이터 수집** (2026-07-02)
+  - **무엇**: 2026-07-01 금호전기(001210) 손절이 설정 -1%(`stop_loss_pct 0.010`)가 아닌 **-4.48%** 에서 체결(오버슈트 비용 ≈ 11.8만원, 그날 손실 17.2만원의 대부분). 원인 = `PositionGuard` 검사가 1분봉 확정 시점(`runner._on_bar` 끝)에만 돌아 봉 내부 급락을 놓침(09:09:58 매수 → 09:10:58 첫 봉 마감 검사 때 이미 -4.48%). 틱 기반 가드로 바꿀지 판단하려면 반사실 검증이 필요한데 틱이 어디에도 저장되지 않아 검증 불가 → **트레이딩 로직은 일절 안 건드리고** 러너가 이미 구독 중인 0B 웹소켓 틱을 일별 JSONL(`data/ticks/ticks-YYYY-MM-DD.jsonl`)로 read-only 저장하는 `monitor/tick_recorder.py` 추가. 핫패스 보호: 매 틱은 메모리 버퍼 append 만, 디스크 write 는 임계(200줄)/간격(5초) 도달 시 묶음 1회. `.env` 의 `TICK_LOG_DIR=data/ticks` 로 활성(비우면 비활성 — 기존 `LATENCY_LOG_PATH` 와 동일 opt-in 패턴).
+  - **왜**: diag-first(inverse_etf_study 와 동일) — 데이터 먼저 모으고 "틱 기반 가드였다면 손절가가 얼마였나 / 승자를 조기 손절해 이익을 깎진 않았나"를 실측한 뒤에만 가드 로직 변경을 결정. 장중 3종목 × 6시간 수준이라 용량은 수 MB.
+  - **어떻게 확인**: ① `.env` 에 `TICK_LOG_DIR=data/ticks` 추가 후 다음 paper-day 장중 `ls data/ticks/` → `ticks-YYYY-MM-DD.jsonl` 생성·증가. ② `tail -1 data/ticks/ticks-*.jsonl | python3 -m json.tool` → `ts/symbol/price/volume` 4필드. ③ `uv run pytest tests/test_monitor_tick_recorder.py -v` → 12 케이스 PASS.
+  - **후속**: 틱이 수 거래일 쌓이면 반사실 분석(체결 틱 vs 봉 마감 검사 손절가 비교) 스크립트를 `scripts/diagnostics/` 에 추가 — 그 결과로 틱 기반 가드 전환 여부 결정.
+
 - [x] **거래불가 종목 사전 회피 + 발굴 보강** (2026-06-16)
   - **무엇**: 2026-06-16 로그에서 모의투자 매매제한 종목(004870 티웨이홀딩스)이 발굴에 채택돼 09:10~15:14 매분 주문 거부(RC4007)되며 에러 62건·슬롯 낭비. ① 거절 분류기(`reject_classifier`)에 `"매매제한"`·RC4007 패턴 추가 → `TRADING_HALT`(당일 skip)로 첫 거부 즉시 재시도 차단(62→1). ② 신규 `account/untradeable.py`(`UntradeableStore`, `data/state/untradeable.json`) — 러너가 종목 단위 거부(매매제한·거래정지·무효코드)를 디스크에 누적, within_days(기본 30일) 노화. ③ `top_volume(exclude_symbols=)` + `discover_and_arm` 가 후보를 top_n 보다 넉넉히(pool=max(top_n*3, top_n+7)) 받아 거래불가 이력·avoid·게이트 차단을 건너뛰고 다음 순위로 top_n 을 채움(슬롯 낭비 방지). `delayed_discover` 가 발굴 시 `active_symbols` 로드해 회피.
   - **왜**: 모의투자 매매제한은 실거래선 정상 거래되는 종목이라 시세/거래량 TR 응답에 사전 플래그가 없음 → "한 번 거부당하면 그날 차단 + 다음날 발굴 제외"가 유일한 견고한 해법. 라이브 러너의 universe 는 장 시작 후 변경 불가(set_universe 가드)라 장중 재발굴 대신 *발굴 시점 보강* 으로 설계(사용자 결정).
