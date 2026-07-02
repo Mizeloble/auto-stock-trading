@@ -21,6 +21,8 @@ def _summary_ko(
     realized_pnl: float | None,
     realized_pnl_after_cost: float | None,
     error_count: int,
+    daily_loss_blocked_count: int = 0,
+    daily_loss_blocked_first_time: str | None = None,
 ) -> str:
     """note_ko 빌더. 2026-05-11 회귀: 발굴(`chosen`)과 실제 체결(`buys`) 을 구분.
 
@@ -60,6 +62,13 @@ def _summary_ko(
             sign_c = "+" if realized_pnl_after_cost >= 0 else ""
             pnl_part += f" (비용 차감 {sign_c}{int(realized_pnl_after_cost):,}원)"
         parts.append(pnl_part)
+    if daily_loss_blocked_count > 0:
+        # churn 브레이크 발동 — 리포트만 보고 "오후에 왜 매수가 없지?" 를 알 수 있게.
+        time_part = f"{daily_loss_blocked_first_time} " if daily_loss_blocked_first_time else ""
+        parts.append(
+            f"🛑 {time_part}일일 손실 한도 도달 — 이후 신규 매수 중단"
+            f" (신호 {daily_loss_blocked_count}건 차단)"
+        )
     if error_count > 0:
         parts.append(f"에러 {error_count}건")
     return " · ".join(parts)

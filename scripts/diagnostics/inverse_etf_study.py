@@ -137,7 +137,7 @@ def _summary(rows: list[DayRow], code: str) -> dict:
 
 def build_rows(years: float) -> list[DayRow]:
     """fdr 로 지수·자산 일봉을 받아 게이트 + 당일 수익률 패널 구성."""
-    import FinanceDataReader as fdr  # 스크립트 로컬 import (의존성 없는 환경 배려)
+    import FinanceDataReader as fdr  # 스크립트 로컬 import — fdr 미설치 환경에서도 --help 는 되게
 
     today = datetime.now(KST).date()
     start = today - timedelta(days=int(365 * years) + 40)  # SMA 워밍업 여유

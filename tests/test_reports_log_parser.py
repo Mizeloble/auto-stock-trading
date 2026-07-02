@@ -124,6 +124,28 @@ def test_parse_extracts_timeline_event_types() -> None:
     assert events.liquidate_starts[0]["reason"] == "daily_loss_kill"
 
 
+def test_parse_extracts_daily_loss_blocks() -> None:
+    """2026-07-01 후속: churn 브레이크 차단 이벤트가 daily_loss_blocks 버킷에 순서대로 쌓인다."""
+    lines = [
+        _line(
+            "runner.signal_blocked_daily_loss",
+            symbol="005930",
+            realized_loss=202646,
+            limit=100000,
+        ),
+        _line(
+            "runner.signal_blocked_daily_loss",
+            symbol="001210",
+            realized_loss=202646,
+            limit=100000,
+        ),
+    ]
+    events = parse_lines(lines)
+    assert len(events.daily_loss_blocks) == 2
+    assert events.daily_loss_blocks[0]["symbol"] == "005930"
+    assert events.daily_loss_blocks[0]["realized_loss"] == 202646
+
+
 def test_parse_extracts_stop_loss_and_trailing_guards() -> None:
     """2026-06-15 회귀: 손절·트레일링 가드 이벤트도 각 버킷에 잡힌다.
 
