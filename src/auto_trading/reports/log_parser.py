@@ -40,6 +40,12 @@ class LogEvents:
         default_factory=list
     )  # runner.liquidate_failed
     signal_rejected: list[dict[str, Any]] = field(default_factory=list)  # runner.signal_rejected
+    # 2026-07-01 후속 — churn 브레이크(일일 실현손실 한도) 발동으로 차단된 매수 신호.
+    # 발동 후 신호마다 반복 기록되므로 수백 건일 수 있다. 리포트가 건수·최초 발동
+    # 시각을 집계해 "이후 종일 신규 매수 중단" 사실을 사용자에게 보인다.
+    daily_loss_blocks: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # runner.signal_blocked_daily_loss
     # 2026-05-11 회귀 후속 — 일일 리포트에 시계열 표시용. 부분 익절·손절·트레일링·
     # kill switch·청산 시작 이벤트는 reports/daily.py 의 timeline 빌더가 매수/매도/청산
     # 체결과 합쳐 시각 순으로 정렬한다.
@@ -73,6 +79,7 @@ _INTEREST: dict[str, str] = {
     "runner.liquidate_accepted": "liquidations_accepted",
     "runner.liquidate_failed": "liquidations_failed",
     "runner.signal_rejected": "signal_rejected",
+    "runner.signal_blocked_daily_loss": "daily_loss_blocks",
     "position_guard.partial_take": "partial_takes",
     "position_guard.stop_loss": "stop_losses",
     "position_guard.trailing": "trailings",

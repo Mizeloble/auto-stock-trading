@@ -109,4 +109,6 @@ def _from_json_dict(payload: dict[str, Any]) -> DailyReport:
         no_trade_reason=payload.get("no_trade_reason"),
         today_notional_used=payload.get("today_notional_used"),
         reentry_blocked_count=int(payload.get("reentry_blocked_count") or 0),
+        daily_loss_blocked_count=int(payload.get("daily_loss_blocked_count") or 0),
+        daily_loss_blocked_first_time=payload.get("daily_loss_blocked_first_time"),
     )

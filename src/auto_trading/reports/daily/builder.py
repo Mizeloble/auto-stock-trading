@@ -14,6 +14,7 @@ from pathlib import Path
 from ...notify.state import RunnerStateSnapshot
 from ..log_parser import LogEvents
 from ..snapshot_reader import parse_topcap_for_date
+from ._util import _ts_to_kst_hhmm
 from .aggregate import _aggregate_notional, _aggregate_realized, _estimate_costs
 from .extract import (
     _build_blocked_outcomes,
@@ -57,6 +58,14 @@ def build_daily_report(
     # 매수여력 부족(일 매수대금 한도 소진 등)으로 막힌 재진입 신호 수 — "장 초반 쏠림" 진단용.
     reentry_blocked_count = sum(
         1 for ev in events.signal_rejected if _is_buying_power_reject(str(ev.get("reason") or ""))
+    )
+    # churn 브레이크(일일 실현손실 한도) — 발동 후 매수 신호마다 반복 기록되므로
+    # 건수 + 최초 발동 시각만 집계. 로그는 시각순이라 [0] 이 최초 발동.
+    daily_loss_blocked_count = len(events.daily_loss_blocks)
+    daily_loss_blocked_first_time = (
+        _ts_to_kst_hhmm(events.daily_loss_blocks[0].get("timestamp"))
+        if events.daily_loss_blocks
+        else None
     )
     fatal_count = len(events.fatal)
     balance_failure_count = 1 if events.balance_failures > 0 else 0
@@ -133,6 +142,8 @@ def build_daily_report(
         realized_pnl=realized_pnl,
         realized_pnl_after_cost=realized_pnl_after_cost,
         error_count=error_count,
+        daily_loss_blocked_count=daily_loss_blocked_count,
+        daily_loss_blocked_first_time=daily_loss_blocked_first_time,
     )
 
     timeline = _build_timeline(events, names)
@@ -192,4 +203,6 @@ def build_daily_report(
         no_trade_reason=no_trade_reason,
         today_notional_used=today_notional_used,
         reentry_blocked_count=reentry_blocked_count,
+        daily_loss_blocked_count=daily_loss_blocked_count,
+        daily_loss_blocked_first_time=daily_loss_blocked_first_time,
     )

@@ -43,6 +43,7 @@ def _build_timeline(events: LogEvents, names: dict[str, str]) -> list[TimelineEv
       가드 이벤트(손절·부분익절·트레일링)와 (종목, 가격)으로 매칭해 사유를 라벨링.
     - 청산 체결 (runner.liquidate_simulated / runner.liquidate_accepted)
     - kill switch (runner.kill_switch_triggered)
+    - 일일 손실 한도 매수 중단 (runner.signal_blocked_daily_loss) — 최초 발동 1건만
     - 청산 시작 (runner.liquidate_start)
 
     2026-06-15 회귀: 이전엔 side=buy 매수와 partial_take 가드만 timeline 에 넣어
@@ -174,6 +175,20 @@ def _build_timeline(events: LogEvents, names: dict[str, str]) -> list[TimelineEv
             reason = _GUARD_REASON_KO[kind]
             pct_part = _guard_pct_part(kind, guard)
             _add(guard.get("timestamp"), kind, f"{reason} {label}{qty_part}{price_part}{pct_part}")
+
+    # churn 브레이크(일일 실현손실 한도) — 최초 발동 1건만 표시. 발동 후 매수 신호마다
+    # 반복 기록돼 수백 건일 수 있어 전부 넣으면 timeline 이 잠긴다. kill switch(평가금액
+    # 기준 강제 청산)와 달리 이건 신규 매수만 막고 보유분 매도는 그대로 진행된다.
+    if events.daily_loss_blocks:
+        first = events.daily_loss_blocks[0]
+        realized = _as_float(first.get("realized_loss"))
+        limit = _as_float(first.get("limit"))
+        _add(
+            first.get("timestamp"),
+            "daily_loss_block",
+            f"🛑 일일 손실 한도 도달 (실현손실 {_format_won_int(realized)},"
+            f" 한도 {_format_won_int(limit)}) — 이후 신규 매수 중단",
+        )
 
     for rec in events.kill_switches:
         change = _as_float(rec.get("today_change"))
