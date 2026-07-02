@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>auto-stock-trading 아키텍처 — 6가지 관점</title>
+<style>
+:root{
+  --page:#FAF9F5; --card:#ffffff; --surface-1:#ffffff;
+  --border:#E4E2D9; --border-strong:#D3D1C7;
+  --text-primary:#2C2C2A; --text-secondary:#5F5E5A; --text-tertiary:#888780;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --page:#1a1a18; --card:#222220; --surface-1:#2c2c2a;
+    --border:#36352f; --border-strong:#444441;
+    --text-primary:#ECEAE3; --text-secondary:#B4B2A9; --text-tertiary:#888780;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--text-primary);
+  font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Segoe UI",sans-serif;
+  line-height:1.7;}
+.wrap{max-width:780px;margin:0 auto;padding:40px 20px 80px;}
+h1{font-size:24px;font-weight:500;margin:0 0 6px;}
+.sub{color:var(--text-secondary);margin:0 0 28px;}
+.toc{background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:16px 20px;margin:0 0 36px;}
+.toc ol{margin:6px 0 0;padding-left:20px;}
+.toc li{margin:3px 0;color:var(--text-secondary);}
+.toc b{color:var(--text-primary);font-weight:500;}
+section{background:var(--card);border:1px solid var(--border);border-radius:14px;
+  padding:22px 24px 26px;margin:0 0 26px;}
+h2{font-size:18px;font-weight:500;margin:0 0 4px;}
+.lens{display:inline-block;font-size:12px;color:var(--text-tertiary);
+  border:1px solid var(--border-strong);border-radius:20px;padding:2px 10px;margin:0 0 10px;}
+.cap{color:var(--text-secondary);margin:0 0 16px;font-size:15px;}
+.diagram{width:100%;}
+svg{width:100%;height:auto;display:block;}
+svg text{font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Segoe UI",sans-serif;}
+.t{font-size:14px;fill:var(--text-primary)}
+.ts{font-size:12px;fill:var(--text-secondary)}
+.th{font-size:14px;font-weight:500;fill:var(--text-primary)}
+.box{fill:var(--surface-1);stroke:var(--border-strong);stroke-width:1}
+.arr{fill:none;stroke:var(--text-tertiary);stroke-width:1.5;marker-end:url(#ah)}
+.leader{fill:none;stroke:var(--text-tertiary);stroke-width:0.8;stroke-dasharray:3 3}
+.c-purple>rect,.c-purple>circle{fill:#EEEDFE;stroke:#534AB7}.c-purple text{fill:#3C3489}
+.c-teal>rect,.c-teal>circle{fill:#E1F5EE;stroke:#0F6E56}.c-teal text{fill:#085041}
+.c-gray>rect,.c-gray>circle{fill:#F1EFE8;stroke:#5F5E5A}.c-gray text{fill:#444441}
+.c-coral>rect,.c-coral>circle{fill:#FAECE7;stroke:#993C1D}.c-coral text{fill:#712B13}
+.c-amber>rect,.c-amber>circle{fill:#FAEEDA;stroke:#854F0B}.c-amber text{fill:#633806}
+.c-blue>rect,.c-blue>circle{fill:#E6F1FB;stroke:#185FA5}.c-blue text{fill:#0C447C}
+.c-green>rect,.c-green>circle{fill:#EAF3DE;stroke:#639922}.c-green text{fill:#27500A}
+.c-red>rect,.c-red>circle{fill:#FCEBEB;stroke:#A32D2D}.c-red text{fill:#791F1F}
+.dep{fill:none;stroke:var(--text-tertiary);marker-end:url(#ah)}
+@media (prefers-color-scheme:dark){
+.c-purple>rect,.c-purple>circle{fill:#3C3489;stroke:#AFA9EC}.c-purple text{fill:#CECBF6}
+.c-teal>rect,.c-teal>circle{fill:#085041;stroke:#5DCAA5}.c-teal text{fill:#9FE1CB}
+.c-gray>rect,.c-gray>circle{fill:#3a3a36;stroke:#B4B2A9}.c-gray text{fill:#D3D1C7}
+.c-coral>rect,.c-coral>circle{fill:#712B13;stroke:#F0997B}.c-coral text{fill:#F5C4B3}
+.c-amber>rect,.c-amber>circle{fill:#633806;stroke:#EF9F27}.c-amber text{fill:#FAC775}
+.c-blue>rect,.c-blue>circle{fill:#0C447C;stroke:#85B7EB}.c-blue text{fill:#B5D4F4}
+.c-green>rect,.c-green>circle{fill:#27500A;stroke:#97C459}.c-green text{fill:#C0DD97}
+.c-red>rect,.c-red>circle{fill:#791F1F;stroke:#F09595}.c-red text{fill:#F7C1C1}
+}
+.foot{color:var(--text-tertiary);font-size:13px;margin-top:30px;text-align:center;}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+<path d="M1,1 L7,4 L1,7" fill="none" stroke="var(--text-tertiary)" stroke-width="1.3"/></marker>
+</defs></svg>
+
+<div class="wrap">
+<h1>auto-stock-trading 아키텍처 — 6가지 관점</h1>
+<p class="sub">키움 REST API 기반 자동매매 봇을 서로 다른 6개의 렌즈로 본 그림 모음. 같은 시스템이지만 관점마다 보이는 것이 다릅니다.</p>
+
+<div class="toc">
+<b>관점 목록</b>
+<ol>
+<li><b>논리 계층</b> — 모듈이 어떻게 쌓여 있고 무엇에 의존하는가</li>
+<li><b>라이브 매매 루프</b> — Tick이 어떻게 주문이 되는가 (동작)</li>
+<li><b>런타임 프로세스</b> — 맥북에서 실제로 무엇이 도는가 (배치)</li>
+<li><b>평일 타임라인</b> — 하루 중 언제 무엇이 겹쳐 도는가 (시간)</li>
+<li><b>주간 학습 루프</b> — 운영 결과가 어떻게 전략에 되먹임되는가 (데이터)</li>
+<li><b>외부 연동 맵</b> — 어떤 외부 서비스와 어떻게 통신하는가 (통합)</li>
+<li><b>모듈 의존 그래프</b> — 실제 import 결합도, 누가 누구에 의존하는가 (코드)</li>
+<li><b>실거래 가드</b> — mock→real 전환 시 거치는 안전장치 5단계 (안전)</li>
+</ol>
+</div>
+
+<section>
+<h2>1. 논리 계층 뷰</h2>
+<div class="lens">렌즈 · 모듈 책임과 의존 방향</div>
+<p class="cap">위에서 아래로 화살표는 “호출/의존 방향”. 모든 외부 호출은 맨 아래 <code>kiwoom</code> 한 곳으로만 빠져나가고, 맨 아래 부가 4종은 어느 계층에서나 쓰이는 횡단 관심사라 흐름선과 분리했습니다.</p>
+<div class="diagram">
+<svg viewBox="0 0 680 548" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>계층형 아키텍처</title><desc>진입점에서 외부 키움 API까지 6개 계층. 핵심 흐름은 보라, 시세·주문·외부 경유는 청록, 진입·분석·부가는 회색.</desc>
+<text class="ts" x="44" y="78">진입점</text>
+<text class="ts" x="44" y="156">흐름 제어</text>
+<text class="ts" x="44" y="234">판단·리스크</text>
+<text class="ts" x="44" y="312">도메인</text>
+<text class="ts" x="44" y="390">외부 경유</text>
+<text class="ts" x="44" y="471">부가</text>
+<line class="arr" x1="200" y1="96" x2="200" y2="123"/>
+<line class="arr" x1="560" y1="96" x2="560" y2="123"/>
+<line class="arr" x1="200" y1="174" x2="200" y2="201"/>
+<line class="arr" x1="560" y1="174" x2="560" y2="201"/>
+<line class="arr" x1="200" y1="252" x2="200" y2="279"/>
+<line class="arr" x1="560" y1="252" x2="560" y2="279"/>
+<line class="arr" x1="200" y1="330" x2="200" y2="357"/>
+<line class="arr" x1="560" y1="330" x2="560" y2="357"/>
+<g class="c-gray"><rect x="160" y="46" width="210" height="50" rx="8"/><text class="th" x="172" y="69">cli</text><text class="ts" x="172" y="86">auto-trade 명령</text></g>
+<g class="c-gray"><rect x="400" y="46" width="210" height="50" rx="8"/><text class="th" x="412" y="69">dashboard</text><text class="ts" x="412" y="86">read-only 웹</text></g>
+<g class="c-purple"><rect x="160" y="124" width="210" height="50" rx="8"/><text class="th" x="172" y="147">daytrade</text><text class="ts" x="172" y="164">발굴·지수 게이트</text></g>
+<g class="c-purple"><rect x="400" y="124" width="210" height="50" rx="8"/><text class="th" x="412" y="147">runner</text><text class="ts" x="412" y="164">라이브 루프·실거래 가드</text></g>
+<g class="c-purple"><rect x="135" y="202" width="155" height="50" rx="8"/><text class="th" x="147" y="225">strategy</text><text class="ts" x="147" y="242">판단 = Signal</text></g>
+<g class="c-purple"><rect x="310" y="202" width="155" height="50" rx="8"/><text class="th" x="322" y="225">risk</text><text class="ts" x="322" y="242">필터·수량 결정</text></g>
+<g class="c-gray"><rect x="485" y="202" width="155" height="50" rx="8"/><text class="th" x="497" y="225">shadow</text><text class="ts" x="497" y="242">가상 PnL</text></g>
+<g class="c-teal"><rect x="135" y="280" width="111" height="50" rx="8"/><text class="th" x="147" y="303">market</text><text class="ts" x="147" y="320">시세 조회</text></g>
+<g class="c-teal"><rect x="266" y="280" width="111" height="50" rx="8"/><text class="th" x="278" y="303">account</text><text class="ts" x="278" y="320">잔고·주문</text></g>
+<g class="c-gray"><rect x="397" y="280" width="111" height="50" rx="8"/><text class="th" x="409" y="303">backtest</text><text class="ts" x="409" y="320">시뮬·지표</text></g>
+<g class="c-gray"><rect x="528" y="280" width="112" height="50" rx="8"/><text class="th" x="540" y="303">reports</text><text class="ts" x="540" y="320">일일 집계</text></g>
+<g class="c-teal"><rect x="160" y="358" width="270" height="50" rx="8"/><text class="th" x="172" y="381">kiwoom</text><text class="ts" x="172" y="398">REST · WS · 토큰</text></g>
+<g class="c-gray"><rect x="455" y="358" width="155" height="50" rx="8"/><text class="th" x="467" y="381">config</text><text class="ts" x="467" y="398">설정 단일 출처</text></g>
+<line class="leader" x1="340" y1="436" x2="340" y2="450"/>
+<g class="c-gray"><rect x="135" y="450" width="111" height="50" rx="8"/><text class="th" x="147" y="473">notify</text><text class="ts" x="147" y="490">텔레그램</text></g>
+<g class="c-gray"><rect x="266" y="450" width="111" height="50" rx="8"/><text class="th" x="278" y="473">llm</text><text class="ts" x="278" y="490">비용 가드</text></g>
+<g class="c-gray"><rect x="397" y="450" width="111" height="50" rx="8"/><text class="th" x="409" y="473">news</text><text class="ts" x="409" y="490">주간 자동화</text></g>
+<g class="c-gray"><rect x="528" y="450" width="112" height="50" rx="8"/><text class="th" x="540" y="473">monitor</text><text class="ts" x="540" y="490">지연 진단</text></g>
+<g class="c-purple"><rect x="135" y="522" width="14" height="14" rx="3"/></g><text class="ts" x="156" y="533">핵심 매매 흐름</text>
+<g class="c-teal"><rect x="290" y="522" width="14" height="14" rx="3"/></g><text class="ts" x="311" y="533">시세·주문·외부</text>
+<g class="c-gray"><rect x="445" y="522" width="14" height="14" rx="3"/></g><text class="ts" x="466" y="533">진입·분석·부가</text>
+</svg>
+</div>
+</section>
+
+<section>
+<h2>2. 라이브 매매 루프 뷰</h2>
+<div class="lens">렌즈 · 동작(behavior) · runner</div>
+<p class="cap">1~2는 한 번만 도는 준비 단계, 3~6은 봉이 확정될 때마다 도는 루프(왼쪽 괄호). 끝나면 오른쪽 화살표로 다음 봉을 기다립니다. 7번 잔고 갱신은 이 루프와 별개 주기.</p>
+<div class="diagram">
+<svg viewBox="0 0 680 600" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>runner 라이브 매매 데이터 흐름</title><desc>준비 후 봉마다 Tick을 1분봉으로 모아 Signal을 만들고 리스크를 거쳐 주문하는 반복 루프.</desc>
+<line class="arr" x1="335" y1="102" x2="335" y2="123"/>
+<line class="arr" x1="335" y1="176" x2="335" y2="197"/>
+<line class="arr" x1="335" y1="250" x2="335" y2="271"/>
+<line class="arr" x1="335" y1="324" x2="335" y2="345"/>
+<line class="arr" x1="335" y1="398" x2="335" y2="419"/>
+<line class="leader" x1="335" y1="472" x2="335" y2="509"/>
+<path d="M 520 446 H 602 V 224 H 524" fill="none" stroke="#7F77DD" stroke-width="1.6" marker-end="url(#lh2)"/>
+<defs><marker id="lh2" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M1,1 L7,4.5 L1,8" fill="none" stroke="#7F77DD" stroke-width="1.4"/></marker></defs>
+<text class="ts" x="612" y="332" transform="rotate(90 612 332)">다음 봉 → 반복</text>
+<line x1="96" y1="198" x2="96" y2="472" stroke="#888780" stroke-width="1.2"/>
+<line x1="96" y1="198" x2="104" y2="198" stroke="#888780" stroke-width="1.2"/>
+<line x1="96" y1="472" x2="104" y2="472" stroke="#888780" stroke-width="1.2"/>
+<text class="ts" x="86" y="335" transform="rotate(-90 86 335)">봉 확정마다</text>
+<g class="c-gray"><circle cx="120" cy="76" r="15"/><text class="th" x="120" y="81" text-anchor="middle">1</text></g>
+<g class="c-gray"><rect x="150" y="50" width="370" height="52" rx="8"/><text class="th" x="164" y="74">토큰 발급 · REST/WS 클라이언트 준비</text><text class="ts" x="164" y="91">kiwoom</text></g>
+<g class="c-gray"><circle cx="120" cy="150" r="15"/><text class="th" x="120" y="155" text-anchor="middle">2</text></g>
+<g class="c-gray"><rect x="150" y="124" width="370" height="52" rx="8"/><text class="th" x="164" y="148">종목 구독 · 실시간 Tick 수신</text><text class="ts" x="164" y="165">market/feed</text></g>
+<g class="c-gray"><circle cx="120" cy="224" r="15"/><text class="th" x="120" y="229" text-anchor="middle">3</text></g>
+<g class="c-teal"><rect x="150" y="198" width="370" height="52" rx="8"/><text class="th" x="164" y="222">Tick → 1분봉 집계</text><text class="ts" x="164" y="239">runner/aggregator</text></g>
+<g class="c-gray"><circle cx="120" cy="298" r="15"/><text class="th" x="120" y="303" text-anchor="middle">4</text></g>
+<g class="c-purple"><rect x="150" y="272" width="370" height="52" rx="8"/><text class="th" x="164" y="296">봉 확정 → on_bar() → Signal</text><text class="ts" x="164" y="313">strategy</text></g>
+<g class="c-gray"><circle cx="120" cy="372" r="15"/><text class="th" x="120" y="377" text-anchor="middle">5</text></g>
+<g class="c-purple"><rect x="150" y="346" width="370" height="52" rx="8"/><text class="th" x="164" y="370">Signal → 리스크 통과 → Order</text><text class="ts" x="164" y="387">risk/manager</text></g>
+<g class="c-gray"><circle cx="120" cy="446" r="15"/><text class="th" x="120" y="451" text-anchor="middle">6</text></g>
+<g class="c-teal"><rect x="150" y="420" width="370" height="52" rx="8"/><text class="th" x="164" y="444">주문 전송 + 저널 기록</text><text class="ts" x="164" y="461">account/orders · order_journal</text></g>
+<g class="c-gray"><circle cx="120" cy="536" r="15"/><text class="th" x="120" y="541" text-anchor="middle">7</text></g>
+<g class="c-gray"><rect x="150" y="510" width="370" height="52" rx="8"/><text class="th" x="164" y="534">주기적 잔고 갱신</text><text class="ts" x="164" y="551">account/balance · 별도 주기</text></g>
+</svg>
+</div>
+</section>
+
+<section>
+<h2>3. 런타임 프로세스 뷰</h2>
+<div class="lens">렌즈 · 배치(deployment) · launchd</div>
+<p class="cap">맥북은 Amphetamine으로 24시간 켜져 있고, 그 위 launchd가 8종 job을 정해진 시각에 실행·자동재시작. 네 묶음 중 <code>paper-day 봇</code>만 장중 상주 프로세스고 나머지 7종은 단발 job입니다.</p>
+<div class="diagram">
+<svg viewBox="0 0 680 416" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>맥북 launchd 런타임 프로세스 뷰</title><desc>Amphetamine으로 상시 켜진 맥북에서 launchd가 8종 job을 인프라·감시, 장중 매매, 개장 준비, 주간 자동화로 나눠 돌린다.</desc>
+<g class="c-gray"><rect x="44" y="46" width="596" height="46" rx="10"/><text class="th" x="342" y="70" text-anchor="middle">macOS 맥북 — Amphetamine 으로 절전 차단, 상시 전원 ON</text><text class="ts" x="342" y="86" text-anchor="middle">Amphetamine 은 launchd 가 아닌 별도 앱</text></g>
+<line class="arr" x1="342" y1="92" x2="342" y2="115"/>
+<g class="c-purple"><rect x="44" y="116" width="596" height="46" rx="10"/><text class="th" x="342" y="140" text-anchor="middle">launchd — 8종 job 스케줄링 · 비정상 종료 시 자동 재시작</text><text class="ts" x="342" y="156" text-anchor="middle">평일 / 매일 / 주간 시각에 맞춰 트리거</text></g>
+<line class="arr" x1="114" y1="162" x2="114" y2="199"/>
+<line class="arr" x1="265" y1="162" x2="265" y2="199"/>
+<line class="arr" x1="416" y1="162" x2="416" y2="199"/>
+<line class="arr" x1="567" y1="162" x2="567" y2="199"/>
+<rect class="box" x="44" y="200" width="141" height="172" rx="10"/>
+<g class="c-gray"><rect x="44" y="200" width="141" height="30" rx="10"/><text class="th" x="114" y="220" text-anchor="middle">인프라 · 감시</text></g>
+<text class="th" x="54" y="254">Amphetamine</text><text class="ts" x="54" y="270">절전 차단 · 상시</text>
+<text class="th" x="54" y="298">heartbeat-check</text><text class="ts" x="54" y="314">5분 간격 · 누락 감시</text>
+<text class="th" x="54" y="342">log-rotate</text><text class="ts" x="54" y="358">매일 02:30</text>
+<rect class="box" x="195" y="200" width="141" height="172" rx="10"/>
+<g class="c-purple"><rect x="195" y="200" width="141" height="30" rx="10"/><text class="th" x="265" y="220" text-anchor="middle">장중 매매</text></g>
+<text class="th" x="205" y="254">paper-day 봇</text><text class="ts" x="205" y="270">평일 08:55 기동</text><text class="ts" x="205" y="285">메인 루프 · 장중 상주</text>
+<text class="th" x="205" y="324">snapshot</text><text class="ts" x="205" y="340">시총200 · 10분 간격</text>
+<rect class="box" x="346" y="200" width="141" height="172" rx="10"/>
+<g class="c-teal"><rect x="346" y="200" width="141" height="30" rx="10"/><text class="th" x="416" y="220" text-anchor="middle">개장 준비</text></g>
+<text class="th" x="356" y="262">marketcap</text><text class="ts" x="356" y="278">평일 08:50 · 유니버스</text>
+<text class="th" x="356" y="320">churnfix-verify</text><text class="ts" x="356" y="336">매일 09:30 · 검증</text>
+<rect class="box" x="497" y="200" width="141" height="172" rx="10"/>
+<g class="c-teal"><rect x="497" y="200" width="141" height="30" rx="10"/><text class="th" x="567" y="220" text-anchor="middle">주간 자동화</text></g>
+<text class="th" x="507" y="262">news-prefetch</text><text class="ts" x="507" y="278">토 06:00 · RSS</text>
+<text class="th" x="507" y="320">insight-weekly</text><text class="ts" x="507" y="336">토 09:00 · LLM</text>
+<g class="c-purple"><rect x="44" y="392" width="13" height="13" rx="3"/></g><text class="ts" x="64" y="403">장중 매매(메인 프로세스)</text>
+<g class="c-teal"><rect x="300" y="392" width="13" height="13" rx="3"/></g><text class="ts" x="320" y="403">데이터 준비·자동화</text>
+<g class="c-gray"><rect x="500" y="392" width="13" height="13" rx="3"/></g><text class="ts" x="520" y="403">인프라·감시</text>
+</svg>
+</div>
+</section>
+
+<section>
+<h2>4. 평일 타임라인 뷰</h2>
+<div class="lens">렌즈 · 시간(temporal)</div>
+<p class="cap">막대 길이 = 살아있는 시간, 점 = 한 번 실행되는 단발 job, 점선 세로줄 = 개장(09:00)·마감(15:30). 장중엔 봇·snapshot·heartbeat 셋이 겹쳐 돌고, 봇 직전 08:50 marketcap이 종목 풀을 깔아줍니다.</p>
+<div class="diagram">
+<svg viewBox="0 0 680 486" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>평일 하루 런타임 타임라인과 데이터 흐름</title><desc>02시부터 16시까지 시간축 위 launchd 프로세스 실행 시점. paper-day 봇은 08:55~15:30 상주.</desc>
+<text class="th" x="44" y="34">평일 (월~금) 하루 타임라인 · 프로세스 × 데이터 흐름</text>
+<line x1="160" y1="74" x2="636" y2="74" stroke="#888780" stroke-width="1"/>
+<line x1="160" y1="70" x2="160" y2="78" stroke="#888780" stroke-width="1"/><text class="ts" x="160" y="64" text-anchor="middle">02:00</text>
+<line x1="296" y1="70" x2="296" y2="78" stroke="#888780" stroke-width="1"/><text class="ts" x="296" y="64" text-anchor="middle">06:00</text>
+<line x1="398" y1="70" x2="398" y2="78" stroke="#888780" stroke-width="1"/><text class="ts" x="398" y="64" text-anchor="middle">09:00</text>
+<line x1="500" y1="70" x2="500" y2="78" stroke="#888780" stroke-width="1"/><text class="ts" x="500" y="64" text-anchor="middle">12:00</text>
+<line x1="619" y1="70" x2="619" y2="78" stroke="#888780" stroke-width="1"/><text class="ts" x="619" y="64" text-anchor="middle">15:30</text>
+<line class="leader" x1="398" y1="96" x2="398" y2="346"/>
+<line class="leader" x1="619" y1="96" x2="619" y2="346"/>
+<text class="th" x="44" y="108">paper-day 봇</text><text class="ts" x="44" y="123">평일 08:55~</text>
+<g class="c-purple"><rect x="395" y="100" width="224" height="22" rx="5"/><text class="ts" x="403" y="115">키움 시세→주문 · 텔레그램 알림</text></g>
+<text class="th" x="44" y="152">snapshot</text><text class="ts" x="44" y="167">평일 10분</text>
+<g class="c-teal"><rect x="398" y="144" width="221" height="22" rx="5"/><text class="ts" x="406" y="159">→ data/snapshots/topcap</text></g>
+<text class="th" x="44" y="196">heartbeat</text><text class="ts" x="44" y="211">24h · 5분</text>
+<g class="c-gray"><rect x="160" y="188" width="476" height="22" rx="5"/><text class="ts" x="168" y="203">봇 생존 감시 · 누락 시 텔레그램 경고</text></g>
+<text class="th" x="44" y="240">marketcap</text><text class="ts" x="44" y="255">평일 08:50</text>
+<g class="c-teal"><circle cx="389" cy="243" r="7"/></g>
+<text class="ts" x="404" y="247">키움 → data/snapshots/universe.json</text>
+<text class="th" x="44" y="284">churnfix</text><text class="ts" x="44" y="299">매일 09:30</text>
+<g class="c-gray"><circle cx="415" cy="287" r="7"/></g>
+<text class="ts" x="430" y="291">전일 daily 리포트 재검증</text>
+<text class="th" x="44" y="328">log-rotate</text><text class="ts" x="44" y="343">매일 02:30</text>
+<g class="c-gray"><circle cx="177" cy="331" r="7"/></g>
+<text class="ts" x="192" y="335">오래된 로그 gzip 압축</text>
+<line x1="44" y1="358" x2="636" y2="358" stroke="#B4B2A9" stroke-width="1" stroke-dasharray="3 3"/>
+<text class="th" x="44" y="378">토요일 (주간 자동화)</text>
+<text class="th" x="44" y="406">news-prefetch</text><text class="ts" x="44" y="421">토 06:00</text>
+<g class="c-teal"><circle cx="296" cy="409" r="7"/></g>
+<text class="ts" x="311" y="413">뉴스 RSS → data/news</text>
+<text class="th" x="44" y="450">insight-weekly</text><text class="ts" x="44" y="465">토 09:00</text>
+<g class="c-teal"><circle cx="398" cy="453" r="7"/></g>
+<text class="ts" x="413" y="457">news+리포트 → Claude → daytrade-current.yaml + 푸시</text>
+<g class="c-purple"><rect x="44" y="476" width="12" height="8" rx="2"/></g><text class="ts" x="62" y="484">메인 매매(상주)</text>
+<g class="c-teal"><rect x="190" y="476" width="12" height="8" rx="2"/></g><text class="ts" x="208" y="484">데이터 수집·자동화</text>
+<g class="c-gray"><rect x="360" y="476" width="12" height="8" rx="2"/></g><text class="ts" x="378" y="484">감시·정비</text>
+</svg>
+</div>
+</section>
+
+<section>
+<h2>5. 주간 학습 루프 뷰</h2>
+<div class="lens">렌즈 · 데이터 되먹임(feedback)</div>
+<p class="cap">매주 토요일, 지난주 운영 성과(리포트)와 뉴스를 Claude가 분석해 전략 프로파일(<code>daytrade-current.yaml</code>)을 자동 갱신하고, 그게 다음 주 평일 매매에 반영됩니다 — 운영 → 분석 → 갱신 → 운영으로 닫히는 한 주짜리 루프.</p>
+<div class="diagram">
+<svg viewBox="0 0 680 452" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>주간 학습 피드백 루프</title><desc>뉴스와 지난주 리포트를 Claude로 분석해 전략 프로파일을 자동 갱신하고 다음 주 매매에 반영하는 순환.</desc>
+<g class="c-amber"><rect x="200" y="50" width="280" height="46" rx="8"/><text class="th" x="214" y="73">뉴스 RSS</text><text class="ts" x="214" y="89">외부 피드 (주간 기사)</text></g>
+<line class="arr" x1="340" y1="96" x2="340" y2="113"/>
+<g class="c-teal"><rect x="200" y="114" width="280" height="46" rx="8"/><text class="th" x="214" y="137">news-prefetch</text><text class="ts" x="214" y="153">토 06:00 cron · 기사 수집</text></g>
+<line class="arr" x1="340" y1="160" x2="340" y2="177"/>
+<g class="c-coral"><rect x="200" y="178" width="280" height="46" rx="8"/><text class="th" x="214" y="201">data/news</text><text class="ts" x="214" y="217">수집 결과 저장 (news-v3 JSON)</text></g>
+<line class="arr" x1="340" y1="224" x2="340" y2="241"/>
+<g class="c-blue"><rect x="44" y="242" width="130" height="46" rx="8"/><text class="th" x="56" y="265">Claude API</text><text class="ts" x="56" y="281">LLM 분석</text></g>
+<line class="arr" x1="174" y1="265" x2="200" y2="265"/>
+<g class="c-coral"><rect x="506" y="242" width="130" height="46" rx="8"/><text class="th" x="518" y="265">data/reports</text><text class="ts" x="518" y="281">지난주 성과</text></g>
+<line class="arr" x1="506" y1="265" x2="480" y2="265"/>
+<g class="c-teal"><rect x="200" y="242" width="280" height="46" rx="8"/><text class="th" x="214" y="265">insight-weekly</text><text class="ts" x="214" y="281">토 09:00 · 뉴스+성과 → 제안 생성</text></g>
+<line class="arr" x1="340" y1="288" x2="340" y2="305"/>
+<g class="c-coral"><rect x="200" y="306" width="280" height="46" rx="8"/><text class="th" x="214" y="329">daytrade-current.yaml</text><text class="ts" x="214" y="345">전략 프로파일 자동 갱신 (.bak 백업)</text></g>
+<line class="arr" x1="340" y1="352" x2="340" y2="369"/>
+<g class="c-purple"><rect x="200" y="370" width="280" height="46" rx="8"/><text class="th" x="214" y="393">paper-day 봇</text><text class="ts" x="214" y="409">다음 주 평일 매매에 반영</text></g>
+<path d="M 480 393 H 612 V 290" fill="none" stroke="#993C1D" stroke-width="1.5" marker-end="url(#ah)"/>
+<text class="ts" x="618" y="345" transform="rotate(90 618 345)">운영 성과 누적 → 다음 주</text>
+</svg>
+</div>
+</section>
+
+<section>
+<h2>6. 외부 연동 맵</h2>
+<div class="lens">렌즈 · 통합(integration)</div>
+<p class="cap">시스템이 통신하는 외부 서비스는 넷. 키움만 양방향(시세 받고 주문 보냄)이고, 텔레그램은 알림을 내보내기만, Claude는 주간 분석 요청, RSS는 기사 수신. 각 프로세스가 어떤 서비스에 붙는지 오른쪽에 표시했습니다.</p>
+<div class="diagram">
+<svg viewBox="0 0 680 366" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>외부 연동 맵</title><desc>키움 REST/WS, 텔레그램, Claude, 뉴스 RSS 네 외부 서비스와 맥북 프로세스들의 연결.</desc>
+<g class="c-amber"><rect x="44" y="60" width="150" height="46" rx="8"/><text class="th" x="56" y="83">키움 REST/WS</text><text class="ts" x="56" y="99">시세·랭킹·주문</text></g>
+<g class="c-amber"><rect x="44" y="130" width="150" height="46" rx="8"/><text class="th" x="56" y="153">텔레그램 Bot</text><text class="ts" x="56" y="169">알림 채널</text></g>
+<g class="c-amber"><rect x="44" y="200" width="150" height="46" rx="8"/><text class="th" x="56" y="223">Claude API</text><text class="ts" x="56" y="239">LLM · 비용 가드</text></g>
+<g class="c-amber"><rect x="44" y="270" width="150" height="46" rx="8"/><text class="th" x="56" y="293">뉴스 RSS</text><text class="ts" x="56" y="309">주간 기사</text></g>
+<line class="arr" x1="194" y1="83" x2="360" y2="83" marker-start="url(#ah)"/>
+<text class="ts" x="277" y="76" text-anchor="middle">시세·랭킹 / 주문</text>
+<line class="arr" x1="360" y1="153" x2="194" y2="153"/>
+<text class="ts" x="277" y="146" text-anchor="middle">알림·경고·푸시</text>
+<line class="arr" x1="194" y1="223" x2="360" y2="223" marker-start="url(#ah)"/>
+<text class="ts" x="277" y="216" text-anchor="middle">전략 분석 요청/응답</text>
+<line class="arr" x1="194" y1="293" x2="360" y2="293"/>
+<text class="ts" x="277" y="286" text-anchor="middle">기사 수집</text>
+<rect class="box" x="360" y="46" width="280" height="290" rx="12"/>
+<text class="th" x="376" y="72">맥북 자동매매 프로세스</text>
+<line x1="360" y1="84" x2="640" y2="84" stroke="var(--border-strong)" stroke-width="1"/>
+<text class="th" x="376" y="110">paper-day 봇</text><text class="ts" x="376" y="126">키움(시세·주문) · 텔레그램(알림)</text>
+<text class="th" x="376" y="152">marketcap</text><text class="ts" x="376" y="168">키움(시총 랭킹)</text>
+<text class="th" x="376" y="194">snapshot</text><text class="ts" x="376" y="210">키움(시총200 시세)</text>
+<text class="th" x="376" y="236">heartbeat</text><text class="ts" x="376" y="252">텔레그램(생존 경고)</text>
+<text class="th" x="376" y="278">news-prefetch</text><text class="ts" x="376" y="294">뉴스 RSS(기사)</text>
+<text class="th" x="376" y="320">insight-weekly</text><text class="ts" x="376" y="336" >Claude(분석) · 텔레그램(푸시)</text>
+</svg>
+</div>
+</section>
+
+<section>
+<h2>7. 모듈 의존 그래프</h2>
+<div class="lens">렌즈 · 코드 결합도 (실제 import)</div>
+<p class="cap">src/auto_trading 안의 <code>from ..X import</code>를 전부 센 실측 그래프. 선 두께 = import 횟수(결합도). 세 가지가 드러납니다 — <code>kiwoom</code>은 7개 모듈이 의존하는 <b>단일 sink</b>, <code>cli</code>는 12개를 부르는 <b>최상위 오케스트레이터</b>, <code>strategy</code>는 backtest·daytrade·runner·risk·news 등 6개가 의존하는 <b>공유 판단 코어</b>. 가장 굵은 선은 <code>market→kiwoom</code>(11)·<code>backtest→strategy</code>(8).</p>
+<div class="diagram">
+<svg viewBox="0 0 680 420" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>모듈 import 의존 그래프</title><desc>실제 import 횟수로 잰 모듈 간 의존. kiwoom은 단일 sink, cli는 최상위 호출자, strategy는 공유 코어. 의존은 위에서 아래로 흐른다.</desc>
+<line class="dep" x1="175" y1="86" x2="230" y2="200" stroke-width="2.5"/>
+<line class="dep" x1="175" y1="86" x2="180" y2="272" stroke-width="2.5"/>
+<line class="dep" x1="175" y1="86" x2="545" y2="128" stroke-width="1.3"/>
+<line class="dep" x1="175" y1="86" x2="150" y2="128" stroke-width="1"/>
+<line class="dep" x1="175" y1="86" x2="340" y2="128" stroke-width="1"/>
+<line class="dep" x1="150" y1="158" x2="230" y2="200" stroke-width="2.5"/>
+<line class="dep" x1="150" y1="158" x2="180" y2="272" stroke-width="2"/>
+<line class="dep" x1="202" y1="143" x2="290" y2="143" stroke-width="1.5"/>
+<line class="dep" x1="340" y1="158" x2="350" y2="272" stroke-width="2.5"/>
+<line class="dep" x1="340" y1="158" x2="350" y2="200" stroke-width="2"/>
+<line class="dep" x1="340" y1="158" x2="205" y2="344" stroke-width="1.3"/>
+<line class="dep" x1="154" y1="215" x2="184" y2="215" stroke-width="2.5"/>
+<line class="dep" x1="588" y1="230" x2="190" y2="272" stroke-width="2"/>
+<line class="dep" x1="545" y1="158" x2="510" y2="272" stroke-width="1.3"/>
+<line class="dep" x1="545" y1="158" x2="232" y2="200" stroke-width="1.3"/>
+<line class="dep" x1="180" y1="302" x2="198" y2="344" stroke-width="3"/>
+<line class="dep" x1="350" y1="302" x2="210" y2="344" stroke-width="2"/>
+<g class="c-gray"><rect x="127" y="56" width="96" height="30" rx="6"/><text class="th" x="175" y="76" text-anchor="middle">cli</text></g>
+<g class="c-gray"><rect x="415" y="56" width="110" height="30" rx="6"/><text class="th" x="470" y="76" text-anchor="middle">dashboard</text></g>
+<g class="c-purple"><rect x="98" y="128" width="104" height="30" rx="6"/><text class="th" x="150" y="148" text-anchor="middle">daytrade</text></g>
+<g class="c-purple"><rect x="292" y="128" width="96" height="30" rx="6"/><text class="th" x="340" y="148" text-anchor="middle">runner</text></g>
+<g class="c-teal"><rect x="497" y="128" width="96" height="30" rx="6"/><text class="th" x="545" y="148" text-anchor="middle">news</text></g>
+<g class="c-gray"><rect x="66" y="200" width="88" height="30" rx="6"/><text class="th" x="110" y="220" text-anchor="middle">backtest</text></g>
+<g class="c-purple"><rect x="186" y="200" width="88" height="30" rx="6"/><text class="th" x="230" y="220" text-anchor="middle">strategy</text></g>
+<g class="c-purple"><rect x="306" y="200" width="88" height="30" rx="6"/><text class="th" x="350" y="220" text-anchor="middle">risk</text></g>
+<g class="c-gray"><rect x="426" y="200" width="88" height="30" rx="6"/><text class="th" x="470" y="220" text-anchor="middle">shadow</text></g>
+<g class="c-gray"><rect x="546" y="200" width="88" height="30" rx="6"/><text class="th" x="590" y="220" text-anchor="middle">monitor</text></g>
+<g class="c-teal"><rect x="130" y="272" width="100" height="30" rx="6"/><text class="th" x="180" y="292" text-anchor="middle">market</text></g>
+<g class="c-teal"><rect x="300" y="272" width="100" height="30" rx="6"/><text class="th" x="350" y="292" text-anchor="middle">account</text></g>
+<g class="c-gray"><rect x="460" y="272" width="100" height="30" rx="6"/><text class="th" x="510" y="292" text-anchor="middle">reports</text></g>
+<g class="c-teal"><rect x="145" y="344" width="110" height="30" rx="6"/><text class="th" x="200" y="364" text-anchor="middle">kiwoom</text></g>
+<g class="c-gray"><rect x="352" y="344" width="96" height="30" rx="6"/><text class="th" x="400" y="364" text-anchor="middle">notify</text></g>
+<g class="c-gray"><rect x="520" y="344" width="80" height="30" rx="6"/><text class="th" x="560" y="364" text-anchor="middle">llm</text></g>
+<text class="ts" x="230" y="50">← cli: 최상위 오케스트레이터 (12개 호출)</text>
+<text class="ts" x="262" y="364">strategy: 공유 코어 (6개가 의존)</text>
+<text class="ts" x="44" y="396">kiwoom = 단일 sink · market·account·runner·risk·monitor·daytrade·cli 가 의존</text>
+<text class="ts" x="44" y="414">선 두께 = import 횟수(결합도) · 노드 색 = 계층(앞 그림과 동일) · 의존은 위→아래</text>
+</svg>
+</div>
+</section>
+
+<section>
+<h2>8. 실거래 가드</h2>
+<div class="lens">렌즈 · 안전장치 (mock → real)</div>
+<p class="cap">기본은 <code>KIWOOM_MODE=mock</code>(모의 서버, 진짜 돈 안 움직임). real로 가려면 사용자가 명시해야 하고, 그 뒤로도 주문 하나가 실제 전송되기까지 5단계 관문을 통과해야 합니다. preflight 7종 = risk_limits_active · no_pending_orders · heartbeat_recent · recent_paper_day_mdd · backtest_sharpe · kill_switch_simulation · llm_cost_within_budget.</p>
+<div class="diagram">
+<svg viewBox="0 0 680 490" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>실거래 가드 5단계 funnel</title><desc>mock이 기본이고 real은 명시 필요. 주문이 전송되기까지 모드 가드, preflight 7종, 진입 게이트, 주문별 리스크 필터, dry-run 스위치를 통과해야 한다.</desc>
+<text class="ts" x="44" y="40">출발점 · 실행 모드</text>
+<g class="c-green"><rect x="118" y="48" width="204" height="46" rx="8"/><text class="th" x="130" y="71">KIWOOM_MODE=mock</text><text class="ts" x="130" y="87">기본 · 모의 서버 · 진짜 돈 X</text></g>
+<g class="c-red"><rect x="358" y="48" width="204" height="46" rx="8"/><text class="th" x="370" y="71">KIWOOM_MODE=real</text><text class="ts" x="370" y="87">--allow-real 명시해야 가동</text></g>
+<line class="arr" x1="220" y1="94" x2="330" y2="118"/>
+<line class="arr" x1="460" y1="94" x2="350" y2="118"/>
+<g class="c-red"><rect x="150" y="120" width="380" height="44" rx="8"/><text class="th" x="164" y="142">① 모드 가드 (runner)</text><text class="ts" x="164" y="158">real ∧ ¬allow_real → 라이브 즉시 중단</text></g>
+<text class="ts" x="540" y="146">✗ 라이브 거부</text>
+<line class="arr" x1="340" y1="164" x2="340" y2="177"/>
+<g class="c-amber"><rect x="150" y="178" width="380" height="44" rx="8"/><text class="th" x="164" y="200">② Preflight 7종 게이트</text><text class="ts" x="164" y="216">하나라도 fail → 라이브 시작 보류</text></g>
+<text class="ts" x="540" y="204">✗ 시작 보류</text>
+<line class="arr" x1="340" y1="222" x2="340" y2="235"/>
+<g class="c-amber"><rect x="150" y="236" width="380" height="44" rx="8"/><text class="th" x="164" y="258">③ 진입 게이트 (daytrade)</text><text class="ts" x="164" y="274">지수 5/20 SMA + breadth · 약세장 차단</text></g>
+<text class="ts" x="540" y="262">✗ 진입 0</text>
+<line class="arr" x1="340" y1="280" x2="340" y2="293"/>
+<g class="c-amber"><rect x="150" y="294" width="380" height="44" rx="8"/><text class="th" x="164" y="316">④ 주문별 리스크 필터 (risk.manager)</text><text class="ts" x="164" y="332">−3%손실·비중·노출·대금캡·연속손절·상관·회전</text></g>
+<text class="ts" x="540" y="320">✗ 주문 reject</text>
+<line class="arr" x1="340" y1="338" x2="340" y2="351"/>
+<g class="c-amber"><rect x="150" y="352" width="380" height="44" rx="8"/><text class="th" x="164" y="374">⑤ dry-run 스위치</text><text class="ts" x="164" y="390">--no-dry-run 이어야 실제 전송</text></g>
+<text class="ts" x="540" y="378">✗ 로그만</text>
+<line class="arr" x1="340" y1="396" x2="340" y2="409"/>
+<g class="c-green"><rect x="150" y="410" width="380" height="44" rx="8"/><text class="th" x="164" y="432">통과 → 주문 전송 → 키움</text><text class="ts" x="164" y="448">기본 mock 서버 · real 은 사용자 명시 시만</text></g>
+<g class="c-green"><rect x="150" y="470" width="12" height="10" rx="2"/></g><text class="ts" x="168" y="479">안전 기본/통과</text>
+<g class="c-red"><rect x="300" y="470" width="12" height="10" rx="2"/></g><text class="ts" x="318" y="479">하드 정지</text>
+<g class="c-amber"><rect x="430" y="470" width="12" height="10" rx="2"/></g><text class="ts" x="448" y="479">조건부 게이트</text>
+</svg>
+</div>
+</section>
+
+<p class="foot">생성: docs/architecture-views.html · 키움 REST API 자동매매 봇 · KIWOOM_MODE=mock 기본</p>
+</div>
+</body>
+</html>
