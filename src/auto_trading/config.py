@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     # 누적 후 `auto-trade latency` 로 일별 p50/p95/p99 통계 확인.
     latency_log_path: Path | None = None
 
+    # 2026-07-02 diag — 유니버스 종목 0B 틱 원본 기록 디렉터리. None 이면 비활성.
+    # 운영에선 .env 의 `TICK_LOG_DIR=data/ticks` 으로 활성. 일별 회전
+    # (ticks-YYYY-MM-DD.jsonl). 용도: 틱 기반 PositionGuard 반사실 검증 데이터.
+    tick_log_dir: Path | None = None
+
     @property
     def rest_base_url(self) -> str:
         return (

@@ -8,6 +8,12 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [x] **틱 원본 JSONL 로깅 — 틱 기반 손절 가드 반사실 검증 데이터 수집** (2026-07-02)
+  - **무엇**: 2026-07-01 금호전기(001210) 손절이 설정 -1%(`stop_loss_pct 0.010`)가 아닌 **-4.48%** 에서 체결(오버슈트 비용 ≈ 11.8만원, 그날 손실 17.2만원의 대부분). 원인 = `PositionGuard` 검사가 1분봉 확정 시점(`runner._on_bar` 끝)에만 돌아 봉 내부 급락을 놓침(09:09:58 매수 → 09:10:58 첫 봉 마감 검사 때 이미 -4.48%). 틱 기반 가드로 바꿀지 판단하려면 반사실 검증이 필요한데 틱이 어디에도 저장되지 않아 검증 불가 → **트레이딩 로직은 일절 안 건드리고** 러너가 이미 구독 중인 0B 웹소켓 틱을 일별 JSONL(`data/ticks/ticks-YYYY-MM-DD.jsonl`)로 read-only 저장하는 `monitor/tick_recorder.py` 추가. 핫패스 보호: 매 틱은 메모리 버퍼 append 만, 디스크 write 는 임계(200줄)/간격(5초) 도달 시 묶음 1회. `.env` 의 `TICK_LOG_DIR=data/ticks` 로 활성(비우면 비활성 — 기존 `LATENCY_LOG_PATH` 와 동일 opt-in 패턴).
+  - **왜**: diag-first(inverse_etf_study 와 동일) — 데이터 먼저 모으고 "틱 기반 가드였다면 손절가가 얼마였나 / 승자를 조기 손절해 이익을 깎진 않았나"를 실측한 뒤에만 가드 로직 변경을 결정. 장중 3종목 × 6시간 수준이라 용량은 수 MB.
+  - **어떻게 확인**: ① `.env` 에 `TICK_LOG_DIR=data/ticks` 추가 후 다음 paper-day 장중 `ls data/ticks/` → `ticks-YYYY-MM-DD.jsonl` 생성·증가. ② `tail -1 data/ticks/ticks-*.jsonl | python3 -m json.tool` → `ts/symbol/price/volume` 4필드. ③ `uv run pytest tests/test_monitor_tick_recorder.py -v` → 12 케이스 PASS.
+  - **후속**: 틱이 수 거래일 쌓이면 반사실 분석(체결 틱 vs 봉 마감 검사 손절가 비교) 스크립트를 `scripts/diagnostics/` 에 추가 — 그 결과로 틱 기반 가드 전환 여부 결정.
+
 - [x] **일일 손실 한도(churn 브레이크) 발동을 일일 리포트에 노출** (2026-07-02)
   - **무엇**: 2026-07-01 에 churn 브레이크가 10:27 발동(실현손실 202,646원 > 한도 100,000원)해 이후 매수 신호 252건을 종일 차단했는데, 일일 리포트엔 흔적이 전혀 없었다(`reentry_blocked_count` 는 매수여력 부족 거절만 세는 별개 필드). `runner.signal_blocked_daily_loss` 이벤트를 파서(`log_parser.py`)에 추가하고, `DailyReport` 에 `daily_loss_blocked_count`(차단 건수)·`daily_loss_blocked_first_time`(최초 발동 KST 시각) 신설. note_ko 에 "🛑 10:27 일일 손실 한도 도달 — 이후 신규 매수 중단 (신호 252건 차단)", timeline 에 최초 발동 1건(실현손실·한도 금액 포함) 표시.
   - **왜**: 발동 후엔 오후 내내 매수가 없는데 리포트만 보면 "왜 조용했는지" 알 수 없었다. 브레이크는 검증된 균형 가드라 로직은 무변경 — 가시성만 추가.
