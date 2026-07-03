@@ -1,5 +1,8 @@
 # day-trade HIGH_VOL 프로파일 — 고변동성장 "소액 능동매매" (구 daytrade-crash 의 전면정지 대체).
-# 베이스: daytrade-current.yaml.
+# ⚠️ 레짐 라우터가 켜져 있으면 daytrade-current.yaml 대신 *이 파일이 실제 적용*된다.
+#    2026-06-16 이후 전 운영일이 HIGH_VOL 라우팅 — 사실상 이 파일이 상시 운영본.
+#    회피 종목은 시동 시 daytrade-current 의 목록과 자동 합집합 병합 (2026-07-04).
+# 베이스: daytrade-current.yaml (작성 시점 기준 — current 갱신 시 어긋날 수 있음).
 #
 # 왜 바뀌었나 (2026-06-14):
 #   기존엔 HIGH_VOL → daytrade-crash.yaml(1원 사이징 = 봇 완전정지) 로 라우팅됐다.
@@ -19,6 +22,8 @@
 #     max_position_weight 0.10→0.07 / max_portfolio_exposure 0.60→0.40 (포지션 축소)
 #     daily_realized_loss_limit 150k→100k (churn 브레이크 더 빨리)
 #     momentum_threshold_pct 0.3→0.35 (변동성장에서 진입 문턱 살짝 높여 헛매수 억제)
+#     cooldown_min 45 — current(90) 보다 짧음. 조정 목록에 없던 암묵 변경 —
+#       2026-07-04 적대적 검토에서 발견, 의도 재확인 필요.
 #
 # ⚠️ 0 = "무제한(비활성)". max_order_value=0 은 종목당 비중(max_position_weight)·
 #   일매수한도(daily_notional_limit)가 대신 사이징을 통제하므로 의도된 값이다.

@@ -1,12 +1,15 @@
 # day-trade RANGE 프로파일 — 박스권(횡보) 전용.
-# 베이스: daytrade-current.yaml.
+# ⚠️ 레짐 라우터가 켜져 있으면 daytrade-current.yaml 대신 *이 파일이 실제 적용*된다.
+#    회피 종목은 시동 시 daytrade-current 의 목록과 자동 합집합 병합 (2026-07-04).
+# 베이스: daytrade-current.yaml (작성 시점 기준 — current 갱신 시 어긋날 수 있음).
 # 조정 사유: 박스권은 짧은 익절·짧은 손절이 유리 (큰 폭 추세 기대 X).
-#   partial_take_pct 0.018→0.010 (+1.0% 도달 시 절반 익절 — 박스 상단 빠르게 차익)
-#   trailing_stop_pct 0.012→0.008 (잔량 트레일링도 짧게)
-#   top_n 3→6 (하루 최대 매수 종목 6개)
+#   partial_take_pct 0.010 (+1.0% 도달 시 절반 익절 — 박스 상단 빠르게 차익)
+#   trailing_stop_pct 0.008 (잔량 트레일링도 짧게)
+#   top_n 6 (하루 최대 매수 종목 6개 — current 3 보다 많음)
+#   cooldown_min 60 — current(90) 보다 짧음. 2026-07-04 검토에서 발견, 의도 재확인 필요.
 #   max_position_weight 0.10 / max_portfolio_exposure 0.60
 #     → 종목당 총평가금액의 10%, 전체 합산 최대 60%(=6종목×10%).
-# 손절(stop_loss_pct), 회전율 통제(cooldown, daily_notional_limit, max_buys_per_symbol)는 불변.
+# 손절(stop_loss_pct)·daily_notional_limit·max_buys_per_symbol 은 current 와 동일.
 name: daytrade range
 strategy: index_momentum_daytrade
 top_n: 6

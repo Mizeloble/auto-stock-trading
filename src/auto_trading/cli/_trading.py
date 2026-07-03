@@ -331,6 +331,7 @@ def paper_day(
     # 29단계 PR41 — 시장국면 자동 라우팅. regime_router.enabled=True 이면
     # KODEX 200 60일봉 → MarketRegime 분류 → trend/defensive/range/crash 매핑 프로파일로
     # 교체. fetch/매핑 실패 시 fail-safe (현재 프로파일 유지). enabled=False(기본) 면 회귀 0.
+    routed_base_profile = None  # 라우팅 발생 시 베이스(회피 목록의 단일 출처) 보관
     if profile_path is not None:
         _pre_profile = cli.load_daytrade_profile_or_exit(profile_path)
         if _pre_profile.regime_router.enabled:
@@ -341,6 +342,7 @@ def paper_day(
             cli.console.print(f"[cyan]{routing.summary_ko}[/cyan]")
             if routing.routed:
                 profile_path = routing.profile_path  # 매핑된 새 경로로 교체
+                routed_base_profile = _pre_profile
 
     # 23단계 Phase G — 프로파일 있으면 strategy/top_n/liquidate/discover_delay/exclude_etf 덮어쓰기.
     cfg = cli.apply_daytrade_profile_overrides(
@@ -352,6 +354,15 @@ def paper_day(
     )
     if cfg.summary_msg:
         cli.console.print(f"[cyan]{cfg.summary_msg}[/cyan]")
+    # 레짐 라우팅으로 프로파일을 갈아탔어도 기본 프로파일(주간 리뷰가 갱신)의
+    # 회피 종목은 항상 함께 적용 — 라우팅된 날 회피 목록이 빠지는 드리프트 차단.
+    if routed_base_profile is not None and cfg.profile is not None:
+        merged = cli.merge_base_avoid_symbols(cfg.profile, base=routed_base_profile)
+        if merged:
+            cli.console.print(
+                f"[cyan]회피 종목 병합:[/cyan] 기본 프로파일에서 피하기로 한 종목 "
+                f"{len(merged)}개({', '.join(merged)})를 오늘 프로파일에도 적용합니다."
+            )
     if telegram_throttle_min > 0:
         cli.console.print(f"[cyan]텔레그램 throttle:[/cyan] {telegram_throttle_min}분 윈도우")
 

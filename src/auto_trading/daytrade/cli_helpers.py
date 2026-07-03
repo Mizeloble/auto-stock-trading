@@ -171,6 +171,32 @@ def route_profile_by_regime(
     )
 
 
+def merge_base_avoid_symbols(routed: DaytradeProfile, *, base: DaytradeProfile) -> list[str]:
+    """레짐 라우팅으로 갈아탄 프로파일에 베이스 프로파일의 회피 종목을 합집합 반영.
+
+    무엇/왜: 주간 LLM 리뷰·수동 회피 지정은 daytrade-current.yaml 에만 기록되는데,
+    레짐 라우터가 켜져 있으면 실제 매매는 trend/defensive/range/highvol 프로파일로
+    돈다 — 회피 목록이 라우팅된 날엔 적용되지 않는 드리프트(2026-07-04 적대적 검토,
+    실측: 6/16 이후 전 운영일이 highvol 로 라우팅돼 current 의 회피 2종목 미적용).
+    파일 간 복사 동기화 대신 시동 시 합집합으로 병합해 단일 출처(current)를 보존한다.
+
+    반환: 새로 추가된 종목 코드 목록(정렬) — 콘솔·로그 안내용. 없으면 빈 리스트.
+    어떻게 확인: tests/test_daytrade_cli_helpers.py 의 merge_base_avoid_symbols 케이스.
+    """
+    existing = set(routed.avoid_symbols)
+    added = sorted({s for s in base.avoid_symbols if s and s not in existing})
+    if added:
+        routed.avoid_symbols = [*routed.avoid_symbols, *added]
+        structlog.get_logger("daytrade.cli").info(
+            "daytrade.avoid_symbols_merged",
+            base_profile=base.name,
+            routed_profile=routed.name,
+            added=added,
+            total=len(routed.avoid_symbols),
+        )
+    return added
+
+
 @dataclass(frozen=True)
 class PaperDayOverrides:
     """프로파일 적용 후 정착된 paper-day 설정값.
@@ -550,6 +576,7 @@ __all__ = [
     "build_paper_day_runner",
     "build_profile_factory",
     "delayed_discover",
+    "merge_base_avoid_symbols",
     "paper_day_main",
     "paper_day_with_commands",
     "route_profile_by_regime",
