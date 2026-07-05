@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import Literal
 
@@ -116,17 +116,20 @@ def _parse_row(row: dict, market: Market) -> RankedSymbol | None:
 async def _fetch_market(
     client: KiwoomRestClient,
     market: Market,
+    *,
+    sort_tp: str = "1",
 ) -> list[RankedSymbol]:
-    """단일 시장(KOSPI 또는 KOSDAQ) 거래량 상위 행을 가져온다.
+    """단일 시장(KOSPI 또는 KOSDAQ) 순위 상위 행을 가져온다.
 
-    응답 길이는 키움이 정함(보통 100). 잘림(top_n) 과 ETF 필터는 호출자가 처리.
+    `sort_tp`: 1=거래량(주식 수), 2=거래대금. 응답 길이는 키움이 정함(보통 100).
+    잘림(top_n) 과 ETF 필터는 호출자가 처리.
     """
     # ka10030 (당일거래량상위) 필수 파라미터 — probe(2026-05-03) 로 확정.
     # crd_tp / trde_qty_tp / pric_tp / trde_prica_tp / mrkt_open_tp 가 빠지면
     # "1511: 필수 입력 값에 값이 존재하지 않습니다" 로 거절. 모두 "전체"(0/000) 기본.
     body = {
         "mrkt_tp": _MRKT_TP[market],
-        "sort_tp": "1",  # 1=거래량, 2=거래대금
+        "sort_tp": sort_tp,  # 1=거래량, 2=거래대금
         "mang_stk_incls": "0",  # 관리종목 제외
         "crd_tp": "0",  # 신용 구분: 0=전체
         "trde_qty_tp": "0",  # 거래량 구분: 0=전체
@@ -142,8 +145,60 @@ async def _fetch_market(
         item = _parse_row(row, market)
         if item is not None:
             parsed.append(item)
-        # ETF 필터는 호출자(top_volume) 단계에서 적용 — 여기서는 매핑만.
+        # ETF 필터는 호출자(top_volume/top_value) 단계에서 적용 — 여기서는 매핑만.
     return parsed
+
+
+async def _merged_top(
+    client: KiwoomRestClient,
+    *,
+    sort_tp: str,
+    sort_key: Callable[[RankedSymbol], float],
+    log_event: str,
+    top_n: int,
+    markets: tuple[Market, ...],
+    exclude_etf: bool,
+    exclude_symbols: Collection[str],
+) -> list[RankedSymbol]:
+    """두 시장 순위를 합쳐 필터(ETF/회피) 후 `sort_key` desc 상위 `top_n`.
+
+    top_volume/top_value 의 공통 몸통 — 정렬 축(sort_tp·sort_key)만 갈라진다.
+    """
+    avoid = {s for s in exclude_symbols if s}
+    merged: list[RankedSymbol] = []
+    for market in markets:
+        try:
+            rows = await _fetch_market(client, market, sort_tp=sort_tp)
+        except Exception:
+            log.warning("market.rank.fetch_failed", market=market, exc_info=True)
+            continue
+        merged.extend(rows)
+
+    excluded: list[tuple[str, str]] = []
+    skipped_known = 0
+    if exclude_etf or avoid:
+        kept: list[RankedSymbol] = []
+        for r in merged:
+            if r.symbol in avoid:
+                skipped_known += 1
+            elif exclude_etf and _is_etf_or_etn(r.name):
+                excluded.append((r.symbol, r.name))
+            else:
+                kept.append(r)
+        merged = kept
+
+    merged.sort(key=sort_key, reverse=True)
+    chosen = merged[:top_n]
+    log.info(
+        log_event,
+        markets=list(markets),
+        top_n=top_n,
+        exclude_etf=exclude_etf,
+        chosen=[(r.symbol, r.market, r.volume) for r in chosen],
+        excluded_count=len(excluded),
+        skipped_known=skipped_known,
+    )
+    return chosen
 
 
 async def top_volume(
@@ -165,41 +220,46 @@ async def top_volume(
 
     필터 후 부족할 일은 거의 없음 — 키움이 시장당 100개를 돌려주므로.
     """
-    avoid = {s for s in exclude_symbols if s}
-    merged: list[RankedSymbol] = []
-    for market in markets:
-        try:
-            rows = await _fetch_market(client, market)
-        except Exception:
-            log.warning("market.rank.fetch_failed", market=market, exc_info=True)
-            continue
-        merged.extend(rows)
-
-    excluded: list[tuple[str, str]] = []
-    skipped_known = 0
-    if exclude_etf or avoid:
-        kept: list[RankedSymbol] = []
-        for r in merged:
-            if r.symbol in avoid:
-                skipped_known += 1
-            elif exclude_etf and _is_etf_or_etn(r.name):
-                excluded.append((r.symbol, r.name))
-            else:
-                kept.append(r)
-        merged = kept
-
-    merged.sort(key=lambda r: r.volume, reverse=True)
-    chosen = merged[:top_n]
-    log.info(
-        "market.rank.top_volume",
-        markets=list(markets),
+    return await _merged_top(
+        client,
+        sort_tp="1",
+        sort_key=lambda r: r.volume,
+        log_event="market.rank.top_volume",
         top_n=top_n,
+        markets=markets,
         exclude_etf=exclude_etf,
-        chosen=[(r.symbol, r.market, r.volume) for r in chosen],
-        excluded_count=len(excluded),
-        skipped_known=skipped_known,
+        exclude_symbols=exclude_symbols,
     )
-    return chosen
 
 
-__all__ = ["Market", "RankedSymbol", "top_volume"]
+async def top_value(
+    client: KiwoomRestClient,
+    *,
+    top_n: int = 3,
+    markets: tuple[Market, ...] = ("KOSPI", "KOSDAQ"),
+    exclude_etf: bool = True,
+    exclude_symbols: Collection[str] = (),
+) -> list[RankedSymbol]:
+    """거래대금 상위 (`sort_tp=2`) — 발굴 대안 신호 연구용 read-only 조회.
+
+    무엇/왜: 거래량(주식 수) 순위는 저가주가 구조적으로 상위를 차지한다
+    (2026-07-04 선정 알파 검증). 거래대금 순위가 더 나은 발굴 원천인지는
+    과거로 거슬러 조회할 수 없어(당일 순위만 제공) 매일 기록해 둬야 나중에
+    반사실 비교가 가능하다 — 기록은 daytrade.cli_helpers 가 담당.
+
+    두 시장 병합 정렬 키는 volume x price (응답의 거래대금 필드가 TR 버전마다
+    달라 근사 사용 — 시장 내 순서는 키움 정렬이 이미 거래대금 기준).
+    """
+    return await _merged_top(
+        client,
+        sort_tp="2",
+        sort_key=lambda r: r.volume * r.price,
+        log_event="market.rank.top_value",
+        top_n=top_n,
+        markets=markets,
+        exclude_etf=exclude_etf,
+        exclude_symbols=exclude_symbols,
+    )
+
+
+__all__ = ["Market", "RankedSymbol", "top_value", "top_volume"]
