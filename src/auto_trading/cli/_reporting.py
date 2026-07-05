@@ -19,7 +19,7 @@ from ..news.cli_helpers import (
     should_skip_weekly_proposal_for_holiday,
 )
 from ..notify import insight as insight_mod
-from ..notify.state import format_daily_report
+from ..notify.daily_report import format_daily_report
 from ..reports.daily import build_daily_report, save_daily_report
 from ..reports.log_parser import parse_log
 from ..strategy import scanner

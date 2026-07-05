@@ -1,12 +1,12 @@
 """_pair_buy_liq_records / _format_pair_line / _format_buy_line / _format_sell_line 단위 테스트.
 
-format_daily_report 통합 테스트는 test_notify_state_daily_report.py 가 별도 커버.
+format_daily_report 통합 테스트는 test_notify_daily_report.py 가 별도 커버.
 여기서는 분해된 헬퍼 4종을 격리해서 페어링·포맷 분기마다 한 줄씩 검증한다.
 """
 
 from __future__ import annotations
 
-from auto_trading.notify.state import (
+from auto_trading.notify.daily_report import (
     _format_buy_line,
     _format_pair_line,
     _format_sell_line,
