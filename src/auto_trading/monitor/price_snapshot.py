@@ -15,6 +15,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import Protocol
 
 import structlog
 
@@ -22,10 +23,38 @@ from .._common import KST
 from ..kiwoom.rest import KiwoomRestClient
 from ..market.index import Market as IndexMarket
 from ..market.index import fetch_latest_index_price
-from ..market.marketcap import MarketCapEntry
 from ..market.quote import get_quote
 
+# NOTE: MarketCapEntry 는 SnapshotItem 프로토콜을 구조적으로 만족한다 — 직접 import 불필요.
+
 log = structlog.get_logger(__name__)
+
+
+class SnapshotItem(Protocol):
+    """스냅샷 대상의 최소 계약 — `MarketCapEntry` 와 `SnapshotTarget` 이 모두 만족.
+
+    read-only property 로 선언해 frozen dataclass(Literal market 포함)가 구조적으로
+    매칭되게 한다.
+    """
+
+    @property
+    def rank(self) -> int: ...
+    @property
+    def symbol(self) -> str: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def market(self) -> str: ...
+
+
+@dataclass(frozen=True)
+class SnapshotTarget:
+    """시총 마스터 밖의 스냅샷 대상(발굴 종목 등). rank=0 = 시총 순위 아님."""
+
+    symbol: str
+    name: str = ""
+    market: str = ""
+    rank: int = 0
 
 
 @dataclass(frozen=True)
@@ -47,6 +76,73 @@ def snapshot_path_for(out_dir: Path, when: date | None = None) -> Path:
     """`out_dir/topcap-YYYY-MM-DD.jsonl` — 일별 회전 파일 표준 경로."""
     d = when or datetime.now(tz=KST).date()
     return out_dir / f"topcap-{d.isoformat()}.jsonl"
+
+
+def discovered_snapshot_path_for(out_dir: Path, when: date | None = None) -> Path:
+    """`out_dir/discovered-YYYY-MM-DD.jsonl` — 발굴 종목 스냅샷 일별 파일.
+
+    topcap 과 **파일을 분리**하는 이유: breadth 게이트(`market/breadth.py`)가
+    topcap 파일의 '마지막 라운드 줄 수'로 시장 폭을 판단하므로, 발굴 종목을 같은
+    파일에 섞으면 표본이 오염된다. 리포트 조인(`reports/snapshot_reader`)은
+    두 파일을 합쳐 읽는다.
+    """
+    d = when or datetime.now(tz=KST).date()
+    return out_dir / f"discovered-{d.isoformat()}.jsonl"
+
+
+def load_todays_discovery_symbols(
+    alt_rank_path: Path,
+    *,
+    exclude_symbols: set[str] | None = None,
+    when: date | None = None,
+) -> list[SnapshotTarget]:
+    """`data/discovery/alt-rank.jsonl` 에서 오늘 발굴된 종목들을 스냅샷 대상으로 추출.
+
+    무엇/왜: topcap 스냅샷은 시총 상위만 담아 거래량 발굴 소형주의 일중 데이터가
+    비어 있었다(진입 피처·MFE/MAE None — memory: project_snapshot_join_coverage).
+    발굴 기록(volume_pool + value_pool, PR #164)을 읽어 그 종목들도 10분 스냅샷
+    대상에 추가한다. read-only 로컬 파일 파싱 — 외부 호출 없음(monitor/ 규칙).
+
+    - 오늘(when) 날짜 레코드만 사용. 손상 라인·파일 없음은 빈 리스트.
+    - `exclude_symbols`(보통 topcap universe)에 이미 있는 종목은 제외 — 중복 호출 방지.
+    - 이름·시장은 value_pool 레코드에서 보강(volume_pool 은 코드만 기록됨).
+    """
+    target_day = (when or datetime.now(tz=KST).date()).isoformat()
+    excluded = exclude_symbols or set()
+    if not alt_rank_path.exists():
+        return []
+    symbols: dict[str, SnapshotTarget] = {}
+    try:
+        lines = alt_rank_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        log.warning("snapshot.alt_rank_read_failed", path=str(alt_rank_path), error=str(exc))
+        return []
+    for raw in lines:
+        raw = raw.strip()
+        if not raw or raw[0] != "{":
+            continue
+        try:
+            rec = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("date") != target_day:
+            continue
+        for sym in rec.get("volume_pool") or []:
+            if isinstance(sym, str) and sym and sym not in excluded:
+                symbols.setdefault(sym, SnapshotTarget(symbol=sym))
+        for row in rec.get("value_pool") or []:
+            if not isinstance(row, dict):
+                continue
+            sym = row.get("symbol")
+            if not isinstance(sym, str) or not sym or sym in excluded:
+                continue
+            # value_pool 엔 이름·시장이 있으므로 volume_pool 만의 항목도 보강.
+            symbols[sym] = SnapshotTarget(
+                symbol=sym,
+                name=str(row.get("name") or ""),
+                market=str(row.get("market") or ""),
+            )
+    return list(symbols.values())
 
 
 @dataclass
@@ -72,7 +168,7 @@ class PriceSnapshotRecorder:
     async def record_round(
         self,
         client: KiwoomRestClient,
-        universe: list[MarketCapEntry],
+        universe: list[SnapshotItem],
         *,
         now: datetime | None = None,
     ) -> list[PriceSnapshotEntry]:
@@ -81,6 +177,8 @@ class PriceSnapshotRecorder:
         - 한 종목 호출 실패는 swallow + 로그 — 다른 종목 계속.
         - 라운드 안에서 ts 는 라운드 시작 시각으로 고정(같은 timestamp 가 200줄).
         - 키움 페이싱(150ms)으로 200종목 ≈ 30초 소요.
+        - 입력은 `SnapshotItem` 계약(rank/symbol/name/market)만 요구 —
+          시총 마스터(`MarketCapEntry`)와 발굴 대상(`SnapshotTarget`) 공용.
         """
         ts_iso = (now or datetime.now(tz=KST)).isoformat()
         out: list[PriceSnapshotEntry] = []
@@ -203,6 +301,10 @@ __all__ = [
     "IndexSnapshotRecorder",
     "PriceSnapshotEntry",
     "PriceSnapshotRecorder",
+    "SnapshotItem",
+    "SnapshotTarget",
+    "discovered_snapshot_path_for",
     "index_snapshot_path_for",
+    "load_todays_discovery_symbols",
     "snapshot_path_for",
 ]
