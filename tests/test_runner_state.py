@@ -6,12 +6,12 @@ from datetime import datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
-from auto_trading import runner as runner_module
 from auto_trading._common import Bar
 from auto_trading.account.balance import AccountSnapshot, Holding
 from auto_trading.account.orders import OrderResult
 from auto_trading.risk.manager import AccountState
 from auto_trading.runner import PaperRunner, RunnerControlState
+from auto_trading.runner import paper as runner_module
 from auto_trading.strategy.base import Side, Signal
 from auto_trading.strategy.sma_crossover import SmaCrossover
 

@@ -18,11 +18,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import auto_trading.runner as runner_module
 from auto_trading._common import Bar, Side
 from auto_trading.account.order_journal import OrderJournal
 from auto_trading.account.orders import Order, OrderResult, OrderType
 from auto_trading.runner import PaperRunner
+from auto_trading.runner import paper as runner_module
 from auto_trading.strategy.sma_crossover import SmaCrossover
 
 

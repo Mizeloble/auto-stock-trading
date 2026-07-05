@@ -16,11 +16,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
-import auto_trading.runner as runner_module
 from auto_trading._common import KST, Bar, Side
 from auto_trading.account.orders import Order, OrderType
 from auto_trading.kiwoom.schemas import KiwoomError
 from auto_trading.runner import PaperRunner
+from auto_trading.runner import paper as runner_module
 from auto_trading.strategy.index_daytrade import IndexMomentumDayTrade
 
 
