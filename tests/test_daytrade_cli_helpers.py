@@ -17,6 +17,7 @@ from auto_trading.daytrade.cli_helpers import (
     PaperDayOverrides,
     apply_daytrade_profile_overrides,
     build_paper_day_runner,
+    merge_base_avoid_symbols,
 )
 from auto_trading.daytrade.profile import (
     DaytradeProfile,
@@ -148,6 +149,53 @@ def test_invalid_profile_yaml_raises(tmp_path: Path) -> None:
             discover_delay_sec=30,
             include_etf=False,
         )
+
+
+def _profile(name: str, avoid: list[str]) -> DaytradeProfile:
+    return DaytradeProfile(
+        name=name,
+        strategy="index_momentum_daytrade",
+        params=DaytradeStrategyParams(),
+        risk=DaytradeRiskLimits(),
+        avoid_symbols=avoid,
+    )
+
+
+def test_merge_base_avoid_symbols_adds_missing_and_keeps_order() -> None:
+    """베이스(current)에만 있는 회피 종목이 라우팅된 프로파일에 합쳐진다.
+
+    드리프트 시나리오: 주간 리뷰가 current 에만 회피를 추가 → 라우팅된 날 미적용.
+    기존 목록은 순서 보존, 새 항목은 정렬돼 뒤에 붙는다.
+    """
+    routed = _profile("highvol", avoid=["356680"])
+    base = _profile("current", avoid=["004870", "001470", "356680"])
+
+    added = merge_base_avoid_symbols(routed, base=base)
+
+    assert added == ["001470", "004870"]
+    assert routed.avoid_symbols == ["356680", "001470", "004870"]
+
+
+def test_merge_base_avoid_symbols_noop_when_already_covered() -> None:
+    """베이스 목록이 이미 전부 있으면 변경 없음 + 빈 리스트 반환."""
+    routed = _profile("highvol", avoid=["001470", "356680"])
+    base = _profile("current", avoid=["356680"])
+
+    added = merge_base_avoid_symbols(routed, base=base)
+
+    assert added == []
+    assert routed.avoid_symbols == ["001470", "356680"]
+
+
+def test_merge_base_avoid_symbols_ignores_empty_entries() -> None:
+    """베이스에 빈 문자열이 섞여 있어도 회피 목록에 유입되지 않는다."""
+    routed = _profile("highvol", avoid=[])
+    base = _profile("current", avoid=["", "005930"])
+
+    added = merge_base_avoid_symbols(routed, base=base)
+
+    assert added == ["005930"]
+    assert routed.avoid_symbols == ["005930"]
 
 
 def _empty_overrides() -> PaperDayOverrides:

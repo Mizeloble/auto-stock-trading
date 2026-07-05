@@ -8,6 +8,11 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [x] **레짐 라우팅 프로파일 동기화 — 회피 종목 합집합 병합 + defensive 한도 누락 보정** (2026-07-04)
+  - **무엇**: 2026-07-04 적대적 검토에서 발견 — 레짐 라우터가 켜진 뒤(실측: 6/16 이후 전 운영일이 HIGH_VOL → daytrade-highvol.yaml) 실제 매매는 레짐 프로파일로 도는데, 주간 LLM 리뷰·수동 회피 지정은 `daytrade-current.yaml` 에만 반영돼 라우팅된 날 회피 목록(001470·004870)이 적용되지 않았다. ① paper-day 시동 시 라우팅이 일어나면 베이스(current)의 `avoid_symbols` 를 라우팅된 프로파일에 **합집합 병합**(`merge_base_avoid_symbols`) — 파일 간 복사 동기화 대신 단일 출처(current) 보존. ② `daytrade-defensive.yaml` 에 종목당 비중·전체 노출 한도 누락 보정(누락 시 엔진 기본 20%/80%가 적용돼 약세장 프로파일이 오히려 가장 느슨했음 → 10%/60% 명시). ③ 레짐 프로파일 4종 헤더에 "이 파일이 실제 적용본" 경고 + 사실과 어긋난 주석(top_n·임계 구값, "cooldown 불변" 오기) 교정.
+  - **왜**: 사용자가 튜닝·주간 자동화하는 파일과 실제 적용 파일이 달라지는 구조적 드리프트 차단. cooldown 불일치(레짐 45~60 vs current 90)는 매매 행동을 바꾸므로 이번엔 주석으로만 표기 — ledger 반사실 검증 후 별도 결정.
+  - **어떻게 확인**: `uv run pytest tests/test_daytrade_cli_helpers.py tests/test_daytrade_regime_router_integration.py -v` — 병합 3케이스 + 프로파일 한도 명시 회귀. 다음 paper-day 시동 콘솔에 "회피 종목 병합: … 2개(001470, 004870)" 라인 + 로그 `daytrade.avoid_symbols_merged`.
+
 - [x] **틱 원본 JSONL 로깅 — 틱 기반 손절 가드 반사실 검증 데이터 수집** (2026-07-02)
   - **무엇**: 2026-07-01 금호전기(001210) 손절이 설정 -1%(`stop_loss_pct 0.010`)가 아닌 **-4.48%** 에서 체결(오버슈트 비용 ≈ 11.8만원, 그날 손실 17.2만원의 대부분). 원인 = `PositionGuard` 검사가 1분봉 확정 시점(`runner._on_bar` 끝)에만 돌아 봉 내부 급락을 놓침(09:09:58 매수 → 09:10:58 첫 봉 마감 검사 때 이미 -4.48%). 틱 기반 가드로 바꿀지 판단하려면 반사실 검증이 필요한데 틱이 어디에도 저장되지 않아 검증 불가 → **트레이딩 로직은 일절 안 건드리고** 러너가 이미 구독 중인 0B 웹소켓 틱을 일별 JSONL(`data/ticks/ticks-YYYY-MM-DD.jsonl`)로 read-only 저장하는 `monitor/tick_recorder.py` 추가. 핫패스 보호: 매 틱은 메모리 버퍼 append 만, 디스크 write 는 임계(200줄)/간격(5초) 도달 시 묶음 1회. `.env` 의 `TICK_LOG_DIR=data/ticks` 로 활성(비우면 비활성 — 기존 `LATENCY_LOG_PATH` 와 동일 opt-in 패턴).
   - **왜**: diag-first(inverse_etf_study 와 동일) — 데이터 먼저 모으고 "틱 기반 가드였다면 손절가가 얼마였나 / 승자를 조기 손절해 이익을 깎진 않았나"를 실측한 뒤에만 가드 로직 변경을 결정. 장중 3종목 × 6시간 수준이라 용량은 수 MB.
