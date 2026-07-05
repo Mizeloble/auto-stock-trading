@@ -8,6 +8,11 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [x] **notify 리팩토링 — 일일 리포트 포맷터를 `state.py` → `daily_report.py` 로 분리** (2026-07-05)
+  - **무엇**: 614줄 `notify/state.py` 에 섞여 있던 두 책임을 분리 — 러너 상태 스냅샷 + 텔레그램 명령 응답(/status 등)은 `state.py`(217줄)에 남기고, 일일 리포트 포맷터(`format_daily_report` + 섹션 헬퍼 전부)는 새 `daily_report.py`(406줄)로 이동. 동작 변경 0줄 — 사용처 import 2곳(telegram.py, cli/_reporting.py)과 테스트 파일명·import 만 갱신.
+  - **왜**: 일일 리포트는 dict payload 를, 상태 포맷터는 `RunnerStateSnapshot` 을 받는 서로 무관한 코드인데 한 파일이라 수정 시 서로 딸려 읽혔다. 파일별 책임 1개 원칙 회복.
+  - **어떻게 확인**: `uv run pytest` 1272 passed + ruff·mypy 통과. 텔레그램 일일 리포트·/status 응답 포맷 변화 없음.
+
 - [x] **스냅샷 커버리지 확장 — 발굴 종목(시총 200 밖)도 10분 스냅샷** (2026-07-04)
   - **무엇**: topcap 스냅샷이 시총 상위 200 만 담아 거래량 발굴 소형주는 일일 리포트의 진입 등락률·순위·MFE/MAE 가 None 이었고, 반사실 검증 때마다 분봉을 API 로 재조회해야 했다. ① `snapshot-top200` 잡이 매 라운드 끝에 **오늘 발굴 종목**(alt-rank.jsonl 의 거래량 픽/풀 + 거래대금 풀, 시총 200 중복 제외)도 조회해 **별도 파일** `data/snapshots/discovered-YYYY-MM-DD.jsonl` 에 append — breadth 게이트는 topcap 파일 줄 수를 세므로 섞지 않음(오염 방지). ② `reports/snapshot_reader.parse_topcap_for_date` 가 두 파일을 병합 → 일일 리포트의 발굴 소형주 피처가 자동으로 채워짐(builder 무변경). 실패는 본 라운드에 영향 없이 경고 로그만(best-effort).
   - **왜**: 앞으로의 모든 A/B 판정(특히 거래량 vs 거래대금 발굴 비교 — 거래대금 풀 종목까지 스냅샷됨)이 자체 데이터로 가능해지는 기반 작업. 과거 일자는 discovered 파일이 없어 기존과 동일(회귀 0).

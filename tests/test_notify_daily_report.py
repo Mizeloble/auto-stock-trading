@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from auto_trading.notify.state import format_daily_report
+from auto_trading.notify.daily_report import format_daily_report
 from auto_trading.notify.telegram import _format_message
 
 
