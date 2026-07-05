@@ -19,12 +19,12 @@ from datetime import datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
-import auto_trading.runner as runner_module
 from auto_trading._common import KST, Bar, Side
 from auto_trading.account.orders import Order, OrderResult, OrderType
 from auto_trading.risk.consecutive_loss import ConsecutiveLossTracker
 from auto_trading.risk.manager import RiskLimits, RiskManager
 from auto_trading.runner import PaperRunner
+from auto_trading.runner import paper as runner_module
 from auto_trading.strategy.base import Signal
 from auto_trading.strategy.sma_crossover import SmaCrossover
 

@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from auto_trading import runner as runner_module
 from auto_trading.risk.manager import AccountState, RiskLimits, RiskManager
 from auto_trading.runner import PaperRunner, RunnerControlState
+from auto_trading.runner import paper as runner_module
 from auto_trading.strategy.sma_crossover import SmaCrossover
 
 

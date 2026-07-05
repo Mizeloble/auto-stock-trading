@@ -14,10 +14,10 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import auto_trading.runner as runner_module
 from auto_trading._common import KST
 from auto_trading.account.balance import AccountSnapshot
 from auto_trading.runner import PaperRunner
+from auto_trading.runner import paper as runner_module
 from auto_trading.runner.day_state import DayState, DayStateStore
 from auto_trading.strategy.sma_crossover import SmaCrossover
 

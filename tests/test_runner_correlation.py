@@ -40,7 +40,7 @@ async def test_refresh_skipped_when_correlation_limit_disabled() -> None:
     """max_position_correlation=0 (기본) → fetch 호출 0."""
     r = _runner(max_correlation=0.0)
     fetch = AsyncMock(return_value={})
-    with patch("auto_trading.runner.refresh_correlations", fetch):
+    with patch("auto_trading.runner.paper.refresh_correlations", fetch):
         await r._refresh_correlations_if_needed(rest=object(), account=_account({"AAA": 5}))  # type: ignore[arg-type]
     fetch.assert_not_called()
 
@@ -49,7 +49,7 @@ async def test_refresh_skipped_when_no_holdings() -> None:
     """보유 0 → 가드 무의미 → fetch 호출 0 + 빈 dict."""
     r = _runner(max_correlation=0.7)
     fetch = AsyncMock(return_value={})
-    with patch("auto_trading.runner.refresh_correlations", fetch):
+    with patch("auto_trading.runner.paper.refresh_correlations", fetch):
         await r._refresh_correlations_if_needed(rest=object(), account=_account({}))  # type: ignore[arg-type]
     fetch.assert_not_called()
     assert r._holding_correlations == {}
@@ -60,7 +60,7 @@ async def test_refresh_calls_fetch_first_time() -> None:
     r = _runner(max_correlation=0.7)
     pairs = {("AAA", "BBB"): 0.8}
     fetch = AsyncMock(return_value=pairs)
-    with patch("auto_trading.runner.refresh_correlations", fetch):
+    with patch("auto_trading.runner.paper.refresh_correlations", fetch):
         await r._refresh_correlations_if_needed(
             rest=object(),  # type: ignore[arg-type]
             account=_account({"AAA": 5, "BBB": 3}),
@@ -74,7 +74,7 @@ async def test_refresh_cached_when_same_day_and_holdings() -> None:
     """동일 날짜 + 동일 보유 → 두 번째 호출은 fetch 스킵."""
     r = _runner(max_correlation=0.7)
     fetch = AsyncMock(return_value={("AAA", "BBB"): 0.5})
-    with patch("auto_trading.runner.refresh_correlations", fetch):
+    with patch("auto_trading.runner.paper.refresh_correlations", fetch):
         await r._refresh_correlations_if_needed(
             rest=object(),  # type: ignore[arg-type]
             account=_account({"AAA": 5, "BBB": 3}),
@@ -90,7 +90,7 @@ async def test_refresh_recomputes_when_holdings_change() -> None:
     """보유 종목 셋이 바뀌면 같은 날짜라도 재계산."""
     r = _runner(max_correlation=0.7)
     fetch = AsyncMock(return_value={})
-    with patch("auto_trading.runner.refresh_correlations", fetch):
+    with patch("auto_trading.runner.paper.refresh_correlations", fetch):
         await r._refresh_correlations_if_needed(
             rest=object(),  # type: ignore[arg-type]
             account=_account({"AAA": 5}),
@@ -110,7 +110,7 @@ async def test_refresh_recomputes_when_date_changes() -> None:
     r._correlations_refresh_symbols = frozenset({"AAA"})
     r._holding_correlations = {("AAA", "BBB"): 0.5}  # 더미 캐시
     fetch = AsyncMock(return_value={("AAA", "BBB"): 0.9})
-    with patch("auto_trading.runner.refresh_correlations", fetch):
+    with patch("auto_trading.runner.paper.refresh_correlations", fetch):
         await r._refresh_correlations_if_needed(
             rest=object(),  # type: ignore[arg-type]
             account=_account({"AAA": 5}),
@@ -127,7 +127,7 @@ async def test_refresh_preserves_cache_on_fetch_failure() -> None:
     cached = {("AAA", "BBB"): 0.5}
     r._holding_correlations = dict(cached)
     fetch = AsyncMock(side_effect=RuntimeError("api down"))
-    with patch("auto_trading.runner.refresh_correlations", fetch):
+    with patch("auto_trading.runner.paper.refresh_correlations", fetch):
         await r._refresh_correlations_if_needed(
             rest=object(),  # type: ignore[arg-type]
             account=_account({"AAA": 5, "BBB": 3}),

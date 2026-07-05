@@ -17,11 +17,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import auto_trading.runner as runner_module
 from auto_trading._common import KST, Bar, Side
 from auto_trading.account.orders import Order, OrderResult, OrderType
 from auto_trading.risk.manager import RiskLimits, RiskManager
 from auto_trading.runner import PaperRunner
+from auto_trading.runner import paper as runner_module
 from auto_trading.strategy.base import Signal
 from auto_trading.strategy.sma_crossover import SmaCrossover
 
@@ -192,7 +192,7 @@ async def test_daily_realized_loss_accumulates_net_on_sell() -> None:
         price=Decimal("68000"),  # ref_price = 68,000 → gross (68000-70000)*10 = -20,000
     )
     with patch(
-        "auto_trading.runner.place_order",
+        "auto_trading.runner.paper.place_order",
         new=AsyncMock(return_value=OrderResult(order_no="S1", client_id="c1", raw={})),
     ):
         await r._place_and_track(rest=object(), order=order, bar=_bar(), account=account)  # type: ignore[arg-type]
@@ -272,7 +272,7 @@ async def test_buy_count_incremented_on_successful_fill() -> None:
         price=Decimal("70000"),
     )
     with patch(
-        "auto_trading.runner.place_order",
+        "auto_trading.runner.paper.place_order",
         new=AsyncMock(return_value=OrderResult(order_no="X1", client_id="c1", raw={})),
     ):
         await r._place_and_track(rest=object(), order=order, bar=_bar(), account=_account())  # type: ignore[arg-type]

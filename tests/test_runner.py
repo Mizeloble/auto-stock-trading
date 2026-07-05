@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from auto_trading import runner as runner_module
 from auto_trading.account.balance import AccountSnapshot, Holding
 from auto_trading.account.orders import OrderResult
 from auto_trading.runner import PaperRunner
+from auto_trading.runner import paper as runner_module
 from auto_trading.strategy.sma_crossover import SmaCrossover
 
 
@@ -325,7 +325,7 @@ async def test_install_signal_handlers_routes_sigterm_and_sigint_to_request_stop
         def add_signal_handler(self, sig: int, callback: object) -> None:
             registered[sig] = callback
 
-    with patch("auto_trading.runner.asyncio.get_running_loop", return_value=_LoopStub()):
+    with patch("auto_trading.runner.paper.asyncio.get_running_loop", return_value=_LoopStub()):
         r._install_signal_handlers()
 
     # 핸들러가 등록됐고, 호출하면 실제로 STOPPING 진입.
@@ -346,7 +346,7 @@ async def test_install_signal_handlers_tolerates_unsupported_platform() -> None:
         def add_signal_handler(self, sig: int, callback: object) -> None:
             raise NotImplementedError("not supported")
 
-    with patch("auto_trading.runner.asyncio.get_running_loop", return_value=_FailingLoop()):
+    with patch("auto_trading.runner.paper.asyncio.get_running_loop", return_value=_FailingLoop()):
         r._install_signal_handlers()  # raise 하면 실패
 
     # 별도 어설션 없이 통과 = swallow 정상
