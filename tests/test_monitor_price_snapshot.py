@@ -204,3 +204,113 @@ async def test_index_recorder_isolates_single_failure(
 
     assert len(entries) == 1
     assert entries[0].market == "KOSDAQ"
+
+
+# ---- 발굴 종목 스냅샷 대상 로더 (2026-07-04 커버리지 확장) ----------------------
+
+
+def _alt_rank_line(date: str, volume_pool: list[str], value_pool: list[dict]) -> str:
+    return json.dumps(
+        {
+            "v": 1,
+            "date": date,
+            "ts": f"{date}T09:02:00+09:00",
+            "volume_chosen": volume_pool[:1],
+            "volume_pool": volume_pool,
+            "value_pool": value_pool,
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_load_todays_discovery_symbols_merges_pools_and_enriches_names(tmp_path: Path) -> None:
+    """volume_pool(코드만) + value_pool(이름·시장 포함)을 합치고 이름을 보강한다."""
+    path = tmp_path / "alt-rank.jsonl"
+    path.write_text(
+        _alt_rank_line(
+            "2026-07-06",
+            volume_pool=["001210", "005930"],
+            value_pool=[
+                {
+                    "symbol": "005930",
+                    "name": "삼성전자",
+                    "market": "KOSPI",
+                    "price": 1,
+                    "volume": 1,
+                },
+                {
+                    "symbol": "000660",
+                    "name": "SK하이닉스",
+                    "market": "KOSPI",
+                    "price": 1,
+                    "volume": 1,
+                },
+            ],
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    targets = ps.load_todays_discovery_symbols(path, when=datetime(2026, 7, 6, tzinfo=KST).date())
+
+    by_symbol = {t.symbol: t for t in targets}
+    assert set(by_symbol) == {"001210", "005930", "000660"}
+    assert by_symbol["005930"].name == "삼성전자"  # value_pool 이름 보강
+    assert by_symbol["001210"].name == ""  # volume_pool 만의 종목은 코드만
+    assert all(t.rank == 0 for t in targets)  # 시총 순위 아님
+
+
+def test_load_todays_discovery_symbols_filters_date_and_excludes(tmp_path: Path) -> None:
+    """다른 날짜 레코드는 무시하고, universe 에 이미 있는 종목은 제외한다."""
+    path = tmp_path / "alt-rank.jsonl"
+    lines = [
+        _alt_rank_line("2026-07-03", ["999999"], []),  # 과거 날짜 — 무시
+        _alt_rank_line("2026-07-06", ["001210", "005930"], []),
+        "corrupt {not json",  # 손상 라인 — skip
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    targets = ps.load_todays_discovery_symbols(
+        path,
+        exclude_symbols={"005930"},  # 시총 200 에 이미 포함 — 중복 호출 방지
+        when=datetime(2026, 7, 6, tzinfo=KST).date(),
+    )
+
+    assert [t.symbol for t in targets] == ["001210"]
+
+
+def test_load_todays_discovery_symbols_missing_file_is_empty(tmp_path: Path) -> None:
+    assert ps.load_todays_discovery_symbols(tmp_path / "none.jsonl") == []
+
+
+def test_discovered_snapshot_path_uses_date(tmp_path: Path) -> None:
+    p = ps.discovered_snapshot_path_for(tmp_path, when=datetime(2026, 7, 6, tzinfo=KST).date())
+    assert p.name == "discovered-2026-07-06.jsonl"
+
+
+async def test_record_round_accepts_snapshot_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """시총 마스터 밖 대상(SnapshotTarget)도 같은 recorder 로 기록된다."""
+
+    async def fake_get_quote(_client, symbol: str) -> Quote:
+        return Quote(
+            symbol=symbol,
+            price=Decimal("1000"),
+            change=Decimal("10"),
+            change_pct=Decimal("1.0"),
+            volume=100,
+        )
+
+    monkeypatch.setattr(ps, "get_quote", fake_get_quote)
+    recorder = ps.PriceSnapshotRecorder(path=tmp_path / "discovered.jsonl")
+
+    entries = await recorder.record_round(
+        object(),  # client 미사용 (get_quote 패치)
+        [ps.SnapshotTarget(symbol="001210", name="금호전기")],
+    )
+
+    assert len(entries) == 1
+    rec = json.loads((tmp_path / "discovered.jsonl").read_text().strip())
+    assert rec["symbol"] == "001210"
+    assert rec["rank"] == 0

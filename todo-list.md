@@ -8,6 +8,11 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [x] **스냅샷 커버리지 확장 — 발굴 종목(시총 200 밖)도 10분 스냅샷** (2026-07-04)
+  - **무엇**: topcap 스냅샷이 시총 상위 200 만 담아 거래량 발굴 소형주는 일일 리포트의 진입 등락률·순위·MFE/MAE 가 None 이었고, 반사실 검증 때마다 분봉을 API 로 재조회해야 했다. ① `snapshot-top200` 잡이 매 라운드 끝에 **오늘 발굴 종목**(alt-rank.jsonl 의 거래량 픽/풀 + 거래대금 풀, 시총 200 중복 제외)도 조회해 **별도 파일** `data/snapshots/discovered-YYYY-MM-DD.jsonl` 에 append — breadth 게이트는 topcap 파일 줄 수를 세므로 섞지 않음(오염 방지). ② `reports/snapshot_reader.parse_topcap_for_date` 가 두 파일을 병합 → 일일 리포트의 발굴 소형주 피처가 자동으로 채워짐(builder 무변경). 실패는 본 라운드에 영향 없이 경고 로그만(best-effort).
+  - **왜**: 앞으로의 모든 A/B 판정(특히 거래량 vs 거래대금 발굴 비교 — 거래대금 풀 종목까지 스냅샷됨)이 자체 데이터로 가능해지는 기반 작업. 과거 일자는 discovered 파일이 없어 기존과 동일(회귀 0).
+  - **어떻게 확인**: 다음 거래일 장중 `wc -l data/snapshots/discovered-*.jsonl` 이 10분마다 ~발굴종목수 증가. 콘솔 "✓ 발굴 종목 스냅샷" 라인. `uv run pytest tests/test_monitor_price_snapshot.py tests/test_reports_snapshot_reader.py`(신규 7케이스).
+
 - [ ] **발굴 대안 신호(거래대금 순위) 데이터 축적 — 몇 주 후 A/B 반사실용** (2026-07-04 시작)
   - **무엇**: 키움 순위 TR 은 당일 것만 조회 가능해 "거래량 vs 거래대금 발굴" 반사실을 과거로 만들 수 없다(선정 알파 검증의 한계). ① `market/rank.py` 에 `top_value()`(ka10030 sort_tp=2, 거래대금 상위 — 병합 정렬은 volume×price 근사) 추가, ② `delayed_discover` 가 발굴 직후 같은 시점에 거래대금 풀(발굴 풀과 같은 크기)을 `data/discovery/alt-rank.jsonl` 한 줄로 축적(`record_alt_ranking`). 매매 동작 무영향 — 조회 실패는 경고 로그만 남기고 삼킴. 기록엔 그날의 거래량 픽/풀도 병기해 파일 하나로 자기완결.
   - **왜**: 검증 시리즈 종결 후 남은 두 경로 중 "새 발굴 신호"의 선행 조건. 지금부터 쌓아야 몇 주 뒤 `selection_alpha_study` 방식(당일 시가→종가 vs KODEX)으로 두 순위의 원재료를 나란히 비교 가능.

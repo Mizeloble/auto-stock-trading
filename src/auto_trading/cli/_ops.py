@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
+import structlog
 import typer
 from rich.table import Table
 
@@ -581,11 +582,14 @@ def snapshot_top200(
     """
     from datetime import timedelta as _td
 
+    from ..daytrade.cli_helpers import ALT_RANK_PATH
     from ..market.marketcap import load_cached_universe, universe_path_for
     from ..monitor.price_snapshot import (
         IndexSnapshotRecorder,
         PriceSnapshotRecorder,
+        discovered_snapshot_path_for,
         index_snapshot_path_for,
+        load_todays_discovery_symbols,
         snapshot_path_for,
     )
 
@@ -620,19 +624,42 @@ def snapshot_top200(
     recorder = PriceSnapshotRecorder(path=out_path)
     index_recorder = IndexSnapshotRecorder(path=index_path)
 
-    async def _run() -> tuple[int, int]:
+    # 오늘 발굴 종목(거래량 픽/풀 + 거래대금 풀) 중 시총 200 밖 종목 — 별도 파일에
+    # 함께 스냅샷해 발굴 소형주도 일중 데이터를 갖게 한다(topcap 은 breadth 게이트가
+    # 줄 수를 세므로 섞지 않음). alt-rank 미기록일(휴장·발굴 전)은 빈 리스트 = no-op.
+    discovered = load_todays_discovery_symbols(
+        ALT_RANK_PATH, exclude_symbols={e.symbol for e in universe}
+    )
+    discovered_path = discovered_snapshot_path_for(out_dir)
+
+    async def _run() -> tuple[int, int, int]:
         # 200종목을 10분 윈도우 안에 천천히 스윕 — 기본 0.15s 페이싱은 키움 ka10001
         # 초당 한도보다 빨라 거의 모든 호출이 429→재시도였다(2026-06-17 관측: 하루
         # ~7,600회 헛재시도). 매매 루프와 달리 시간 여유가 크므로 0.5s 로 늦춰 버스트
         # 자체를 없앤다. 200콜 x 0.5s ≈ 100s 로 10분 윈도우에 넉넉.
         async with cli.KiwoomRestClient(min_request_interval_sec=0.5) as client:
-            entries = await recorder.record_round(client, universe)
+            entries = await recorder.record_round(client, list(universe))
             indices = await index_recorder.record_round(client)
-            return len(entries), len(indices)
+            disc_count = 0
+            if discovered:
+                try:
+                    disc_recorder = PriceSnapshotRecorder(path=discovered_path)
+                    disc_entries = await disc_recorder.record_round(client, list(discovered))
+                    disc_count = len(disc_entries)
+                except Exception:
+                    # 발굴 스냅샷은 부가 데이터 — 실패가 본 라운드 결과를 바꾸면 안 된다.
+                    structlog.get_logger(__name__).warning(
+                        "snapshot.discovered_round_failed", exc_info=True
+                    )
+            return len(entries), len(indices), disc_count
 
-    ok, idx_ok = asyncio.run(_run())
+    ok, idx_ok, disc_ok = asyncio.run(_run())
     cli.console.print(f"[green]✓ 스냅샷 1라운드:[/green] 종목 {ok}/{len(universe)}건 → {out_path}")
     cli.console.print(f"[green]✓ 지수 스냅샷:[/green] {idx_ok}/2건 (KOSPI/KOSDAQ) → {index_path}")
+    if discovered:
+        cli.console.print(
+            f"[green]✓ 발굴 종목 스냅샷:[/green] {disc_ok}/{len(discovered)}건 → {discovered_path}"
+        )
 
 
 @cli.app.command("vi")

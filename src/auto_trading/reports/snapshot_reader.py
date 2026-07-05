@@ -6,7 +6,8 @@
 
 설계 — `log_parser.py` 와 같은 정신:
 - JSON 라인만 파싱, 손상/누락 라인은 조용히 skip. 비-JSON 헤더도 무시.
-- 외부 호출 없음(reports/ 규칙). 입력은 로컬 파일 하나, 출력은 결정론적.
+- 외부 호출 없음(reports/ 규칙). 입력은 로컬 파일(topcap + 있으면 discovered),
+  출력은 결정론적.
 - 파일이 없으면 빈 리더 — 모든 조회가 None 으로 우아하게 폴백(과거 일자·게이트 차단일).
 
 시각 매칭: 스냅샷 ts 는 KST 오프셋 포함 ISO 8601("...+09:00"). 체결 시각은 "HH:MM"
@@ -99,25 +100,43 @@ class TopcapSnapshots:
 
 def parse_topcap_snapshots(path: Path | str) -> TopcapSnapshots:
     """topcap-<date>.jsonl → TopcapSnapshots. 파일 없거나 읽기 실패면 빈 리더."""
-    p = Path(path)
     snap = TopcapSnapshots()
-    if not p.exists():
-        return snap
-    try:
-        with p.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                _ingest(snap, line)
-    except OSError:
-        return snap
-    # 시각순 정렬 — append 순서가 곧 시각순이지만 방어적으로 정렬.
-    for pts in snap.series.values():
-        pts.sort(key=lambda pt: pt.minute)
+    _parse_into(snap, Path(path))
+    _sort_series(snap)
     return snap
 
 
 def parse_topcap_for_date(date: str, *, root: Path | str = "data/snapshots") -> TopcapSnapshots:
-    """`<root>/topcap-<date>.jsonl` 표준 경로로 로드."""
-    return parse_topcap_snapshots(Path(root) / f"topcap-{date}.jsonl")
+    """`<root>/topcap-<date>.jsonl` + `<root>/discovered-<date>.jsonl` 병합 로드.
+
+    discovered 파일(2026-07-04 커버리지 확장)은 그날 발굴된 시총 200 밖 종목의
+    10분 스냅샷 — 이걸 합쳐야 거래량 발굴 소형주도 진입 등락률·MFE/MAE 조인이
+    가능하다. 파일이 없으면(과거 일자·휴장일) topcap 만으로 동작 — 회귀 0.
+    breadth 게이트는 이 리더가 아니라 topcap 원본 파일을 직접 읽으므로 무영향.
+    """
+    snap = TopcapSnapshots()
+    _parse_into(snap, Path(root) / f"topcap-{date}.jsonl")
+    _parse_into(snap, Path(root) / f"discovered-{date}.jsonl")
+    _sort_series(snap)
+    return snap
+
+
+def _parse_into(snap: TopcapSnapshots, path: Path) -> None:
+    """JSONL 한 파일을 기존 리더에 누적 파싱. 없음/읽기 실패는 조용히 no-op."""
+    if not path.exists():
+        return
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                _ingest(snap, line)
+    except OSError:
+        return
+
+
+def _sort_series(snap: TopcapSnapshots) -> None:
+    # 시각순 정렬 — append 순서가 곧 시각순이지만 병합·방어 목적 정렬.
+    for pts in snap.series.values():
+        pts.sort(key=lambda pt: pt.minute)
 
 
 def _ingest(snap: TopcapSnapshots, line: str) -> None:

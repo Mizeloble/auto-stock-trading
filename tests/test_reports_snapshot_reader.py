@@ -122,3 +122,43 @@ def test_missing_file_and_corrupt_lines_are_safe(tmp_path: Path) -> None:
     snaps = parse_topcap_snapshots(p)
     assert "A" not in snaps.series
     assert snaps.change_pct_at("B", "09:00") == 5.0
+
+
+def test_parse_for_date_merges_discovered_file(tmp_path: Path) -> None:
+    """topcap + discovered 두 파일이 하나의 리더로 병합된다 (2026-07-04 커버리지 확장).
+
+    발굴 소형주(시총 200 밖)는 discovered-<date>.jsonl 에만 있고, 병합 후에는
+    topcap 종목과 동일하게 진입 등락률·MFE/MAE 조인이 가능해야 한다.
+    """
+    from auto_trading.reports.snapshot_reader import parse_topcap_for_date
+
+    date = "2026-07-06"
+    _write(tmp_path, date, [_line(f"{date}T09:10:00+09:00", "005930", 340000.0, 1.5, 1)])
+    discovered = tmp_path / f"discovered-{date}.jsonl"
+    discovered.write_text(
+        _line(f"{date}T09:10:00+09:00", "001210", 1472.0, 25.0, 0)
+        + "\n"
+        + _line(f"{date}T09:20:00+09:00", "001210", 1400.0, 19.0, 0)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    snap = parse_topcap_for_date(date, root=tmp_path)
+
+    # topcap 종목은 기존대로, 발굴 소형주도 같은 API 로 조회 가능.
+    assert snap.change_pct_at("005930", "09:10") == 1.5
+    assert snap.change_pct_at("001210", "09:12") == 25.0
+    assert snap.range_during("001210", "09:10", "09:20") == (1400.0, 1472.0)
+
+
+def test_parse_for_date_without_discovered_file_unchanged(tmp_path: Path) -> None:
+    """discovered 파일이 없는 과거 일자는 topcap 만으로 기존과 동일하게 동작."""
+    from auto_trading.reports.snapshot_reader import parse_topcap_for_date
+
+    date = "2026-06-15"
+    _write(tmp_path, date, [_line(f"{date}T09:10:00+09:00", "005930", 340000.0, 1.5, 1)])
+
+    snap = parse_topcap_for_date(date, root=tmp_path)
+
+    assert snap.change_pct_at("005930", "09:10") == 1.5
+    assert snap.change_pct_at("001210", "09:10") is None
