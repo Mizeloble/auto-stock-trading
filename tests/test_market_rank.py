@@ -22,7 +22,7 @@ from auto_trading.kiwoom.endpoints import (
     TR,
 )
 from auto_trading.kiwoom.rest import KiwoomRestClient
-from auto_trading.market.rank import top_volume
+from auto_trading.market.rank import top_value, top_volume
 
 
 @pytest.fixture
@@ -109,6 +109,35 @@ async def test_top_volume_top_n_truncates(settings: Settings) -> None:
             chosen = await top_volume(client, top_n=2, markets=("KOSPI",))
     assert len(chosen) == 2
     assert chosen[0].volume > chosen[1].volume
+
+
+async def test_top_value_sends_sort_tp_2_and_sorts_by_value(settings: Settings) -> None:
+    """거래대금 순위: sort_tp=2 전송 + 병합 정렬은 volume x price desc.
+
+    저가·대량(거래량 1위지만 대금 작음) vs 고가·소량(대금 큼) 이 갈리는 케이스 —
+    거래량 순위와 결과가 달라야 대안 신호로서 의미가 있다.
+    """
+    rows = [
+        {"stk_cd": "111111", "stk_nm": "저가대량", "trde_qty": "1000000", "cur_prc": "500"},
+        {"stk_cd": "222222", "stk_nm": "고가소량", "trde_qty": "10000", "cur_prc": "300000"},
+    ]
+    posted_bodies: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        posted_bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=_rank_payload(rows))
+
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_RANK).mock(side_effect=_handler)
+        async with KiwoomRestClient(settings=settings) as client:
+            chosen = await top_value(client, top_n=2, markets=("KOSPI",))
+
+    assert all(b["sort_tp"] == "2" for b in posted_bodies)
+    # 대금: 고가소량 30억 > 저가대량 5억 — 거래량 순위(저가대량 1위)와 반대.
+    assert [r.symbol for r in chosen] == ["222222", "111111"]
 
 
 async def test_top_volume_exclude_symbols_fills_from_next_rank(settings: Settings) -> None:

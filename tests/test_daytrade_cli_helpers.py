@@ -18,13 +18,16 @@ from auto_trading.daytrade.cli_helpers import (
     apply_daytrade_profile_overrides,
     build_paper_day_runner,
     merge_base_avoid_symbols,
+    record_alt_ranking,
 )
+from auto_trading.daytrade.orchestrator import DiscoveryResult
 from auto_trading.daytrade.profile import (
     DaytradeProfile,
     DaytradeRiskLimits,
     DaytradeStrategyParams,
 )
 from auto_trading.heartbeat import Heartbeat
+from auto_trading.market.rank import RankedSymbol
 
 
 def _write_profile(
@@ -196,6 +199,75 @@ def test_merge_base_avoid_symbols_ignores_empty_entries() -> None:
 
     assert added == ["005930"]
     assert routed.avoid_symbols == ["005930"]
+
+
+def _ranked(symbol: str, *, volume: int = 100, price: float = 1000.0) -> RankedSymbol:
+    return RankedSymbol(
+        symbol=symbol, market="KOSPI", name=f"이름{symbol}", volume=volume, price=price
+    )
+
+
+def _discovery(chosen: list[str], blocked: list[str]) -> DiscoveryResult:
+    return DiscoveryResult(
+        chosen=[_ranked(s) for s in chosen],
+        blocked=[(s, "reason") for s in blocked],
+        gates={},
+        note_ko="테스트",
+    )
+
+
+async def test_record_alt_ranking_appends_jsonl(tmp_path: Path, monkeypatch) -> None:
+    """발굴 결과 + 거래대금 풀이 JSONL 한 줄로 축적된다 (새 발굴 신호 A/B 데이터)."""
+    import json
+
+    import auto_trading.daytrade.cli_helpers as ch
+
+    async def fake_top_value(_rest, *, top_n, exclude_etf):
+        assert top_n == 10 and exclude_etf is True
+        return [_ranked("222222", volume=10, price=300_000.0), _ranked("111111")]
+
+    monkeypatch.setattr(ch, "top_value", fake_top_value)
+    out = tmp_path / "alt-rank.jsonl"
+
+    path = await record_alt_ranking(
+        None,  # type: ignore[arg-type]  # top_value 를 패치했으므로 rest 미사용
+        _discovery(chosen=["005930"], blocked=["356680"]),
+        pool_n=10,
+        exclude_etf=True,
+        out_path=out,
+    )
+
+    assert path == out
+    lines = out.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["v"] == 1
+    assert rec["volume_chosen"] == ["005930"]
+    assert rec["volume_pool"] == ["005930", "356680"]
+    assert [r["symbol"] for r in rec["value_pool"]] == ["222222", "111111"]
+    assert rec["value_pool"][0]["price"] == 300_000.0
+
+
+async def test_record_alt_ranking_swallows_fetch_failure(tmp_path: Path, monkeypatch) -> None:
+    """대안 순위 조회 실패는 매매를 막으면 안 된다 — None 반환 + 파일 미생성 + 예외 없음."""
+    import auto_trading.daytrade.cli_helpers as ch
+
+    async def boom(_rest, *, top_n, exclude_etf):
+        raise RuntimeError("kiwoom down")
+
+    monkeypatch.setattr(ch, "top_value", boom)
+    out = tmp_path / "alt-rank.jsonl"
+
+    path = await record_alt_ranking(
+        None,  # type: ignore[arg-type]
+        _discovery(chosen=[], blocked=[]),
+        pool_n=10,
+        exclude_etf=True,
+        out_path=out,
+    )
+
+    assert path is None
+    assert not out.exists()
 
 
 def _empty_overrides() -> PaperDayOverrides:

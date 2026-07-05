@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time
@@ -31,6 +32,7 @@ from ..heartbeat import Heartbeat
 from ..kiwoom.rest import KiwoomRestClient
 from ..market.chart import bars_to_dataframe
 from ..market.index import IndexMomentumTracker, Market
+from ..market.rank import top_value
 from ..notify.factory import build_notifier
 from ..notify.reporting import ReportingNotifier
 from ..notify.telegram_commands import TelegramCommandHandler
@@ -42,7 +44,7 @@ from ..strategy.base import Strategy
 from ..strategy.index_daytrade import IndexMomentumDayTrade
 from ..strategy.intraday import IntradayMomentum
 from ..strategy.regime_router import select_profile_for_regime
-from .orchestrator import discover_and_arm, start_momentum_loop
+from .orchestrator import DiscoveryResult, discover_and_arm, start_momentum_loop
 from .profile import DaytradeBreadthGate, DaytradeProfile
 
 console = Console()
@@ -507,6 +509,70 @@ async def _cancel_aux(*tasks: asyncio.Task[None] | None) -> None:
             await t
 
 
+ALT_RANK_PATH = Path("data/discovery/alt-rank.jsonl")
+
+
+async def record_alt_ranking(
+    rest: KiwoomRestClient,
+    result: DiscoveryResult,
+    *,
+    pool_n: int,
+    exclude_etf: bool,
+    out_path: Path = ALT_RANK_PATH,
+) -> Path | None:
+    """발굴 시점의 대안 순위(거래대금 상위)를 JSONL 로 축적 — 새 발굴 신호 A/B 용.
+
+    무엇/왜: 키움 순위 TR 은 당일 것만 조회 가능해 과거로 거슬러 반사실을 만들 수
+    없다(2026-07-04 선정 알파 검증의 한계). 그래서 발굴 직후 같은 시점에 거래대금
+    순위 풀을 기록해 두면 몇 주 뒤 "거래량 vs 거래대금 발굴" 비교가 가능해진다.
+    매매 동작 무영향 — 순수 데이터 축적이며, 실패는 로그만 남기고 삼킨다.
+
+    기록 형식(한 줄 = 한 발굴):
+    {"v":1, "date", "ts", "volume_chosen": [...], "volume_pool": [...],
+     "value_pool": [{"symbol","name","market","price","volume"}...]}
+    value_pool 은 ETF 필터만 발굴과 동일 적용, 회피/거래불가 제외는 하지 않는다
+    (선정 '원천'의 원시 신호를 남기는 게 목적 — 필터 효과는 이미 리포트가 기록).
+
+    어떻게 확인: tests/test_daytrade_cli_helpers.py 의 record_alt_ranking 케이스.
+    """
+    log = structlog.get_logger("daytrade.cli")
+    try:
+        value_pool = await top_value(rest, top_n=pool_n, exclude_etf=exclude_etf)
+        chosen = [c.symbol for c in result.chosen]
+        blocked = [s for s, _ in result.blocked]
+        now = datetime.now(KST)
+        record = {
+            "v": 1,
+            "date": now.date().isoformat(),
+            "ts": now.isoformat(),
+            "volume_chosen": chosen,
+            "volume_pool": [*chosen, *blocked],
+            "value_pool": [
+                {
+                    "symbol": r.symbol,
+                    "name": r.name,
+                    "market": r.market,
+                    "price": r.price,
+                    "volume": r.volume,
+                }
+                for r in value_pool
+            ],
+        }
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        log.info(
+            "daytrade.alt_rank_recorded",
+            path=str(out_path),
+            value_pool=[r.symbol for r in value_pool],
+        )
+        return out_path
+    except Exception:
+        # 데이터 축적 실패가 매매를 막으면 안 된다 — 경고만 남기고 계속.
+        log.warning("daytrade.alt_rank_record_failed", exc_info=True)
+        return None
+
+
 async def delayed_discover(
     runner: PaperRunner,
     *,
@@ -544,6 +610,14 @@ async def delayed_discover(
                 avoid_symbols=avoid_symbols,
                 untradeable_symbols=untradeable_symbols,
             )
+            # 대안 발굴 신호(거래대금 순위) 축적 — 매매 무영향, 실패는 내부에서 삼킴.
+            # 풀 크기는 발굴 풀과 동일(orchestrator 의 pool_n 산식과 일치).
+            await record_alt_ranking(
+                rest,
+                result,
+                pool_n=max(top_n * 3, top_n + 7),
+                exclude_etf=exclude_etf,
+            )
         console.print(f"[cyan]발굴 결과:[/cyan] {result.note_ko}")
         # 종목명도 함께 — 텔레그램이 코드+이름 ("005930 삼성전자") 으로 표시.
         # result.names 는 chosen·blocked 를 아우른 전체 후보 매핑이라 게이트 차단으로
@@ -579,5 +653,6 @@ __all__ = [
     "merge_base_avoid_symbols",
     "paper_day_main",
     "paper_day_with_commands",
+    "record_alt_ranking",
     "route_profile_by_regime",
 ]
