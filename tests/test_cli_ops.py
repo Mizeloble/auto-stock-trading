@@ -21,7 +21,8 @@ import pytest
 import structlog
 from typer.testing import CliRunner
 
-from auto_trading.cli import _ops, app
+from auto_trading.cli import app
+from auto_trading.monitor import launchd as _launchd
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +59,7 @@ def test_ops_three_jobs_with_launchctl(isolated_cwd: Path) -> None:
         _write_plist(launchd_dir, short)
         _write_log(logs_dir, short)
 
-    with patch.object(_ops, "_launchctl_last_exit_status", return_value="0"):
+    with patch.object(_launchd, "_launchctl_last_exit_status", return_value="0"):
         result = CliRunner().invoke(app, ["ops"])
 
     assert result.exit_code == 0, result.output
@@ -77,7 +78,7 @@ def test_ops_launchctl_unavailable_uses_log_mtime(isolated_cwd: Path) -> None:
     _write_plist(launchd_dir, "paper-day")
     _write_log(logs_dir, "paper-day")
 
-    with patch.object(_ops, "_launchctl_last_exit_status", return_value=None):
+    with patch.object(_launchd, "_launchctl_last_exit_status", return_value=None):
         result = CliRunner().invoke(app, ["ops"])
 
     assert result.exit_code == 0, result.output
@@ -105,7 +106,7 @@ def test_ops_never_exited_shows_dot(isolated_cwd: Path) -> None:
     _write_plist(launchd_dir, "paper-day")
     _write_log(logs_dir, "paper-day")
 
-    with patch.object(_ops, "_launchctl_last_exit_status", return_value="(never exited)"):
+    with patch.object(_launchd, "_launchctl_last_exit_status", return_value="(never exited)"):
         result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["ops"])
 
     assert result.exit_code == 0, result.output
@@ -123,7 +124,7 @@ def test_ops_churnfix_note(isolated_cwd: Path) -> None:
     _write_plist(launchd_dir, "churnfix-verify")
     _write_log(logs_dir, "churnfix-verify")
 
-    with patch.object(_ops, "_launchctl_last_exit_status", return_value="0"):
+    with patch.object(_launchd, "_launchctl_last_exit_status", return_value="0"):
         # 좁은 터미널에서 "별도 정리" 가 wrap 되지 않도록 width 명시.
         result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["ops"])
 

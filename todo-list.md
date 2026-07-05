@@ -18,6 +18,11 @@
   - **왜**: 앞으로의 모든 A/B 판정(특히 거래량 vs 거래대금 발굴 비교 — 거래대금 풀 종목까지 스냅샷됨)이 자체 데이터로 가능해지는 기반 작업. 과거 일자는 discovered 파일이 없어 기존과 동일(회귀 0).
   - **어떻게 확인**: 다음 거래일 장중 `wc -l data/snapshots/discovered-*.jsonl` 이 10분마다 ~발굴종목수 증가. 콘솔 "✓ 발굴 종목 스냅샷" 라인. `uv run pytest tests/test_monitor_price_snapshot.py tests/test_reports_snapshot_reader.py`(신규 7케이스).
 
+- [x] **cli 리팩토링 — `_ops.py`(853줄) 를 진단/수집/로직으로 3분할** (2026-07-05)
+  - **무엇**: ① launchd 상태 수집 로직(`LaunchdStatus`·`collect_launchd_status` 등)을 `monitor/launchd.py` 로 이동 — "CLI 는 인자 파싱+위임만" 규칙 위반 해소. ② 시장 스냅샷 수집 잡 3종(build-marketcap-universe/snapshot-top200/vi)을 `cli/_snapshots.py` 로 분리 — `_ops.py` 에는 운영 진단 명령(dashboard/heartbeat-check/preflight/latency/data/orders/ops)만 남음. 동작 변경 0줄.
+  - **왜**: 진단(상태 확인)과 수집(launchd 주기 잡)은 성격이 달라 한 파일에 있으면 명령 추가 때마다 무관한 절반이 딸려 읽혔다. launchd 로직은 monitor/(read-only 진단)가 제자리.
+  - **어떻게 확인**: `uv run pytest` 1272 passed + ruff·mypy 통과. `uv run auto-trade ops`·`snapshot-top200` 출력 동일.
+
 - [ ] **발굴 대안 신호(거래대금 순위) 데이터 축적 — 몇 주 후 A/B 반사실용** (2026-07-04 시작)
   - **무엇**: 키움 순위 TR 은 당일 것만 조회 가능해 "거래량 vs 거래대금 발굴" 반사실을 과거로 만들 수 없다(선정 알파 검증의 한계). ① `market/rank.py` 에 `top_value()`(ka10030 sort_tp=2, 거래대금 상위 — 병합 정렬은 volume×price 근사) 추가, ② `delayed_discover` 가 발굴 직후 같은 시점에 거래대금 풀(발굴 풀과 같은 크기)을 `data/discovery/alt-rank.jsonl` 한 줄로 축적(`record_alt_ranking`). 매매 동작 무영향 — 조회 실패는 경고 로그만 남기고 삼킴. 기록엔 그날의 거래량 픽/풀도 병기해 파일 하나로 자기완결.
   - **왜**: 검증 시리즈 종결 후 남은 두 경로 중 "새 발굴 신호"의 선행 조건. 지금부터 쌓아야 몇 주 뒤 `selection_alpha_study` 방식(당일 시가→종가 vs KODEX)으로 두 순위의 원재료를 나란히 비교 가능.

@@ -244,7 +244,7 @@ def _build_anthropic_client() -> object:
 
 # 서브모듈 import 가 데코레이터를 통해 app/strategy_app/data_app/orders_app 에
 # 명령을 등록한다. app·헬퍼·외부 의존이 모두 정의된 뒤에 와야 한다.
-from . import _backtest, _ops, _reporting, _strategy, _trading  # noqa: E402,F401
+from . import _backtest, _ops, _reporting, _snapshots, _strategy, _trading  # noqa: E402,F401
 
 __all__ = [
     "KiwoomRestClient",
