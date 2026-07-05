@@ -196,7 +196,7 @@ uv run auto-trade paper-day --top-n 3 --dry-run
 
 ## 5. 일일 리포트 + 주간 자동 갱신 (LLM)
 
-`paper-day` 가 종료될 때마다 자동으로 일일 리포트가 `data/reports/daily-YYYY-MM-DD.json` 으로 저장되고, 텔레그램이 설정돼 있으면 푸시됩니다(페어 PnL, 마감 잔고, 비용 차감 PnL).
+`paper-day` 가 종료될 때마다 자동으로 일일 리포트가 `data/reports/daily-YYYY-MM-DD.json` 으로 저장되고, 텔레그램이 설정돼 있으면 푸시됩니다(페어 PnL, 마감 잔고, 비용 차감 PnL). 하루 손실이 한도에 닿아 매수가 자동 중단된 날은 발동 시각과 이후 차단 건수도 리포트에 표시됩니다 — "오후에 왜 조용했나"를 리포트만 보고 알 수 있게.
 
 매주 토요일 launchd cron 이 두 번에 나눠 LLM 작업을 자동 실행합니다:
 
@@ -215,7 +215,9 @@ uv run auto-trade paper-day --top-n 3 --dry-run
    - **변경 항목 글로서리** — 각 변경마다 [정의 / 👍 장점 / 👎 단점 / 📌 이번 이유] 4줄. YAML 키를 그대로 노출하지 않음
    - **근거 4섹션** — 신호 요약 / 판단 / 참고한 헤드라인 / 주간 메모로 분리해 "왜 이렇게 바꿨는지" 가 한눈에
 
-월요일 08:55 의 paper-day cron 이 자동으로 `daytrade-current.yaml` 을 읽어 그 주 운용에 반영. 파일 없으면 `daytrade-default.yaml` 폴백, 둘 다 없으면 CLI 인자만으로 동작(안전).
+월요일 08:55 의 paper-day cron 이 자동으로 `daytrade-current.yaml` 을 읽습니다. 파일 없으면 `daytrade-default.yaml` 폴백, 둘 다 없으면 CLI 인자만으로 동작(안전).
+
+> ⚠️ **시장국면 자동 라우팅(§7)이 켜져 있으면** 시동 직후 그날 국면에 맞는 레짐 프로파일(예: `daytrade-highvol.yaml`)로 갈아타므로, **weekly-proposal 이 갱신한 `daytrade-current.yaml` 의 숫자들은 그날 적용되지 않습니다**(분류 실패 시 폴백으로만 사용). 단 **회피 종목만은 예외** — 시동 시 current 의 회피 목록이 라우팅된 프로파일에 자동으로 합산 적용됩니다(2026-07-04 보강). 나머지 값의 자동 반영 여부는 운영 방침 결정 대기 항목입니다.
 
 수동 호출 / 디버그:
 ```bash
@@ -302,9 +304,9 @@ day-trade `--profile` YAML 의 `risk:` 블록으로 켭니다. 기본값은 모�
 
 | 게이트 | YAML 키 | 동작 |
 |---|---|---|
-| **시장국면 자동 라우팅** | `regime_router.enabled: true` | 시동 시 KODEX 200(069500) 60일봉으로 국면 분류 → `daytrade-trend / defensive / range / crash` 중 맞는 프로파일로 자동 스위치. 매핑 파일 없으면 현재 프로파일 유지 |
+| **시장국면 자동 라우팅** | `regime_router.enabled: true` | 시동 시 KODEX 200(069500) 60일봉으로 국면 분류 → `daytrade-trend / defensive / range / highvol` 중 맞는 프로파일로 자동 스위치(완전정지가 필요하면 `daytrade-crash` 로 수동 전환). 매핑 파일 없거나 분류 실패 시 현재 프로파일 유지. **켜져 있으면 그날 실제 적용되는 값은 라우팅된 프로파일의 것**입니다 — 원본 프로파일은 폴백 전용(§5 주의 참고) |
 | **시총 200 breadth 게이트** | `breadth_gate.enabled: true` | 시총 200 스냅샷(평일 launchd 누적, §12)의 상승 종목 비율 `min_advancing_pct`(기본 0.5) + 평균 등락률 `min_mean_change_pct`(기본 0.0) 미달 시 매수 차단 |
-| **회피 종목** | `avoid_symbols: ["005930", …]` | 거래량 상위에 떠도 목록의 종목은 발굴 후보에서 즉시 제외. 토요일 weekly-proposal LLM 이 "⛔ 회피 종목" 권고 시 자동 반영 |
+| **회피 종목** | `avoid_symbols: ["005930", …]` | 거래량 상위에 떠도 목록의 종목은 발굴 후보에서 즉시 제외. 토요일 weekly-proposal LLM 이 "⛔ 회피 종목" 권고 시 자동 반영. 레짐 라우팅으로 다른 프로파일을 쓰는 날에도 **원본 프로파일의 회피 목록이 자동으로 합산 적용**(2026-07-04) — 시동 콘솔의 "회피 종목 병합" 라인으로 확인 |
 
 예시 (프로파일 YAML 최상위):
 ```yaml
@@ -510,11 +512,23 @@ launchd 는 평일 08:55 만 보고 시동하지만, 한국 법정공휴일·임
 | `auto-trade data check` | 데이터 파일 진단·정합성 검사 | 리포트/캐시 파일이 깨졌나 의심될 때 |
 | `auto-trade verify-symbol` | 키움 일봉 fetch + OHLCV 정합성 검사 | 특정 종목 데이터가 이상할 때 |
 | `auto-trade build-marketcap-universe` | KRX 시총 상위 200 마스터 산출 → JSON 캐시 | breadth 게이트(§7) 입력. 평일 08:50 launchd 자동, 수동은 디버그용 |
-| `auto-trade snapshot-top200` | 시총 200 종목 현재가 1라운드 스냅샷 → JSONL append | breadth 게이트 입력. 평일 10분 간격 launchd 자동 |
+| `auto-trade snapshot-top200` | 시총 200 종목 현재가 1라운드 스냅샷 → JSONL append. 그날 발굴 종목(시총 200 밖)도 별도 파일(`discovered-*.jsonl`)에 함께 기록 — 일일 리포트가 발굴 소형주의 진입 등락률·MFE/MAE 를 채우는 데 사용 | breadth 게이트 입력. 평일 10분 간격 launchd 자동 |
 | `auto-trade fetch-news` | RSS 뉴스만 미리 fetch → 캐시 갱신 (LLM X · 비용 0) | weekly-proposal 입력 미리 채워두기 (§5) |
 | `auto-trade backtest-compare` | 두 백테스트 결과 비교 (Sharpe/PSR/CAGR/MDD/승률 차이 표) | 전략·파라미터 변경 전후 성능 비교 |
 
 각 명령의 옵션은 `uv run auto-trade <명령> --help` 로 확인하세요. `data` / `orders` 는 하위 명령이라 `uv run auto-trade data --help` 처럼 봅니다.
+
+### 연구용 데이터 자동 수집 (매매 무영향 · read-only)
+
+전략 개선 판단은 "바꿔 보고 확인"이 아니라 **모아둔 데이터로 반사실 검증** 후에만 합니다(2026-07-04 검증 시리즈 — 결론과 재실행 스크립트는 `scripts/diagnostics/` 각 파일 상단 주석 참고). 이를 위해 장중에 자동으로 쌓이는 데이터:
+
+| 데이터 | 파일 | 활성 조건 | 용도 |
+|---|---|---|---|
+| 틱 원본 | `data/ticks/ticks-YYYY-MM-DD.jsonl` | `.env` 에 `TICK_LOG_DIR=data/ticks` | 봉내 급락 손절 오버슈트 정량화 → 틱 기반 가드 전환 판단 |
+| 발굴 대안 순위 | `data/discovery/alt-rank.jsonl` | 자동 (paper-day 발굴 직후) | 거래량 vs 거래대금 발굴 A/B 판정 (약 15거래일 축적 후) |
+| 발굴 종목 스냅샷 | `data/snapshots/discovered-YYYY-MM-DD.jsonl` | 자동 (snapshot-top200 잡) | 발굴 소형주 일중 데이터 — 리포트 조인·반사실 검증 공용 |
+
+셋 다 실패해도 매매에 영향을 주지 않으며(경고 로그만), 수집이 안 되는 날은 리포트가 기존처럼 우아하게 비웁니다.
 
 ---
 
