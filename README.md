@@ -43,7 +43,7 @@ uv run auto-trade vi                           # VI(변동성완화장치) 발�
 
 # 시총 200 breadth 인프라 (평일 launchd 자동 — 수동 호출은 디버그용)
 uv run auto-trade build-marketcap-universe     # 시총 상위 200 마스터 갱신 (08:50)
-uv run auto-trade snapshot-top200              # 시총 200 현재가 스냅샷 1라운드 (09:00~15:30 10분)
+uv run auto-trade snapshot-top200              # 시총 200 + 당일 발굴 종목 스냅샷 1라운드 (09:00~15:30 10분)
 
 # swing (선택 · 학습/검증용)
 uv run auto-trade strategy suggest …           # 추천 → YAML 프로파일 저장
@@ -75,7 +75,7 @@ uv run auto-trade strategy advise …            # (LLM) 프로파일 조정
 - 기본 `KIWOOM_MODE=mock`. 실거래 전환은 `KIWOOM_MODE=real` + `--allow-real` 둘 다 + 사용자 명시 승인 후에만.
 - 모든 주문 경로에 리스크 한도 강제(종목 20% / 포트폴리오 80% / 일일 손실 3% + stop/트레일링/부분익절/kill switch). 회전율 가드로 종목당 일일 매수 횟수도 제한 가능.
 - 거래불가 종목 자동 회피 — 모의투자 매매제한·거래정지 등으로 한 번 거부당한 종목은 그날 즉시 재시도 차단 + 다음 발굴부터 제외(`data/state/untradeable.json`, 30일 노화). 발굴은 후보를 넉넉히 받아 차단분을 다음 순위로 메움(슬롯 낭비 방지).
-- (선택·기본 OFF) 시장국면 자동 라우팅(KODEX 200) · 시총 200 breadth 게이트 · 회피 종목 목록 — 약세장·과매매에서 매수 자체를 줄이는 추가 게이트(§7).
+- (선택·기본 OFF) 시장국면 자동 라우팅(KODEX 200) · 시총 200 breadth 게이트 · 회피 종목 목록 — 약세장·과매매에서 매수 자체를 줄이는 추가 게이트(§7). 라우팅이 켜져 있으면 그날 실제 적용본은 레짐 프로파일이며, 회피 종목은 원본 프로파일 목록과 자동 합산 적용.
 - LLM 호출은 사람 명시 트리거 또는 합의된 주 1회 cron 만 (월 상한 $5). 매일·매시간 금지.
 - `paper-day` / `paper` 모두 `--dry-run` 기본. 시크릿은 git 제외 + 로그 마스킹.
 
@@ -91,4 +91,4 @@ uv run ruff check src tests && uv run ruff format --check src tests && uv run my
 
 ## 진행 상황
 
-진행 중 작업·남은 과제는 [todo-list.md](./todo-list.md), 완료된 단계별 이력은 [docs/history.md](./docs/history.md) 참고.
+진행 중 작업·남은 과제는 [todo-list.md](./todo-list.md), 완료된 단계별 이력은 [docs/history.md](./docs/history.md) 참고. 전략 파라미터 변경은 반드시 반사실 검증 후에만 한다 — 검증 스크립트·결론은 [scripts/diagnostics/](./scripts/diagnostics/) (2026-07-04 시리즈: 쿨다운·진입시각·출구 폭 전 축 "현행 유지" 판정).
