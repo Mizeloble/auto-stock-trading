@@ -538,6 +538,12 @@ async def record_alt_ranking(
     log = structlog.get_logger("daytrade.cli")
     try:
         value_pool = await top_value(rest, top_n=pool_n, exclude_etf=exclude_etf)
+        if not value_pool:
+            # 빈 풀은 기록 가치가 없고(조회 실패·시장 이상), 테스트가 fetch 를
+            # 페이크로 돌릴 때 무의미한 줄이 운영 파일에 쌓이는 것도 막는다
+            # (2026-07-05 실측 — pytest 가 value_pool 0 라인 12줄 오염).
+            log.warning("daytrade.alt_rank_empty_pool_skipped")
+            return None
         chosen = [c.symbol for c in result.chosen]
         blocked = [s for s, _ in result.blocked]
         now = datetime.now(KST)

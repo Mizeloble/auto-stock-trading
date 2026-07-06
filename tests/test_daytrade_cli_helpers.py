@@ -270,6 +270,29 @@ async def test_record_alt_ranking_swallows_fetch_failure(tmp_path: Path, monkeyp
     assert not out.exists()
 
 
+async def test_record_alt_ranking_skips_empty_pool(tmp_path: Path, monkeypatch) -> None:
+    """빈 대안 풀은 기록하지 않는다 — 2026-07-05 pytest 가 value_pool 0 라인 12줄을
+    운영 파일에 오염시킨 회귀 방지(조회 실패·페이크 fetch 모두 이 분기로 걸러짐)."""
+    import auto_trading.daytrade.cli_helpers as ch
+
+    async def empty(_rest, *, top_n, exclude_etf):
+        return []
+
+    monkeypatch.setattr(ch, "top_value", empty)
+    out = tmp_path / "alt-rank.jsonl"
+
+    path = await record_alt_ranking(
+        None,  # type: ignore[arg-type]
+        _discovery(chosen=["005930"], blocked=[]),
+        pool_n=10,
+        exclude_etf=True,
+        out_path=out,
+    )
+
+    assert path is None
+    assert not out.exists()
+
+
 def _empty_overrides() -> PaperDayOverrides:
     return PaperDayOverrides(
         profile=None,
