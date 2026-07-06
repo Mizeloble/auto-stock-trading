@@ -183,7 +183,7 @@ def test_paper_command_swing_mode_unchanged() -> None:
     assert r.dry_run is True
 
 
-async def test_delayed_discover_calls_orchestrator_and_pushes_notify() -> None:
+async def test_delayed_discover_calls_orchestrator_and_pushes_notify(isolated_cwd) -> None:
     """delayed_discover 가 discover_and_arm 결과를 notifier 로 푸시."""
     fake_notifier = AsyncMock()
     runner = PaperRunner(liquidate_at=time(15, 15, tzinfo=KST), notifier=fake_notifier)
@@ -208,7 +208,7 @@ async def test_delayed_discover_calls_orchestrator_and_pushes_notify() -> None:
     assert "daytrade.discovery_done" in events
 
 
-async def test_delayed_discover_failure_requests_stop() -> None:
+async def test_delayed_discover_failure_requests_stop(isolated_cwd) -> None:
     """발굴 실패 → runner.request_stop 호출 (universe 대기 중인 러너 깨움)."""
     runner = PaperRunner(liquidate_at=time(15, 15, tzinfo=KST))
 
@@ -228,7 +228,7 @@ async def test_delayed_discover_failure_requests_stop() -> None:
     assert runner._universe_ready.is_set()
 
 
-async def test_delayed_discover_empty_chosen_requests_stop() -> None:
+async def test_delayed_discover_empty_chosen_requests_stop(isolated_cwd) -> None:
     """5/3 21:42 회귀 — 게이트 차단으로 chosen=[] 일 때도 hang 방지 위해 request_stop.
 
     무엇/왜:
@@ -264,7 +264,7 @@ async def test_delayed_discover_empty_chosen_requests_stop() -> None:
     assert "daytrade.discovery_done" in events
 
 
-async def test_delayed_discover_chosen_keeps_runner_alive() -> None:
+async def test_delayed_discover_chosen_keeps_runner_alive(isolated_cwd) -> None:
     """chosen 이 있으면 set_universe 가 호출되고 stop 트리거 X — 정상 매수 흐름."""
     from auto_trading.market.rank import RankedSymbol
 
@@ -294,7 +294,7 @@ async def test_delayed_discover_chosen_keeps_runner_alive() -> None:
     assert runner.symbols == ["005930"]
 
 
-async def test_delayed_discover_respects_delay() -> None:
+async def test_delayed_discover_respects_delay(isolated_cwd) -> None:
     """delay > 0 일 때 sleep 이 실제로 실행됨 (asyncio.sleep mock)."""
     runner = PaperRunner(liquidate_at=time(15, 15, tzinfo=KST))
     fake_result = DiscoveryResult(chosen=[], blocked=[], gates={}, note_ko="x")
