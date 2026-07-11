@@ -105,3 +105,72 @@ def test_report_custom_out_dir(isolated_cwd: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert (isolated_cwd / "out" / "daily-2026-05-05.json").exists()
+
+
+def test_report_join_only_refreshes_blocked_outcomes(isolated_cwd: Path) -> None:
+    """--join-only: 차단일 리포트의 스냅샷 조인만 소급 갱신, 로그 파일 불필요."""
+    from auto_trading.reports.daily import BlockedOutcome, DailyReport, save_daily_report
+
+    report = DailyReport(
+        date="2026-07-09",
+        mode="day-trade",
+        dry_run=False,
+        discovery_chosen=[],
+        discovery_blocked=[("005930", "KOSPI_below_sma")],
+        market_gates=[],
+        buys=[],
+        liquidations=[],
+        error_count=0,
+        note_ko="게이트 차단",
+        blocked_outcomes=[
+            BlockedOutcome(
+                symbol="005930",
+                name="삼성전자",
+                reason="KOSPI_below_sma",
+                intraday_pct=None,
+                day_change_pct=0.0,
+            )
+        ],
+    )
+    save_daily_report(report, root=isolated_cwd / "data" / "reports")
+    snap_dir = isolated_cwd / "data" / "snapshots"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (snap_dir / "topcap-2026-07-09.jsonl").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {
+                    "ts": "2026-07-09T09:00:06+09:00",
+                    "rank": 1,
+                    "symbol": "005930",
+                    "price": 100.0,
+                    "change_pct": 0.0,
+                },
+                {
+                    "ts": "2026-07-09T15:30:06+09:00",
+                    "rank": 1,
+                    "symbol": "005930",
+                    "price": 105.0,
+                    "change_pct": 4.0,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["report", "--date", "2026-07-09", "--join-only"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(
+        (isolated_cwd / "data" / "reports" / "daily-2026-07-09.json").read_text(encoding="utf-8")
+    )
+    outcome = data["blocked_outcomes"][0]
+    assert outcome["day_change_pct"] == 4.0
+    assert outcome["intraday_pct"] is not None
+
+
+def test_report_join_only_exits_1_when_nothing_to_refresh(isolated_cwd: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["report", "--date", "2026-07-09", "--join-only"])
+    assert result.exit_code == 1
+    assert "재보강 대상 없음" in result.output

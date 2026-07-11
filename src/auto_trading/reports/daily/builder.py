@@ -9,6 +9,7 @@ LLM 호출·외부 API 호출 없음. 결정론적 — 같은 입력이면 같�
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from ...notify.state import RunnerStateSnapshot
@@ -29,6 +30,7 @@ from .extract import (
     _is_buying_power_reject,
 )
 from .models import DailyReport
+from .persist import load_daily_report, save_daily_report
 from .render import _summary_ko
 from .timeline import _build_timeline
 
@@ -206,3 +208,76 @@ def build_daily_report(
         daily_loss_blocked_count=daily_loss_blocked_count,
         daily_loss_blocked_first_time=daily_loss_blocked_first_time,
     )
+
+
+def refresh_snapshot_joins(
+    date: str,
+    *,
+    report_root: Path | str = "data/reports",
+    snapshot_root: Path | str = "data/snapshots",
+) -> Path | None:
+    """저장된 daily-<date>.json 의 스냅샷 조인 필드만 다시 채워 저장.
+
+    무엇/왜:
+    - 게이트 차단일엔 러너가 개장 직후(~09:02) 종료하며 리포트를 저장하는데, 그
+      시점엔 topcap 스냅샷이 1라운드뿐이라 차단 종목 성적(blocked_outcomes)·진입
+      피처·MFE/MAE 조인이 비거나 개장가로 얼어붙는다. 스냅샷 원본은 15:30까지
+      정상 축적되므로, 장 마감 후 이 함수로 조인 필드만 소급 갱신한다.
+    - 전체 재빌드(build_daily_report)와 달리 기존 리포트의 나머지(closing 잔고·
+      비용·타임라인 등)는 그대로 보존 — 러너 스냅샷 없이는 복원 불가능한 필드를
+      잃지 않는다.
+    - 병합 정책: 새 조인 값이 None 이면 기존 값을 유지(스냅샷 결손이 기존 데이터를
+      지우지 않게). 멱등 — 거래일 리포트에 다시 돌려도 같은 값.
+
+    리포트 파일이나 그날 스냅샷이 없으면 아무것도 쓰지 않고 None 반환.
+    """
+    report_path = Path(report_root) / f"daily-{date}.json"
+    if not report_path.exists():
+        return None
+    snaps = parse_topcap_for_date(date, root=snapshot_root)
+    if not snaps.series:
+        return None
+    report = load_daily_report(report_path)
+
+    names = dict(report.discovery_chosen_names)
+    for b in report.blocked_outcomes:
+        if b.name:
+            names.setdefault(b.symbol, b.name)
+    old_blocked = {b.symbol: b for b in report.blocked_outcomes}
+    blocked_outcomes = []
+    for new in _build_blocked_outcomes(report.discovery_blocked, names, snaps):
+        old = old_blocked.get(new.symbol)
+        blocked_outcomes.append(
+            replace(
+                new,
+                intraday_pct=_prefer(new.intraday_pct, old.intraday_pct if old else None),
+                day_change_pct=_prefer(new.day_change_pct, old.day_change_pct if old else None),
+            )
+        )
+
+    buys = [
+        replace(
+            new,
+            change_pct_at_entry=_prefer(new.change_pct_at_entry, old.change_pct_at_entry),
+            rank_at_entry=_prefer(new.rank_at_entry, old.rank_at_entry),
+        )
+        for new, old in zip(_enrich_buys(report.buys, snaps), report.buys, strict=True)
+    ]
+    round_trips = [
+        replace(
+            new,
+            mfe_pct=_prefer(new.mfe_pct, old.mfe_pct),
+            mae_pct=_prefer(new.mae_pct, old.mae_pct),
+        )
+        for new, old in zip(
+            _enrich_round_trips(report.round_trips, snaps), report.round_trips, strict=True
+        )
+    ]
+
+    updated = replace(report, buys=buys, round_trips=round_trips, blocked_outcomes=blocked_outcomes)
+    return save_daily_report(updated, root=report_root)
+
+
+def _prefer[T](new: T | None, old: T | None) -> T | None:
+    """새 조인 값 우선, 결손(None)이면 기존 값 유지."""
+    return new if new is not None else old
