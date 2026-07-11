@@ -175,8 +175,21 @@ async def discover_and_arm(
                 f"— 오늘은 거래 없이 종료합니다."
             )
             blocked_all = [(c.symbol, f"breadth_{result.reason}") for c in candidates]
+            names_all = {c.symbol: c.name for c in candidates if c.name}
+            # 일일 리포트는 daytrade.discovery 이벤트를 파싱해 만들어진다 — 이 이벤트
+            # 없이 조기 리턴하면 breadth 차단일 리포트가 통째로 스킵됨(2026-07-07·08 공백).
+            log.info(
+                "daytrade.discovery",
+                candidates=[(c.symbol, c.market, c.volume) for c in candidates],
+                chosen=[],
+                blocked=blocked_all,
+                gates={m: g.above_5_and_20 for m, g in gates.items()},
+                names=names_all,
+            )
             log.info("daytrade.universe_chosen", symbols=[], reason="breadth_blocked")
-            return DiscoveryResult(chosen=[], blocked=blocked_all, gates=gates, note_ko=note)
+            return DiscoveryResult(
+                chosen=[], blocked=blocked_all, gates=gates, note_ko=note, names=names_all
+            )
 
     chosen: list[RankedSymbol] = []
     blocked: list[tuple[str, str]] = []
