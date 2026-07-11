@@ -8,11 +8,16 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [x] **판정 스크립트 3종 선작성 — 데이터가 차는 즉시 판정 가능하게** (2026-07-11, diag)
+  - **무엇**: 진행 중인 데이터 수집 3트랙의 판정 스크립트를 미리 작성(`scripts/diagnostics/`, 전부 read-only·API 호출 없음). ① `alt_rank_ab_study.py` — 거래량 vs 거래대금 풀을 자체 스냅샷(09:10→15:15)과 조인해 원재료 수익률 비교(현재 5일치로 스모크 실행 확인 — 조인 결손 0). ② `shadow_gate_study.py` — shadow-*.json 집계로 "게이트가 막은 날 실제 전략 로직이면 얼마였나" + buy-hold 대비 출구 효과 병기. ③ `tick_guard_study.py` — 실제 왕복의 출구만 틱 단위 가드로 교체 시뮬(규칙·순서 PositionGuard 동일, 파라미터는 daytrade-highvol.yaml 에서 로드)해 봉 마감 검사 대비 Δ손익·손절 오버슈트 산출. 셋 다 표본 미달이면 "판정 보류"를 명시 출력, ②③은 `--selftest` 로 데이터 없이 로직 자가 검증.
+  - **왜**: 세 트랙 모두 "데이터 15일 후 판정" 대기 상태 — 스크립트를 지금 만들어 두면 데이터가 차는 날 바로 판정하고, 부분 데이터로 스크립트 자체 검증도 끝난다. 틱 시뮬에서 확인된 사실: 현행 규칙을 틱 단위로 옮기면 점진 하락은 트레일링(-0.8%)이 손절(-1%)보다 먼저 발화 — 판정 시 해석 주의.
+  - **어떻게 확인**: `uv run python scripts/diagnostics/alt_rank_ab_study.py` (5일치 즉시 출력), `… shadow_gate_study.py --selftest`, `… tick_guard_study.py --selftest` (각 ✅ 출력).
+
 - [ ] **게이트 차단일 섀도우 러닝 — 무거래 주간 데이터 공백 대응** (2026-07-11 구현, 사용자 검증 대기)
   - **무엇**: 7/6~10 주간 검토 결과 5거래일 전부 게이트 차단(7/7·7/8 breadth, 7/6·7/9·7/10 지수 SMA)으로 진입 0 — 판단 자체는 반사실 재검증 결과 옳았지만, 급락 후 SMA20 회복까지 몇 주간 틱 로그·검증 데이터가 전혀 안 쌓이는 구조 문제 확인. ① breadth 차단일도 daily 리포트 저장(PR #171 — discovery 이벤트 누락 보완), ② `shadow_on_blocked`(YAML 옵트인, highvol 활성): 게이트 전면 차단 시 러너를 종료하는 대신 **주문 없는 섀도우 세션**으로 15:15까지 — "게이트가 없었다면 뽑혔을" top_n 을 가상 원장(`shadow/ShadowTracker`)으로만 매매. dry_run 강제 + 잔고 조회를 가상 원장으로 대체해 손절·트레일링·청산·churn 브레이크가 실제와 동일하게 돌고, 결과는 `data/shadow/*.jsonl` + `data/reports/shadow-*.json`(daily 와 분리, 실적 오염 방지) + 텔레그램 👻 리포트. 틱 로그도 유니버스 구독 덕에 함께 쌓임.
   - **왜**: 게이트 완화 여부를 "실제 전략 로직 그대로"의 반사실 데이터로 판정하기 위함 — 수동 스냅샷 반사실은 출구 규칙을 재현 못 해 과대평가(예: 7/10 금호타이어 +17.5% 는 트레일링에 +0.75% 로 잘림). 실주문·실계좌·day-state 무접촉.
   - **어떻게 확인**: 다음 게이트 차단일 아침 텔레그램 "👻 섀도우 모드 시작" 푸시 → 장 마감 후 "👻 섀도우 리포트" + `ls data/shadow/` / `ls data/reports/shadow-*.json`. `uv run pytest tests/test_runner_shadow.py tests/test_daytrade_cli_helpers.py` (신규 13케이스).
-  - **후속**: 섀도우 15일+ 쌓이면 shadow-*.json vs 게이트 차단 판단 비교 스크립트로 "SMA 게이트 완화(예: breadth 통과 시 면제)" 가설 판정.
+  - **후속**: 섀도우 15일+ 쌓이면 "SMA 게이트 완화(예: breadth 통과 시 면제)" 가설 판정 — 비교 스크립트는 `scripts/diagnostics/shadow_gate_study.py` 로 선작성 완료(2026-07-11), 데이터만 차면 실행.
 
 - [x] **notify 리팩토링 — 일일 리포트 포맷터를 `state.py` → `daily_report.py` 로 분리** (2026-07-05)
   - **무엇**: 614줄 `notify/state.py` 에 섞여 있던 두 책임을 분리 — 러너 상태 스냅샷 + 텔레그램 명령 응답(/status 등)은 `state.py`(217줄)에 남기고, 일일 리포트 포맷터(`format_daily_report` + 섹션 헬퍼 전부)는 새 `daily_report.py`(406줄)로 이동. 동작 변경 0줄 — 사용처 import 2곳(telegram.py, cli/_reporting.py)과 테스트 파일명·import 만 갱신.
@@ -33,7 +38,7 @@
   - **무엇**: 키움 순위 TR 은 당일 것만 조회 가능해 "거래량 vs 거래대금 발굴" 반사실을 과거로 만들 수 없다(선정 알파 검증의 한계). ① `market/rank.py` 에 `top_value()`(ka10030 sort_tp=2, 거래대금 상위 — 병합 정렬은 volume×price 근사) 추가, ② `delayed_discover` 가 발굴 직후 같은 시점에 거래대금 풀(발굴 풀과 같은 크기)을 `data/discovery/alt-rank.jsonl` 한 줄로 축적(`record_alt_ranking`). 매매 동작 무영향 — 조회 실패는 경고 로그만 남기고 삼킴. 기록엔 그날의 거래량 픽/풀도 병기해 파일 하나로 자기완결.
   - **왜**: 검증 시리즈 종결 후 남은 두 경로 중 "새 발굴 신호"의 선행 조건. 지금부터 쌓아야 몇 주 뒤 `selection_alpha_study` 방식(당일 시가→종가 vs KODEX)으로 두 순위의 원재료를 나란히 비교 가능.
   - **어떻게 확인**: 다음 paper-day 장중 `cat data/discovery/alt-rank.jsonl | tail -1 | python3 -m json.tool` → `value_pool` 에 종목 목록. 로그 `daytrade.alt_rank_recorded`. `uv run pytest tests/test_market_rank.py tests/test_daytrade_cli_helpers.py` (신규 3케이스).
-  - **후속(미완 사유)**: 거래일 ~15일 쌓이면 비교 스크립트(`scripts/diagnostics/`) 작성해 판정 — 그때까지 이 항목은 열어 둠.
+  - **후속(미완 사유)**: 거래일 ~15일 쌓이면 판정 — 비교 스크립트는 `scripts/diagnostics/alt_rank_ab_study.py` 로 선작성 완료(2026-07-11, 5일치 스모크 확인). 그때까지 이 항목은 열어 둠.
 
 - [x] **runner 리팩토링 — PaperRunner 구현을 `__init__.py` → `paper.py` 로 이동** (2026-07-05, PR #166)
   - **무엇**: `runner/__init__.py` 에 있던 1,600줄 `PaperRunner` 구현을 `runner/paper.py` 로 옮기고, `__init__.py` 는 기존 import 경로(`from auto_trading.runner import PaperRunner`)를 유지하는 재수출만 남김. 동작 변경 0줄 — 테스트의 monkeypatch 대상 모듈만 `runner.paper` 로 갱신(14개 파일).
