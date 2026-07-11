@@ -26,6 +26,7 @@ import structlog
 from rich.console import Console
 
 from .._common import KST
+from ..account.balance import get_balance
 from ..account.order_journal import DEFAULT_JOURNAL_PATH, OrderJournal
 from ..account.untradeable import UntradeableStore
 from ..heartbeat import Heartbeat
@@ -39,12 +40,18 @@ from ..notify.telegram_commands import TelegramCommandHandler
 from ..notify.throttle import ThrottledNotifier
 from ..runner import PaperRunner
 from ..runner.day_state import DayStateStore
+from ..shadow import ShadowTracker
 from ..strategy import scanner
 from ..strategy.base import Strategy
 from ..strategy.index_daytrade import IndexMomentumDayTrade
 from ..strategy.intraday import IntradayMomentum
 from ..strategy.regime_router import select_profile_for_regime
-from .orchestrator import DiscoveryResult, discover_and_arm, start_momentum_loop
+from .orchestrator import (
+    DiscoveryResult,
+    _default_strategy_factory,
+    discover_and_arm,
+    start_momentum_loop,
+)
 from .profile import DaytradeBreadthGate, DaytradeProfile
 
 console = Console()
@@ -422,6 +429,7 @@ async def paper_day_main(
             strategy_factory=factory,
             breadth_gate_config=profile.breadth_gate if profile else None,
             avoid_symbols=tuple(profile.avoid_symbols) if profile else (),
+            shadow_on_blocked=bool(profile.shadow_on_blocked) if profile else False,
         ),
         name="day-discover",
     )
@@ -457,6 +465,7 @@ async def paper_day_with_commands(
             strategy_factory=factory,
             breadth_gate_config=profile.breadth_gate if profile else None,
             avoid_symbols=tuple(profile.avoid_symbols) if profile else (),
+            shadow_on_blocked=bool(profile.shadow_on_blocked) if profile else False,
         ),
         name="day-discover",
     )
@@ -579,6 +588,66 @@ async def record_alt_ranking(
         return None
 
 
+_SHADOW_FALLBACK_CASH = 10_000_000.0  # 잔고 조회 실패 시 가상 시작 자본
+
+
+async def _try_arm_shadow(
+    rest: KiwoomRestClient,
+    runner: PaperRunner,
+    result: DiscoveryResult,
+    *,
+    top_n: int,
+    strategy_factory: Callable[..., Strategy] | None,
+) -> bool:
+    """게이트 전면 차단일 → 주문 없는 섀도우 세션 무장 시도. 성공 시 True.
+
+    무엇/왜: 급락 후 지수 SMA 게이트는 몇 주간 계속 닫혀 그동안 틱 로그·검증
+    데이터가 전혀 안 쌓인다(2026-07-06~10 실증). "게이트가 없었다면 뽑혔을"
+    상위 top_n 을 가상 원장으로만 매매해 게이트 반사실을 실제 전략 로직
+    (손절·트레일링·15:15 청산 포함)으로 축적한다. 실주문 0 — 러너가 dry_run
+    강제 + 가상 원장 대체(`PaperRunner.enable_shadow`).
+
+    회피 종목(avoid_symbols)은 실세션과 동일하게 제외 — 섀도우도 "실세션이
+    했을 행동"의 재현이어야 반사실로 의미가 있다.
+    """
+    log = structlog.get_logger("daytrade.cli")
+    gate_blocked = {sym for sym, reason in result.blocked if reason != "avoid_symbols"}
+    picks = [c for c in result.candidates if c.symbol in gate_blocked][:top_n]
+    if not picks:
+        return False
+    # 가상 시작 자본 = 실계좌 평가액 — 포지션 사이징(max_position_weight 등)이
+    # 실세션과 같은 규모로 돌아야 반사실 비교가 유효하다. 실패 시 고정값 폴백.
+    try:
+        snap = await get_balance(rest)
+        initial_cash = float(snap.deposit) + sum(float(h.market_value) for h in snap.holdings)
+    except Exception:
+        initial_cash = 0.0
+    if initial_cash <= 0:
+        initial_cash = _SHADOW_FALLBACK_CASH
+    today = datetime.now(KST).date().isoformat()
+    tracker = ShadowTracker(
+        initial_cash=initial_cash,
+        log_path=Path("data/shadow") / f"shadow-{today}.jsonl",
+    )
+    factory = strategy_factory or _default_strategy_factory(weight=1.0 / max(1, top_n))
+    strategies = {c.symbol: factory(c.symbol, market=c.market) for c in picks}
+    names = {c.symbol: c.name for c in picks if c.name}
+    try:
+        runner.enable_shadow(tracker)
+        runner.set_universe([c.symbol for c in picks], strategies, names=names)
+    except (RuntimeError, ValueError) as exc:
+        # ws 이미 시작 등 — 섀도우 실패가 기존 종료 경로를 막으면 안 된다.
+        log.warning("daytrade.shadow_arm_failed", error=str(exc))
+        return False
+    log.info(
+        "daytrade.shadow_armed",
+        symbols=[c.symbol for c in picks],
+        initial_cash=initial_cash,
+        log_path=str(tracker.log_path),
+    )
+    return True
+
+
 async def delayed_discover(
     runner: PaperRunner,
     *,
@@ -588,10 +657,13 @@ async def delayed_discover(
     strategy_factory: Callable[..., Strategy] | None = None,
     breadth_gate_config: DaytradeBreadthGate | None = None,
     avoid_symbols: tuple[str, ...] | list[str] = (),
+    shadow_on_blocked: bool = False,
 ) -> None:
     """러너 시동 후 `delay` 초 대기 → discover_and_arm.
 
     실패해도 러너 자체는 청산 시계로 종료될 수 있게 예외를 swallow + 로그.
+    ``shadow_on_blocked=True`` 면 게이트가 전 후보를 차단한 날 러너를 종료하는
+    대신 주문 없는 섀도우 세션으로 전환한다 (`_try_arm_shadow` 참조).
     """
     log = structlog.get_logger("daytrade.cli")
     if delay > 0:
@@ -605,6 +677,7 @@ async def delayed_discover(
     if untradeable_symbols:
         log.info("daytrade.untradeable_avoided", symbols=list(untradeable_symbols))
     try:
+        shadow_armed = False
         async with KiwoomRestClient() as rest:
             result = await discover_and_arm(
                 rest,
@@ -624,6 +697,16 @@ async def delayed_discover(
                 pool_n=max(top_n * 3, top_n + 7),
                 exclude_etf=exclude_etf,
             )
+            # 게이트 전면 차단 + 옵트인 → 주문 없는 섀도우 세션으로 전환 시도.
+            # rest 컨텍스트 안에서 — 가상 시작 자본을 실계좌 평가액에 맞추기 위함.
+            if not result.chosen and shadow_on_blocked:
+                shadow_armed = await _try_arm_shadow(
+                    rest,
+                    runner,
+                    result,
+                    top_n=top_n,
+                    strategy_factory=strategy_factory,
+                )
         console.print(f"[cyan]발굴 결과:[/cyan] {result.note_ko}")
         # 종목명도 함께 — 텔레그램이 코드+이름 ("005930 삼성전자") 으로 표시.
         # result.names 는 chosen·blocked 를 아우른 전체 후보 매핑이라 게이트 차단으로
@@ -635,6 +718,14 @@ async def delayed_discover(
             names=result.names,
             note=result.note_ko,
         )
+        if shadow_armed:
+            # 섀도우로 계속 — stop 하지 않는다. 사용자에게 별도 안내 푸시.
+            await runner.notifier.notify(
+                "daytrade.shadow_armed",
+                symbols=list(runner.symbols),
+                names=result.names,
+            )
+            return
         # universe 0 건이면 set_universe() 호출되지 않아 _universe_ready 도 안 set 된다.
         # 청산 시계 task 는 ws.start 이후에 시작되므로 universe 대기 중엔 안 돔 →
         # 러너가 무한 hang. 발굴 실패와 동일하게 명시적으로 stop 트리거.

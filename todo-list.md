@@ -8,6 +8,12 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [ ] **게이트 차단일 섀도우 러닝 — 무거래 주간 데이터 공백 대응** (2026-07-11 구현, 사용자 검증 대기)
+  - **무엇**: 7/6~10 주간 검토 결과 5거래일 전부 게이트 차단(7/7·7/8 breadth, 7/6·7/9·7/10 지수 SMA)으로 진입 0 — 판단 자체는 반사실 재검증 결과 옳았지만, 급락 후 SMA20 회복까지 몇 주간 틱 로그·검증 데이터가 전혀 안 쌓이는 구조 문제 확인. ① breadth 차단일도 daily 리포트 저장(PR #171 — discovery 이벤트 누락 보완), ② `shadow_on_blocked`(YAML 옵트인, highvol 활성): 게이트 전면 차단 시 러너를 종료하는 대신 **주문 없는 섀도우 세션**으로 15:15까지 — "게이트가 없었다면 뽑혔을" top_n 을 가상 원장(`shadow/ShadowTracker`)으로만 매매. dry_run 강제 + 잔고 조회를 가상 원장으로 대체해 손절·트레일링·청산·churn 브레이크가 실제와 동일하게 돌고, 결과는 `data/shadow/*.jsonl` + `data/reports/shadow-*.json`(daily 와 분리, 실적 오염 방지) + 텔레그램 👻 리포트. 틱 로그도 유니버스 구독 덕에 함께 쌓임.
+  - **왜**: 게이트 완화 여부를 "실제 전략 로직 그대로"의 반사실 데이터로 판정하기 위함 — 수동 스냅샷 반사실은 출구 규칙을 재현 못 해 과대평가(예: 7/10 금호타이어 +17.5% 는 트레일링에 +0.75% 로 잘림). 실주문·실계좌·day-state 무접촉.
+  - **어떻게 확인**: 다음 게이트 차단일 아침 텔레그램 "👻 섀도우 모드 시작" 푸시 → 장 마감 후 "👻 섀도우 리포트" + `ls data/shadow/` / `ls data/reports/shadow-*.json`. `uv run pytest tests/test_runner_shadow.py tests/test_daytrade_cli_helpers.py` (신규 13케이스).
+  - **후속**: 섀도우 15일+ 쌓이면 shadow-*.json vs 게이트 차단 판단 비교 스크립트로 "SMA 게이트 완화(예: breadth 통과 시 면제)" 가설 판정.
+
 - [x] **notify 리팩토링 — 일일 리포트 포맷터를 `state.py` → `daily_report.py` 로 분리** (2026-07-05)
   - **무엇**: 614줄 `notify/state.py` 에 섞여 있던 두 책임을 분리 — 러너 상태 스냅샷 + 텔레그램 명령 응답(/status 등)은 `state.py`(217줄)에 남기고, 일일 리포트 포맷터(`format_daily_report` + 섹션 헬퍼 전부)는 새 `daily_report.py`(406줄)로 이동. 동작 변경 0줄 — 사용처 import 2곳(telegram.py, cli/_reporting.py)과 테스트 파일명·import 만 갱신.
   - **왜**: 일일 리포트는 dict payload 를, 상태 포맷터는 `RunnerStateSnapshot` 을 받는 서로 무관한 코드인데 한 파일이라 수정 시 서로 딸려 읽혔다. 파일별 책임 1개 원칙 회복.

@@ -134,3 +134,15 @@ def test_default_yaml_sample_loads() -> None:
     p = DaytradeProfile.load_yaml(sample)
     assert p.name
     assert p.strategy in ("index_momentum_daytrade", "intraday_momentum")
+
+
+def test_profile_shadow_on_blocked_default_off_and_roundtrip(tmp_path: Path) -> None:
+    """shadow_on_blocked — 기본 False(회귀 0), YAML 라운드트립 보존."""
+    p = DaytradeProfile(name="t")
+    assert p.shadow_on_blocked is False
+
+    p2 = DaytradeProfile(name="t", shadow_on_blocked=True)
+    path = tmp_path / "p.yaml"
+    p2.dump_yaml(path)
+    loaded = DaytradeProfile.load_yaml(path)
+    assert loaded.shadow_on_blocked is True

@@ -40,6 +40,10 @@ class RunnerStateSnapshot:
     # 종목 코드→이름 매핑. 텔레그램 메시지에서 코드 옆에 종목명을 합쳐 표시 (5/14
     # 사용자 피드백). swing 모드나 잔고 없는 신규 시작 시점엔 빈 dict 가 정상.
     symbol_names: dict[str, str] = field(default_factory=dict)
+    # 섀도우 세션(게이트 차단일 주문 없는 가상 매매) 여부. 일일 리포트 저장
+    # 파일명(shadow-*.json)·텔레그램 라벨 분기용. dry_run 과 별개 — dry_run 은
+    # 사람이 수동으로 켜는 검증 모드, shadow 는 차단일 자동 데이터 수집 모드.
+    shadow: bool = False
 
 
 # ---- 포맷터 ----------------------------------------------------------------

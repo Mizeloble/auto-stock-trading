@@ -65,6 +65,10 @@ breadth_gate:
   settle_timeout_sec: 90
 avoid_symbols:
   - '356680'
+# 게이트(지수 SMA·breadth)가 전 후보를 막은 날, 종료 대신 주문 없는 섀도우 모드로
+# 장 마감까지 관찰 — 가상 매매(data/shadow/)·틱 로그를 쌓아 게이트 반사실 검증에 쓴다.
+# 실제 주문·계좌에는 아무 영향 없음 (2026-07-11, 7/6~10 무거래 주간 데이터 공백 대응).
+shadow_on_blocked: true
 notes: |
   HIGH_VOL 자동 라우팅 대상. 구 daytrade-crash(전면정지) 대체 — 변동성장에서도
   breadth·지수 게이트 통과 시 소액으로 진입. 사이즈 축소 + 좁은 손절로 변동성 흡수.

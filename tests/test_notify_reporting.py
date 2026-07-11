@@ -166,3 +166,51 @@ async def test_state_provider_failure_does_not_stop_pipeline(tmp_path: Path) -> 
     )
     await wrapped.notify("runner.stopped", reason="정상")
     assert any(e == "runner.daily_report" for e, _ in inner.events)
+
+
+async def test_shadow_snapshot_saves_shadow_prefixed_report(tmp_path: Path) -> None:
+    """섀도우 세션 리포트는 shadow-*.json 으로 저장 + payload 에 shadow 라벨.
+
+    daily-*.json 을 globbing 하는 소비자(주간 인사이트 등)가 가상 PnL 을
+    실적으로 오인하지 않게 파일명 수준에서 분리한다.
+    """
+    inner = _RecordingNotifier()
+    log_path = _write_log(
+        tmp_path / "paper-day-2026-07-13.log",
+        {"event": "daytrade.discovery", "chosen": [], "blocked": [["005930", "KOSPI_below_sma"]]},
+        {
+            "event": "runner.order_simulated",
+            "symbol": "005930",
+            "side": "buy",
+            "qty": 10,
+            "price": 5000.0,
+        },
+    )
+    report_root = tmp_path / "reports"
+    shadow_snap = RunnerStateSnapshot(
+        mode="mock",
+        dry_run=True,
+        symbols=["005930"],
+        strategies={},
+        started_at=None,
+        snapshot=None,
+        account=None,
+        recent_signals={},
+        balance_failures=0,
+        runner_mode="day-trade",
+        shadow=True,
+    )
+    wrapped = ReportingNotifier(
+        inner,
+        state_provider=lambda: shadow_snap,
+        log_path=log_path,
+        report_root=report_root,
+        report_date=date(2026, 7, 13),
+    )
+
+    await wrapped.notify("runner.stopped", reason="정상 종료")
+
+    assert (report_root / "shadow-2026-07-13.json").exists()
+    assert not (report_root / "daily-2026-07-13.json").exists()
+    _, payload = inner.events[-1]
+    assert payload.get("shadow") is True

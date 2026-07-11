@@ -46,6 +46,7 @@ from ..risk.consecutive_loss import ConsecutiveLossTracker
 from ..risk.correlation_collector import refresh_correlations
 from ..risk.manager import AccountState, Decision, RiskManager
 from ..risk.position_guard import GuardAction, PositionGuard
+from ..shadow import ShadowSignal, ShadowTracker
 from ..strategy.base import Signal, Strategy
 from .aggregator import _BarAggregator
 from .aggregator import _floor_bucket as _floor_bucket
@@ -122,6 +123,12 @@ class PaperRunner:
     # 수집). None 이면 비활성. __post_init__ 에서 Settings.tick_log_dir 활성 시
     # 자동 생성. 전략·리스크·주문 경로와 완전 무관 — 버퍼 append 후 묶음 write.
     tick_recorder: TickRecorder | None = None
+    # 2026-07-11 — 섀도우 세션(게이트 차단일 주문 없는 가상 매매). enable_shadow() 로
+    # 주입되면 dry_run 강제 + 잔고 조회를 가상 원장(tracker)으로 대체한다. 시뮬 체결이
+    # tracker 에 쌓여 포지션·평가액이 갱신되므로 손절·트레일링·청산이 실제와 동일하게
+    # 돈다(일반 dry_run 은 시뮬 매수가 잔고에 안 잡혀 출구 로직이 못 돌던 것과 대비).
+    # 실주문·실계좌·day-state 디스크에는 어떤 영향도 없음.
+    shadow_tracker: ShadowTracker | None = None
     _settings: Settings = field(default_factory=get_settings)
     _balance_failures: int = field(default=0, init=False)
     # 텔레그램 인커밍 명령 응답용 인메모리 상태 (runner 가 매 사이클 갱신)
@@ -129,6 +136,9 @@ class PaperRunner:
     _account: AccountState | None = field(default=None, init=False)
     _recent_signals: dict[str, Signal] = field(default_factory=dict, init=False)
     _started_at: datetime | None = field(default=None, init=False)
+    # 섀도우 모드 평가용 종목별 마지막 봉 종가. tracker.equity() 의 mark 이자
+    # 청산 시뮬 SELL 가격의 근거 (실잔고가 없으니 시세는 여기서만 온다).
+    _shadow_marks: dict[str, float] = field(default_factory=dict, init=False, repr=False)
     # 텔레그램 v3 — 외부에서 pause/resume/request_stop 으로 토글
     _control_state: RunnerControlState = field(default=RunnerControlState.RUNNING, init=False)
     # request_stop 시 ws.messages() 루프에 즉시 신호를 주기 위한 활성 ws 참조.
@@ -444,6 +454,9 @@ class PaperRunner:
         *,
         previous: AccountState | None,
     ) -> AccountState:
+        # 섀도우 세션 — 실잔고 대신 가상 원장. REST 호출·day-state 디스크 접근 없음.
+        if self.shadow_tracker is not None:
+            return self._shadow_account_state(previous)
         try:
             snap: AccountSnapshot = await get_balance(rest)
         except Exception as exc:
@@ -545,6 +558,8 @@ class PaperRunner:
 
     async def _on_bar(self, rest: KiwoomRestClient, bar: Bar, account: AccountState) -> None:
         log.debug("runner.bar", symbol=bar.symbol, ts=bar.ts.isoformat(), close=bar.close)
+        if self.shadow_tracker is not None:
+            self._shadow_marks[bar.symbol] = bar.close
         strat = self.strategies.get(bar.symbol)
         if strat is None:
             return
@@ -635,6 +650,20 @@ class PaperRunner:
             account.positions[action.symbol] = max(
                 0, account.positions.get(action.symbol, 0) - action.quantity
             )
+            # 섀도우 — guard SELL 을 가상 원장에 반영(FIFO 실현손익)하고, 실세션과
+            # 동일하게 churn 브레이크·연속손절 트래커에도 적립한다. 이 회로가 같이
+            # 돌아야 "실세션이었다면 오후에 진입이 막혔을지"까지 반사실이 재현된다.
+            if self.shadow_tracker is not None:
+                self.shadow_tracker.apply(
+                    ShadowSignal(
+                        symbol=action.symbol,
+                        side=Side.SELL,
+                        quantity=action.quantity,
+                        price=action.price,
+                        ts=bar.ts,
+                    )
+                )
+                await self._record_sell_round_trip(account, order, ref_price=action.price, bar=bar)
             await self.notifier.notify(
                 "position_guard.fired",
                 symbol=action.symbol,
@@ -876,6 +905,23 @@ class PaperRunner:
                 self._daily_buy_counts[order.symbol] = (
                     self._daily_buy_counts.get(order.symbol, 0) + 1
                 )
+            # 섀도우 — 시뮬 체결을 가상 원장에 기록 + account 에 즉시 반영. 잔고를
+            # 안 읽는 섀도우에서는 이게 유일한 포지션 소스라, 반영해야 같은 봉부터
+            # PositionGuard(손절·트레일링)와 15:15 청산이 실제처럼 돈다.
+            if self.shadow_tracker is not None:
+                self.shadow_tracker.apply(
+                    ShadowSignal(
+                        symbol=order.symbol,
+                        side=order.side,
+                        quantity=order.quantity,
+                        price=sim_price,
+                        ts=bar.ts,
+                    )
+                )
+                account.positions[order.symbol] = self.shadow_tracker.holdings.get(order.symbol, 0)
+                avg = self.shadow_tracker.avg_prices.get(order.symbol)
+                if avg is not None:
+                    account.avg_prices[order.symbol] = avg
             return None
         return order
 
@@ -1295,6 +1341,7 @@ class PaperRunner:
                 self.liquidate_at.strftime("%H:%M") if self.liquidate_at is not None else ""
             ),
             symbol_names=dict(self._symbol_names),
+            shadow=self.shadow_tracker is not None,
         )
 
     # ---- 텔레그램 v3 외부 제어 (모두 동기. async loop 가 폴링) -------------
@@ -1344,6 +1391,44 @@ class PaperRunner:
         self._universe_ready.set()
 
     # ---- day-trade 모드 (21단계 Phase B) -----------------------------------
+
+    def enable_shadow(self, tracker: ShadowTracker) -> None:
+        """섀도우 세션 활성화 — set_universe() 이전, run() 의 universe 대기 중에 호출.
+
+        dry_run 을 강제해 REST 주문 송신이 구조적으로 불가능하게 만들고, 이후
+        잔고 조회(_snapshot_account)가 키움 대신 tracker 가상 원장을 읽게 한다.
+        되돌리기 없음 — 섀도우로 켠 세션은 끝까지 섀도우 (중간 전환은 원장 혼선).
+        """
+        if self._ws is not None:
+            raise RuntimeError("enable_shadow() 는 ws.start() 이전에만 호출하세요.")
+        self.shadow_tracker = tracker
+        self.dry_run = True
+        log.info(
+            "runner.shadow_enabled",
+            initial_cash=tracker.initial_cash,
+            log_path=str(tracker.log_path) if tracker.log_path else None,
+        )
+
+    def _shadow_account_state(self, previous: AccountState | None) -> AccountState:
+        """tracker 가상 원장 → AccountState. 키움 REST 를 전혀 부르지 않는다.
+
+        day-state 디스크 저장/복원도 하지 않음 — 섀도우 한도 소진이 다음 실세션의
+        일일 한도(today_notional_used 등)를 오염시키면 안 된다.
+        """
+        tracker = self.shadow_tracker
+        assert tracker is not None  # 호출부가 shadow 분기에서만 부른다
+        positions = {sym: qty for sym, qty in tracker.holdings.items() if qty > 0}
+        equity = tracker.equity(self._shadow_marks)
+        state = AccountState(
+            deposit=tracker.cash,
+            total_equity=equity,
+            positions=positions,
+            avg_prices=dict(tracker.avg_prices),
+            day_start_equity=tracker.initial_cash,
+            today_notional_used=(previous.today_notional_used if previous is not None else 0.0),
+        )
+        self._account = state
+        return state
 
     def set_universe(
         self,
@@ -1449,6 +1534,19 @@ class PaperRunner:
                 )
                 # 시뮬에서도 로컬 포지션 즉시 0 으로 — 다음 청산 호출이 idempotent.
                 account.positions[symbol] = 0
+                # 섀도우 — 마지막 봉 종가(없으면 평단가)로 가상 청산 체결.
+                if self.shadow_tracker is not None:
+                    liq_price = self._shadow_marks.get(symbol) or buy_price
+                    if liq_price:
+                        self.shadow_tracker.apply(
+                            ShadowSignal(
+                                symbol=symbol,
+                                side=Side.SELL,
+                                quantity=qty,
+                                price=float(liq_price),
+                                ts=datetime.now(KST),
+                            )
+                        )
                 success += 1
                 continue
             try:
