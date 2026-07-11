@@ -20,7 +20,7 @@ from ..news.cli_helpers import (
 )
 from ..notify import insight as insight_mod
 from ..notify.daily_report import format_daily_report
-from ..reports.daily import build_daily_report, save_daily_report
+from ..reports.daily import build_daily_report, refresh_snapshot_joins, save_daily_report
 from ..reports.log_parser import parse_log
 from ..strategy import scanner
 
@@ -47,16 +47,37 @@ def report(
         "--push/--no-push",
         help="True 면 텔레그램에 푸시. 기본은 콘솔만.",
     ),
+    join_only: bool = typer.Option(
+        False,
+        "--join-only",
+        help="기존 저장 리포트를 보존한 채 스냅샷 조인 필드(차단 종목 성적·진입 피처·"
+        "MFE/MAE)만 다시 채움. 게이트 차단일처럼 리포트가 개장 직후 저장돼 그날 "
+        "움직임이 비어 있을 때 사용.",
+    ),
 ) -> None:
     """22단계 Phase A — 그날의 paper-day 로그를 파싱해 일일 리포트 생성·저장.
 
     무엇/왜:
     - 운영 중 자동 푸시(러너 종료 시) 가 실패했거나 과거 일자를 다시 보고 싶을 때.
     - 결정론적 — 같은 로그면 같은 출력. LLM 호출 없음.
+    - `--join-only`: 전체 재생성은 러너 스냅샷 없이는 못 채우는 필드(마감 잔고 등)를
+      잃는다 — 차단일 리포트의 스냅샷 조인 공백만 소급 복구할 땐 이 플래그.
 
     어떻게 확인: 콘솔에 한국어 요약 출력 + `data/reports/daily-YYYY-MM-DD.json` 파일 생성.
     """
     iso = target_date or datetime.now(KST).date().isoformat()
+
+    if join_only:
+        saved = refresh_snapshot_joins(iso, report_root=out)
+        if saved is None:
+            cli.console.print(
+                f"[yellow]재보강 대상 없음:[/yellow] {out}/daily-{iso}.json 또는 "
+                f"그날 스냅샷(data/snapshots/topcap-{iso}.jsonl)이 없습니다."
+            )
+            raise typer.Exit(code=1)
+        cli.console.print(f"[green]스냅샷 조인 재보강 완료:[/green] {saved}")
+        return
+
     log_file = log_path or Path(f"logs/paper-day-{iso}.log")
     if not log_file.exists():
         cli.console.print(f"[red]로그 파일 없음:[/red] {log_file}")

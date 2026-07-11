@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from datetime import time as dtime
 from pathlib import Path
 from typing import cast
 
@@ -18,6 +19,10 @@ from rich.table import Table
 from auto_trading import cli
 
 from .._common import KST
+
+# snapshot-top200 은 launchd 가 매 10분(09:00~15:30) 호출 — 이 시각 이후의 호출
+# (= 15:30 마지막 라운드)에서만 일일 리포트 조인 재보강을 수행한다.
+_REPORT_REFRESH_AFTER = dtime(15, 25)
 
 
 @cli.app.command("build-marketcap-universe")
@@ -180,6 +185,20 @@ def snapshot_top200(
         cli.console.print(
             f"[green]✓ 발굴 종목 스냅샷:[/green] {disc_ok}/{len(discovered)}건 → {discovered_path}"
         )
+
+    # 마지막 라운드(15:30 호출)에서 오늘 일일 리포트의 스냅샷 조인을 소급 갱신 —
+    # 게이트 차단일엔 러너가 09:02 에 리포트를 저장해 차단 종목 성적(blocked_outcomes)
+    # 이 개장 1라운드 값으로 얼어붙는다. 하루치 스냅샷이 다 모인 지금 다시 채운다.
+    # 실패해도 스냅샷 라운드 결과에는 영향 없음(best-effort).
+    if datetime.now(KST).time() >= _REPORT_REFRESH_AFTER:
+        try:
+            from ..reports.daily import refresh_snapshot_joins
+
+            saved = refresh_snapshot_joins(today.isoformat(), snapshot_root=out_dir)
+            if saved is not None:
+                cli.console.print(f"[green]✓ 일일 리포트 조인 재보강:[/green] {saved}")
+        except Exception:
+            structlog.get_logger(__name__).warning("snapshot.report_refresh_failed", exc_info=True)
 
 
 @cli.app.command("vi")
