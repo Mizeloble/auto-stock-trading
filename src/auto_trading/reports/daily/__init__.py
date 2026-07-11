@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from .aggregate import COST_COMMISSION_RATE, COST_SLIPPAGE_BPS, COST_TAX_RATE_SELL
-from .builder import build_daily_report
+from .builder import build_daily_report, refresh_snapshot_joins
 from .models import (
     BlockedOutcome,
     ClosingHolding,
@@ -45,6 +45,7 @@ __all__ = [
     "build_daily_report",
     "load_daily_report",
     "merge_symbol_names",
+    "refresh_snapshot_joins",
     "save_daily_report",
     "with_symbol_name",
 ]
