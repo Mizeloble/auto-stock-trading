@@ -121,6 +121,10 @@ class DaytradeProfile(BaseModel):
     # 발굴 회피 종목 코드 목록. 거래량 상위에 떠도 매수 후보에서 즉시 제외.
     # 주간 LLM 리뷰가 "⛔ 회피 종목" 으로 제시한 종목을 다음 주에 자동 반영.
     avoid_symbols: list[str] = Field(default_factory=list)
+    # 게이트(지수 SMA·breadth)가 전 후보를 차단한 날, 러너를 종료하는 대신 주문
+    # 없는 섀도우 모드로 장 마감까지 돌린다 — 가상 PnL(data/shadow/)·틱 로그 축적.
+    # 실주문·실계좌에는 어떤 영향도 없음. False(기본)면 기존처럼 즉시 종료.
+    shadow_on_blocked: bool = False
     notes: str = ""
     created_at: datetime | None = None
     last_updated_at: datetime | None = None

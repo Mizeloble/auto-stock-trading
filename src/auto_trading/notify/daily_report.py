@@ -379,7 +379,11 @@ def format_daily_report(payload: dict) -> str:
     date = str(payload.get("date") or "?")
     mode = str(payload.get("mode") or "?")
     dry = " · dry-run" if payload.get("dry_run") else ""
-    lines = [f"📊 일일 리포트 ({date})", f"모드: {mode}{dry}"]
+    if payload.get("shadow"):
+        # 게이트 차단일 가상 매매 — 실제 주문·손익이 아님을 제목에서부터 명확히.
+        lines = [f"👻 섀도우 리포트 ({date}) — 주문 없는 가상 매매", f"모드: {mode}{dry}"]
+    else:
+        lines = [f"📊 일일 리포트 ({date})", f"모드: {mode}{dry}"]
 
     buys = payload.get("buys") or []
     liqs = payload.get("liquidations") or []

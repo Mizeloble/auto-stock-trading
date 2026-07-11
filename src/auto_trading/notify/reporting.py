@@ -81,12 +81,21 @@ class ReportingNotifier:
             if not _has_meaningful_content(report):
                 log.info("reports.daily.skipped", reason="empty_report")
                 return
+            # 섀도우 세션(게이트 차단일 가상 매매)은 shadow-*.json 으로 분리 저장 —
+            # daily-*.json 소비자(주간 인사이트 등)가 가상 PnL 을 실적으로 오인 방지.
+            shadow = bool(snapshot.shadow) if snapshot is not None else False
             try:
-                save_path = save_daily_report(report, root=self._report_root)
-                log.info("reports.daily.saved", path=str(save_path))
+                save_path = save_daily_report(
+                    report,
+                    root=self._report_root,
+                    prefix="shadow" if shadow else "daily",
+                )
+                log.info("reports.daily.saved", path=str(save_path), shadow=shadow)
             except OSError as exc:
                 log.warning("reports.daily.save_failed", error=str(exc))
             payload = _to_notify_payload(report)
+            if shadow:
+                payload["shadow"] = True
             await self._inner.notify("runner.daily_report", **payload)
         except Exception as exc:
             log.warning(

@@ -42,6 +42,9 @@ class DiscoveryResult:
     # 코드→종목명. chosen 뿐 아니라 blocked 후보까지 포함한 전체 후보 매핑 —
     # 텔레그램 발굴 알림이 차단 종목도 "005930 삼성전자" 로 보여줄 수 있게.
     names: dict[str, str] = field(default_factory=dict)
+    # 발굴 풀 전체(순위순). 게이트 차단으로 chosen 이 비어도 "게이트가 없었다면
+    # 뽑혔을" 후보를 시장 정보와 함께 복원할 수 있게 — 섀도우 러닝의 입력.
+    candidates: list[RankedSymbol] = field(default_factory=list)
 
 
 def _default_strategy_factory(weight: float) -> Callable[..., Strategy]:
@@ -188,7 +191,12 @@ async def discover_and_arm(
             )
             log.info("daytrade.universe_chosen", symbols=[], reason="breadth_blocked")
             return DiscoveryResult(
-                chosen=[], blocked=blocked_all, gates=gates, note_ko=note, names=names_all
+                chosen=[],
+                blocked=blocked_all,
+                gates=gates,
+                note_ko=note,
+                names=names_all,
+                candidates=list(candidates),
             )
 
     chosen: list[RankedSymbol] = []
@@ -222,7 +230,14 @@ async def discover_and_arm(
     if not chosen:
         note = f"후보 {len(candidates)}건 모두 지수 게이트 차단 — 오늘은 거래 없이 종료합니다."
         log.info("daytrade.universe_chosen", symbols=[], reason="all_blocked")
-        return DiscoveryResult(chosen=[], blocked=blocked, gates=gates, note_ko=note, names=names)
+        return DiscoveryResult(
+            chosen=[],
+            blocked=blocked,
+            gates=gates,
+            note_ko=note,
+            names=names,
+            candidates=list(candidates),
+        )
 
     factory = strategy_factory or _default_strategy_factory(weight=1.0 / max(1, top_n))
     symbols = [c.symbol for c in chosen]
@@ -240,7 +255,14 @@ async def discover_and_arm(
     note = f"매수 후보 {len(chosen)}/{len(candidates)}: {', '.join(symbols)}"
     if blocked:
         note += f" (차단 {len(blocked)})"
-    return DiscoveryResult(chosen=chosen, blocked=blocked, gates=gates, note_ko=note, names=names)
+    return DiscoveryResult(
+        chosen=chosen,
+        blocked=blocked,
+        gates=gates,
+        note_ko=note,
+        names=names,
+        candidates=list(candidates),
+    )
 
 
 async def _momentum_loop(

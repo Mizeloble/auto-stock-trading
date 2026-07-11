@@ -342,3 +342,159 @@ def test_build_paper_day_runner_wires_heartbeat_into_runner(tmp_path: Path) -> N
     # Heartbeat 객체가 실제 동작하는지 가벼운 sanity check (디렉터리 자동 생성 + write 가능)
     hb.write()
     assert heartbeat_path.exists()
+
+
+# ---- 섀도우 세션 무장 (_try_arm_shadow) ------------------------------------
+
+from typing import ClassVar  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+from auto_trading._common import KST as _KST  # noqa: E402
+from auto_trading.daytrade import cli_helpers as _ch  # noqa: E402
+from auto_trading.runner import PaperRunner  # noqa: E402
+
+
+def _shadow_cand(symbol: str, name: str = "", market: str = "KOSPI") -> RankedSymbol:
+    return RankedSymbol(symbol=symbol, market=market, name=name, volume=100, price=10_000.0)  # type: ignore[arg-type]
+
+
+def _blocked_result(*, avoid: tuple[str, ...] = ()) -> DiscoveryResult:
+    cands = [
+        _shadow_cand("005930", "삼성전자"),
+        _shadow_cand("000660", "SK하이닉스"),
+        _shadow_cand("035420"),
+    ]
+    blocked = [
+        (c.symbol, "avoid_symbols" if c.symbol in avoid else "KOSPI_below_sma") for c in cands
+    ]
+    return DiscoveryResult(
+        chosen=[],
+        blocked=blocked,
+        gates={},
+        note_ko="차단",
+        names={c.symbol: c.name for c in cands if c.name},
+        candidates=cands,
+    )
+
+
+def _day_runner(tmp_path: Path) -> PaperRunner:
+    from datetime import time as _time
+
+    return PaperRunner(liquidate_at=_time(15, 15, tzinfo=_KST))
+
+
+class _FakeBalance:
+    deposit = 5_000_000.0
+    holdings: ClassVar[list] = []
+
+
+async def test_try_arm_shadow_picks_gate_blocked_and_arms(tmp_path: Path, monkeypatch) -> None:
+    """게이트 차단 후보 top_n 으로 섀도우 무장 — dry_run 강제 + universe 주입."""
+    monkeypatch.chdir(tmp_path)  # tracker log_path(data/shadow) 가 cwd 상대라 격리
+    monkeypatch.setattr(_ch, "get_balance", AsyncMock(return_value=_FakeBalance()))
+    runner = _day_runner(tmp_path)
+
+    armed = await _ch._try_arm_shadow(
+        object(), runner, _blocked_result(), top_n=2, strategy_factory=None
+    )
+
+    assert armed is True
+    assert runner.dry_run is True
+    assert runner.shadow_tracker is not None
+    assert runner.shadow_tracker.initial_cash == 5_000_000.0  # 실계좌 평가액 반영
+    assert runner.symbols == ["005930", "000660"]  # 순위순 top_n
+    assert runner._universe_ready.is_set()
+
+
+async def test_try_arm_shadow_excludes_avoid_symbols(tmp_path: Path, monkeypatch) -> None:
+    """회피 종목은 섀도우에서도 제외 — 실세션 행동의 재현이어야 반사실이 유효."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_ch, "get_balance", AsyncMock(return_value=_FakeBalance()))
+    runner = _day_runner(tmp_path)
+
+    armed = await _ch._try_arm_shadow(
+        object(),
+        runner,
+        _blocked_result(avoid=("005930",)),
+        top_n=2,
+        strategy_factory=None,
+    )
+
+    assert armed is True
+    assert runner.symbols == ["000660", "035420"]
+
+
+async def test_try_arm_shadow_balance_failure_falls_back(tmp_path: Path, monkeypatch) -> None:
+    """잔고 조회 실패 시 고정 가상 자본으로 폴백 — 섀도우가 막히지 않는다."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_ch, "get_balance", AsyncMock(side_effect=RuntimeError("boom")))
+    runner = _day_runner(tmp_path)
+
+    armed = await _ch._try_arm_shadow(
+        object(), runner, _blocked_result(), top_n=3, strategy_factory=None
+    )
+
+    assert armed is True
+    assert runner.shadow_tracker is not None
+    assert runner.shadow_tracker.initial_cash == _ch._SHADOW_FALLBACK_CASH
+
+
+async def test_try_arm_shadow_no_candidates_returns_false(tmp_path: Path, monkeypatch) -> None:
+    """후보 자체가 없으면(발굴 실패 등) 무장하지 않고 기존 종료 경로 유지."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_ch, "get_balance", AsyncMock(return_value=_FakeBalance()))
+    runner = _day_runner(tmp_path)
+    empty = DiscoveryResult(chosen=[], blocked=[], gates={}, note_ko="후보 없음")
+
+    armed = await _ch._try_arm_shadow(object(), runner, empty, top_n=3, strategy_factory=None)
+
+    assert armed is False
+    assert runner.shadow_tracker is None
+    assert not runner._universe_ready.is_set()
+
+
+class _FakeRestCtx:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+async def _run_delayed_discover(monkeypatch, tmp_path, *, shadow_on_blocked: bool) -> PaperRunner:
+    monkeypatch.chdir(tmp_path)  # data/shadow 상대 경로 격리
+    monkeypatch.setattr(_ch, "KiwoomRestClient", lambda: _FakeRestCtx())
+    monkeypatch.setattr(_ch, "discover_and_arm", AsyncMock(return_value=_blocked_result()))
+    monkeypatch.setattr(_ch, "record_alt_ranking", AsyncMock(return_value=None))
+    monkeypatch.setattr(_ch, "get_balance", AsyncMock(return_value=_FakeBalance()))
+    runner = _day_runner(tmp_path)
+    await _ch.delayed_discover(
+        runner,
+        top_n=3,
+        delay=0,
+        shadow_on_blocked=shadow_on_blocked,
+    )
+    return runner
+
+
+async def test_delayed_discover_blocked_arms_shadow_instead_of_stop(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """옵트인 시 게이트 전면 차단 → stop 대신 섀도우 세션으로 계속."""
+    runner = await _run_delayed_discover(monkeypatch, tmp_path, shadow_on_blocked=True)
+    from auto_trading.runner import RunnerControlState
+
+    assert runner.shadow_tracker is not None
+    assert runner.symbols == ["005930", "000660", "035420"]
+    assert runner._control_state is not RunnerControlState.STOPPING
+
+
+async def test_delayed_discover_blocked_stops_when_shadow_disabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """기본(False)이면 기존 동작 그대로 — no_candidates 로 종료 (회귀 0)."""
+    runner = await _run_delayed_discover(monkeypatch, tmp_path, shadow_on_blocked=False)
+    from auto_trading.runner import RunnerControlState
+
+    assert runner.shadow_tracker is None
+    assert runner._control_state is RunnerControlState.STOPPING

@@ -232,6 +232,26 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
             body += f"\n메모: {note}"
         return head + body
 
+    if event == "daytrade.shadow_armed":
+        names_raw = fields.get("names") or {}
+        name_map2: dict[str, str] = {}
+        if isinstance(names_raw, dict):
+            for k, v in names_raw.items():
+                if isinstance(k, str) and isinstance(v, str):
+                    name_map2[k] = v
+        syms = fields.get("symbols") or []
+        label = (
+            ", ".join(_with_name(str(s), name_map2.get(str(s))) for s in syms)
+            if isinstance(syms, list) and syms
+            else "없음"
+        )
+        return (
+            "👻 섀도우 모드 시작 — 게이트 차단으로 오늘 실제 주문은 없어요\n"
+            f"관찰 종목: {label}\n"
+            "봇이 '만약 샀다면' 을 가상으로만 매매하며 데이터를 모아요. "
+            "장 마감 후 섀도우 리포트로 결과를 보내드립니다."
+        )
+
     if event == "runner.liquidate_done":
         # count = 성공 건수, failed = 실패 건수 (2026-05-08 분리). 둘 다 보여
         # 사용자가 "1종목 청산 완료" 푸시를 보고 실제 0건 청산을 오해하지 않게.

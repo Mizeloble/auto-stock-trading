@@ -25,11 +25,18 @@ from .models import (
 )
 
 
-def save_daily_report(report: DailyReport, *, root: Path | str = "data/reports") -> Path:
-    """`<root>/daily-<date>.json` 으로 저장. 디렉터리 자동 생성."""
+def save_daily_report(
+    report: DailyReport, *, root: Path | str = "data/reports", prefix: str = "daily"
+) -> Path:
+    """`<root>/<prefix>-<date>.json` 으로 저장. 디렉터리 자동 생성.
+
+    prefix 기본 "daily" = 실운영 실적. 섀도우 세션(주문 없는 가상 매매)은
+    "shadow" 로 저장 — `daily-*.json` 을 globbing 하는 소비자(주간 인사이트 등)가
+    가상 PnL 을 실적으로 오인하지 않게 파일명 수준에서 분리한다.
+    """
     out_dir = Path(root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"daily-{report.date}.json"
+    out_path = out_dir / f"{prefix}-{report.date}.json"
     payload = _to_json_dict(report)
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return out_path
