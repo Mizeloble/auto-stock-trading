@@ -309,6 +309,51 @@ async def test_breadth_gate_blocks_when_weak(monkeypatch) -> None:
     assert "breadth 게이트 차단" in result.note_ko
 
 
+async def test_breadth_gate_block_emits_discovery_event(monkeypatch) -> None:
+    """breadth 차단 조기 리턴도 daytrade.discovery 이벤트를 남긴다.
+
+    일일 리포트는 이 이벤트를 파싱해 만들어지므로, 없으면 차단일 리포트가
+    통째로 스킵된다(2026-07-07·08 공백 회귀 방지). names 도 함께 남아
+    텔레그램·리포트가 차단 종목명을 보여줄 수 있어야 한다.
+    """
+    import structlog
+
+    runner = _runner()
+    candidates = [
+        RankedSymbol(symbol="005930", market="KOSPI", name="삼성전자", volume=10, price=70000),
+        RankedSymbol(symbol="000660", market="KOSPI", name="SK하이닉스", volume=8, price=150000),
+    ]
+    monkeypatch.setattr(orch, "top_volume", AsyncMock(return_value=candidates))
+    monkeypatch.setattr(
+        orch, "index_gate", AsyncMock(side_effect=lambda _r, m: _gate(m, above=True))
+    )
+    weak = bd_mod.Breadth(
+        ts="X",
+        sample_size=200,
+        advancing_pct=0.2,
+        declining_pct=0.7,
+        mean_change_pct=-1.0,
+    )
+    monkeypatch.setattr(orch, "compute_breadth", lambda *_a, **_kw: weak)
+
+    config = DaytradeBreadthGate(enabled=True, min_advancing_pct=0.5, min_mean_change_pct=0.0)
+    with structlog.testing.capture_logs() as cap:
+        result = await orch.discover_and_arm(
+            rest=object(),
+            runner=runner,
+            top_n=2,
+            breadth_gate_config=config,  # type: ignore[arg-type]
+        )
+
+    discovery = [e for e in cap if e["event"] == "daytrade.discovery"]
+    assert len(discovery) == 1
+    assert discovery[0]["chosen"] == []
+    assert {s for s, _ in discovery[0]["blocked"]} == {"005930", "000660"}
+    assert all(r.startswith("breadth_") for _, r in discovery[0]["blocked"])
+    assert discovery[0]["names"]["005930"] == "삼성전자"
+    assert result.names["000660"] == "SK하이닉스"
+
+
 async def test_breadth_gate_passes_when_strong(monkeypatch) -> None:
     """강세면 통과 — 기존 index_gate 흐름 그대로."""
     runner = _runner()
