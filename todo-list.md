@@ -226,10 +226,11 @@
     2. heartbeat-check (5분 간격) 가 `0`, 평일 아침에만 도는 잡들이 부팅 직후엔 `·`.
     3. `uv run pytest tests/test_cli_ops.py -v` → 5 케이스 PASS.
 
-- [ ] **`auto-trade ops` Phase 2 — 추후 보강** (선택, Phase 1 운영 1~2주 후 별도 plan)
-  - **무엇**: ① "다음 예정 시각" 칸(plistlib + launchd 캘린더 시뮬레이션), ② "7일 예상 vs 실제 실행 횟수" 통계, ③ 텔레그램 `/ops` 명령(러너 떠 있을 때만 응답하는 비대칭 인지), ④ `scripts/launchd/schedules.yaml` 단일 출처에서 plist 8개 자동 생성.
-  - **왜**: 가시성 → 신뢰 → 구조 단순화 순서. 한 번에 너무 많이 하면 캘린더 로직 버그·로그 rotate 충돌 등 회귀 위험.
-  - **어떻게 확인**: 본 plan은 Phase 1 운영 안정 후 작성.
+- [ ] **`auto-trade ops` Phase 2 — 추후 보강** (①②+버그수정 2026-07-12 완료, ③④ 남음)
+  - **무엇**: ~~① "다음 예정 시각" 칸(plistlib + launchd 캘린더 시뮬레이션)~~, ~~② "7일 예상 vs 실제 실행 횟수" 통계~~ (실행 "횟수" 대신 **실행일 수** 비교로 구현 — snapshot-top200 처럼 하루 여러 번 도는 잡은 날짜별 로그 1개라 횟수 비교가 불가능·실행일이 정직), ③ 텔레그램 `/ops` 명령(러너 떠 있을 때만 응답하는 비대칭 인지), ④ `scripts/launchd/schedules.yaml` 단일 출처에서 plist 8개 자동 생성.
+  - **함께 수정 (2026-07-12)**: Phase 1 "마지막 실행"이 레거시 `launchd-*.log` mtime 만 봐서 날짜별 로그(`paper-day-YYYY-MM-DD.log` 등)를 쓰는 잡이 전부 5월에 고착돼 보이던 버그 — 두 원천 중 최신 mtime 으로 수정. heartbeat-check 가 주말·장외 침묵하는 건 래퍼의 시간 게이트라 정상.
+  - **왜**: 가시성 → 신뢰 → 구조 단순화 순서. 한 번에 너무 많이 하면 캘린더 로직 버그·로그 rotate 충돌 등 회귀 위험 — ③④ 는 Phase 2 운영 안정 후.
+  - **어떻게 확인**: `uv run auto-trade ops` → "다음 예정"(평일 잡은 다음 평일, churnfix 는 내년 연도 표기)·"7일 실행일"(paper-day 5/5 등) 칸 확인. `uv run pytest tests/test_cli_ops.py` 9 케이스 PASS.
 
 ---
 

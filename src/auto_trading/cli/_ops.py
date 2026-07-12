@@ -516,8 +516,14 @@ def ops(
 
     무엇/왜:
     - macOS launchd 에 등록된 자동매매 봇 자동실행 작업이 의도대로 도는지 한 줄씩 확인.
-    - "마지막 실행" = `logs/launchd-*.{out,err}.log` 중 newer mtime — 표준출력 마지막
-      쓰기 시각. 작업이 stdout 없이 끝나면 옛 mtime 그대로일 수 있으니 참고치.
+    - "마지막 실행" = 레거시 `logs/launchd-*.{out,err}.log` 와 래퍼 스크립트의
+      날짜별 `logs/<잡이름>-YYYY-MM-DD.log` 를 합쳐 최신 mtime. (2026-07-12 수정 —
+      종전엔 레거시만 봐서 대부분 잡이 5월에 고착돼 보였다.)
+    - "다음 예정" = plist 의 StartCalendarInterval 시뮬레이션. StartInterval 잡은
+      "매 5분" 식 간격 표기.
+    - "7일 실행일" = 예상/실제. 예상=스케줄상 발화 예정일 수(어제까지 7일),
+      실제=날짜별 로그가 생긴 날 수. 실제 < 예상이면 노랑 — 놓친 날이 있다는 뜻.
+      날짜별 로그가 없는 잡(heartbeat-check·log-rotate)은 실제 측정 불가 "-".
     - "Exit" = `launchctl print gui/$UID/<label>` 출력의 `last exit code` 1줄 grep:
       "0" 정상 종료, 빨강 정수 비정상 종료, "·" 이번 부팅 후 미실행
       (launchctl 의 `(never exited)`), "-" launchctl 호출 자체 실패.
@@ -537,11 +543,31 @@ def ops(
     table = Table(title="자동실행 작업 현황")
     table.add_column("Label")
     table.add_column("마지막 실행")
+    table.add_column("다음 예정")
+    table.add_column("7일 실행일", justify="center")
     table.add_column("Exit", justify="right")
     table.add_column("비고")
     for r in rows:
         short = r.label.removeprefix("com.mizeloble.auto-trade.")
         last = r.last_run.strftime("%Y-%m-%d %H:%M") if r.last_run else "-"
+
+        if r.next_run is not None:
+            # 올해 발화는 "07-13 08:55", 내년(연 1회 잡)은 연도까지 — 과거로 오독 방지.
+            fmt = "%m-%d %H:%M" if r.next_run.year == datetime.now(KST).year else "%Y-%m-%d %H:%M"
+            next_cell = r.next_run.strftime(fmt)
+        elif r.interval_sec is not None:
+            next_cell = _format_interval(r.interval_sec)
+        else:
+            next_cell = "-"
+
+        if r.expected_days_7d is None:
+            week_cell = "-"
+        else:
+            actual = "-" if r.actual_days_7d is None else str(r.actual_days_7d)
+            week_cell = f"{r.expected_days_7d}/{actual}"
+            if r.actual_days_7d is not None and r.actual_days_7d < r.expected_days_7d:
+                week_cell = f"[yellow]{week_cell}[/yellow]"
+
         if r.exit_status is None:
             exit_cell = "-"
         elif r.exit_status == "0":
@@ -550,6 +576,18 @@ def ops(
             exit_cell = "·"
         else:
             exit_cell = f"[red]{r.exit_status}[/red]"
-        table.add_row(short, last, exit_cell, r.note)
+        table.add_row(short, last, next_cell, week_cell, exit_cell, r.note)
     cli.console.print(table)
-    cli.console.print("[dim]Exit: 0=정상 · 빨강=비정상 · ·=이번 부팅 후 미실행 · -=정보 없음[/dim]")
+    cli.console.print(
+        "[dim]Exit: 0=정상 · 빨강=비정상 · ·=이번 부팅 후 미실행 · -=정보 없음 | "
+        "7일 실행일: 예상/실제(어제까지 7일 · 노랑=놓친 날 있음 · -=날짜별 로그 없어 측정 불가)[/dim]"
+    )
+
+
+def _format_interval(sec: int) -> str:
+    """StartInterval 초를 사람이 읽는 간격으로 (300 → "매 5분")."""
+    if sec % 3600 == 0:
+        return f"매 {sec // 3600}시간"
+    if sec % 60 == 0:
+        return f"매 {sec // 60}분"
+    return f"매 {sec}초"
