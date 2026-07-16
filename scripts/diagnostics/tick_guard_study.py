@@ -33,6 +33,7 @@ import json
 import statistics
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -41,6 +42,7 @@ from auto_trading.reports.daily import RoundTrip, load_daily_report
 
 TICKS_ROOT = Path("data/ticks")
 REPORTS_ROOT = Path("data/reports")
+STUDIES_ROOT = Path("data/studies")
 PROFILE_PATH = Path("strategies/profiles/daytrade-highvol.yaml")
 EOD_SEC = (15 * 60 + 15) * 60  # 15:15
 MIN_TRIPS = 5
@@ -181,6 +183,7 @@ def main() -> None:
     )
     deltas: list[float] = []
     overshoots: list[float] = []
+    records: list[dict[str, object]] = []
     n_days_used = 0
     skipped = 0
     for date in tick_dates:
@@ -205,8 +208,27 @@ def main() -> None:
                 continue
             delta = sim.pnl_pct - rt.pnl_pct
             deltas.append(delta)
+            overshoot = None
             if rt.exit_reason == "stop_loss":
-                overshoots.append(rt.pnl_pct - (-guard["stop_loss_pct"] * 100.0))
+                overshoot = rt.pnl_pct - (-guard["stop_loss_pct"] * 100.0)
+                overshoots.append(overshoot)
+            records.append(
+                {
+                    "date": date,
+                    "symbol": rt.symbol,
+                    "name": rt.name,
+                    "buy_time_kst": rt.buy_time_kst,
+                    "sell_time_kst": rt.sell_time_kst,
+                    "actual_pnl_pct": round(rt.pnl_pct, 4),
+                    "actual_exit_reason": rt.exit_reason,
+                    "tick_pnl_pct": round(sim.pnl_pct, 4),
+                    "tick_exits": sim.exits,
+                    "delta_pct_points": round(delta, 4),
+                    "stop_overshoot_pct_points": (
+                        round(overshoot, 4) if overshoot is not None else None
+                    ),
+                }
+            )
             day_lines.append(
                 f"    {rt.symbol}  실제 {rt.pnl_pct:+.2f}% ({rt.exit_reason or '?'})"
                 f"  → 틱시뮬 {sim.pnl_pct:+.2f}% ({'→'.join(sim.exits)})  Δ {delta:+.2f}%p"
@@ -223,6 +245,22 @@ def main() -> None:
         return
 
     better = sum(1 for d in deltas if d > 0)
+    winners_killed = [
+        r
+        for r in records
+        if isinstance(r["actual_pnl_pct"], float)
+        and r["actual_pnl_pct"] > 0
+        and isinstance(r["delta_pct_points"], float)
+        and r["delta_pct_points"] < 0
+    ]
+    ready = len(deltas) >= MIN_TRIPS and n_days_used >= MIN_DAYS
+    verdict = (
+        "hold_insufficient_sample"
+        if not ready
+        else (
+            "adopt_candidate" if statistics.fmean(deltas) > 0 and not winners_killed else "reject"
+        )
+    )
     print(
         f"\n--- 종합 ---\n"
         f"왕복 {len(deltas)}건 ({n_days_used}일 · 결손 스킵 {skipped}건):"
@@ -234,7 +272,13 @@ def main() -> None:
             f"실제 손절 오버슈트: n={len(overshoots)}"
             f" 평균 {statistics.fmean(overshoots):+.2f}%p (0 이면 설정폭 그대로, 음수 = 초과 손실)"
         )
-    if len(deltas) < MIN_TRIPS or n_days_used < MIN_DAYS:
+    if winners_killed:
+        print(
+            f"승자 조기 손절: {len(winners_killed)}건"
+            f" (예: {winners_killed[0]['symbol']} 실제 {winners_killed[0]['actual_pnl_pct']:+.2f}%"
+            f" → 틱시뮬 {winners_killed[0]['tick_pnl_pct']:+.2f}%)"
+        )
+    if not ready:
         print(
             f"⏳ 판정 보류 — 왕복 {MIN_TRIPS}건·{MIN_DAYS}일 이상 모이면 판정"
             f" (현재 {len(deltas)}건·{n_days_used}일)."
@@ -243,7 +287,38 @@ def main() -> None:
         print(
             "판정 기준: ① Δ 평균이 양수(틱 가드가 손익 개선)이고 ② 승자 왕복에서 Δ 가 크게"
             " 음수인 건(조기 손절로 이익 훼손)이 소수일 때만 틱 가드 전환 후보."
+            f"\n판정: {verdict}"
         )
+
+    summary = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "guard_params": guard,
+        "profile": PROFILE_PATH.name,
+        "source_note": (
+            "round_trips 는 게이트 차단일 섀도우(가상) 세션 기록 — 실주문 없음."
+            " 가드 발화·체결가는 실세션과 동일 로직(1분봉 마감 bar.close)이라 반사실 기전은 동일."
+        ),
+        "n_round_trips": len(deltas),
+        "n_days": n_days_used,
+        "skipped": skipped,
+        "tick_sim_better_count": better,
+        "delta_pct_points_mean": round(statistics.fmean(deltas), 4),
+        "delta_pct_points_median": round(statistics.median(deltas), 4),
+        "stop_overshoot_n": len(overshoots),
+        "stop_overshoot_mean_pct_points": (
+            round(statistics.fmean(overshoots), 4) if overshoots else None
+        ),
+        "winners_killed_count": len(winners_killed),
+        "min_trips": MIN_TRIPS,
+        "min_days": MIN_DAYS,
+        "verdict": verdict,
+        "records": records,
+    }
+    STUDIES_ROOT.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out = STUDIES_ROOT / f"tick_guard_study_{stamp}.json"
+    out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n결과 저장: {out}")
 
 
 def selftest() -> None:
