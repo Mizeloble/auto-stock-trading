@@ -20,6 +20,8 @@ selection_alpha_study 의 방법을 두 풀 비교로 확장한 것.
 - 스냅샷 커버리지: discovered-*.jsonl 은 2026-07-06 부터 — 그 전 일자는 조인 결손이
   많아 스킵 건수로 표기. 두 풀의 겹침이 크면(같은 종목) A/B 검정력이 낮다 — 겹침 표기.
 - value_pool 순서는 키움 ka10030 sort_tp=2 기준(병합 정렬은 volumexprice 근사).
+- 휴장일 배제: 휴장이어도 수집 잡이 돌면 프로즌 스냅샷(전 종목 0.00%)이 쌓임 —
+  전 종목 수익률이 정확히 0 인 날은 표본에서 자동 배제 (snapshot_selection_study 동일).
 
 실행: uv run python scripts/diagnostics/alt_rank_ab_study.py
 """
@@ -159,18 +161,32 @@ def main() -> None:
     day_diffs: list[float] = []  # 일별 (거래량 풀 평균 - 거래대금 풀 평균)
     skipped_symbol_days = 0
     blocked_days = 0
+    holiday_days: list[str] = []
+    evaluated_days = 0
 
     print(f"=== 발굴 A/B: 거래량 vs 거래대금 (창 09:10→15:15, 왕복비용 {ROUND_TRIP_COST_PCT}%) ===")
     for rec in records:
         snaps = parse_topcap_for_date(rec.date, root=SNAPSHOT_ROOT)
         kospi = kospi_return_pct(rec.date)
         overlap = len(set(rec.volume_pool) & set(rec.value_pool))
+
+        universe = set(rec.volume_pool) | set(rec.value_pool) | set(rec.volume_picks[:TOP_N])
+        ret = {sym: window_return_pct(snaps, sym) for sym in universe}
+        # 휴장일 가드 — 휴장이어도 수집 잡은 돌기 때문에(예: 2026-07-17) 전일 종가로
+        # 고정된 스냅샷이 하루치 쌓여 전 종목 0.00% 로 조인된다. 그대로 두면 평균이
+        # 0 쪽으로 희석되고 표본 일수도 부풀므로 통째로 배제한다.
+        nonnull = [r for r in ret.values() if r is not None]
+        if nonnull and all(abs(r) < 1e-12 for r in nonnull):
+            holiday_days.append(rec.date)
+            print(f"{rec.date} [휴장 배제] 전 종목 0.00% — 프로즌 스냅샷, 표본 제외")
+            continue
+        evaluated_days += 1
         blocked_days += rec.blocked
 
         day_vol: list[float] = []
         day_val: list[float] = []
         for sym in rec.volume_pool:
-            r = window_return_pct(snaps, sym)
+            r = ret.get(sym)
             if r is None:
                 skipped_symbol_days += 1
                 continue
@@ -179,7 +195,7 @@ def main() -> None:
             if kospi is not None:
                 vol_excess.append(r - kospi)
         for sym in rec.value_pool:
-            r = window_return_pct(snaps, sym)
+            r = ret.get(sym)
             if r is None:
                 skipped_symbol_days += 1
                 continue
@@ -188,11 +204,11 @@ def main() -> None:
             if kospi is not None:
                 val_excess.append(r - kospi)
         for sym in rec.volume_picks[:TOP_N]:
-            r = window_return_pct(snaps, sym)
+            r = ret.get(sym)
             if r is not None:
                 vol_top.append(r)
         for sym in rec.value_pool[:TOP_N]:
-            r = window_return_pct(snaps, sym)
+            r = ret.get(sym)
             if r is not None:
                 val_top.append(r)
 
@@ -230,14 +246,15 @@ def main() -> None:
                 line += f" · t≈{t:.2f}"
         print(line)
 
+    holiday_str = f", 휴장 배제 {len(holiday_days)}일" if holiday_days else ""
     print(
-        f"\n표본: {len(records)}일 (차단일 {blocked_days}일 포함)"
+        f"\n표본: {evaluated_days}일 (차단일 {blocked_days}일 포함{holiday_str})"
         f" · 스냅샷 결손 스킵 {skipped_symbol_days}종목-일"
     )
-    if len(records) < MIN_DAYS_FOR_VERDICT:
+    if evaluated_days < MIN_DAYS_FOR_VERDICT:
         print(
             f"⏳ 판정 보류 — 거래일 {MIN_DAYS_FOR_VERDICT}일 이상 모이면 판정"
-            f" (현재 {len(records)}일). 위 수치는 방향 참고용."
+            f" (현재 {evaluated_days}일). 위 수치는 방향 참고용."
         )
     else:
         print(
