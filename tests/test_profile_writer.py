@@ -182,6 +182,56 @@ def test_apply_max_buys_within_cap_recorded() -> None:
     assert any("max_buys_per_symbol" in line and "→ 2" in line for line in out.accepted)
 
 
+def test_apply_zero_disable_rejected_for_active_guards() -> None:
+    """활성 가드(>0)를 0(비활성)으로 끄는 제안은 캡 이내여도 거부.
+
+    0=기능 끄기 규약 — stop_loss_pct=0 이면 손절이 아예 사라지므로
+    상한 캡만으로는 못 막는 방향. 끄는 건 사람이 YAML 직접 수정으로만.
+    """
+    prop = DaytradeProposal(
+        summary_ko="x",
+        rationale_ko="y",
+        confidence=0.5,
+        stop_loss_pct=0.0,  # 활성 0.01 → 끄기: 거부
+        cooldown_min=0,  # 활성 30 → 끄기: 거부
+    )
+    out = apply_proposal(prop, _base_profile())
+    assert out.applied_profile.risk.stop_loss_pct == 0.01  # 변경 X
+    assert out.applied_profile.params.cooldown_min == 30  # 변경 X
+    assert any("stop_loss_pct 0.0 거부" in line for line in out.rejected)
+    assert any("cooldown_min 0 거부" in line for line in out.rejected)
+
+
+def test_apply_zero_ok_when_guard_already_inactive() -> None:
+    """이미 0(비활성)인 필드에 0 제안 — 변경도 거부도 아님 (노이즈 방지)."""
+    prop = DaytradeProposal(
+        summary_ko="x", rationale_ko="y", confidence=0.5, momentum_threshold_pct=0.0
+    )
+    out = apply_proposal(prop, _base_profile())  # base 의 momentum_threshold_pct=0.0
+    assert out.accepted == []
+    assert out.rejected == []
+
+
+def test_apply_max_buys_zero_disable_rejected_when_active() -> None:
+    """max_buys_per_symbol 은 0=무제한 — 활성(2) → 0 제안은 회전율 가드 해제라 거부."""
+    base = _base_profile()
+    base = base.model_copy(update={"risk": base.risk.model_copy(update={"max_buys_per_symbol": 2})})
+    prop = DaytradeProposal(summary_ko="x", confidence=0.5, max_buys_per_symbol=0)
+    out = apply_proposal(prop, base)
+    assert out.applied_profile.risk.max_buys_per_symbol == 2  # 변경 X
+    assert any("max_buys_per_symbol 0 거부" in line for line in out.rejected)
+
+
+def test_apply_daily_loss_kill_disable_rejected() -> None:
+    """daily_loss_kill True → False (안전 가드 해제) 제안은 거부. False → True 는 허용 유지."""
+    base = _base_profile()
+    base = base.model_copy(update={"risk": base.risk.model_copy(update={"daily_loss_kill": True})})
+    prop = DaytradeProposal(summary_ko="x", confidence=0.5, daily_loss_kill=False)
+    out = apply_proposal(prop, base)
+    assert out.applied_profile.risk.daily_loss_kill is True  # 변경 X
+    assert any("daily_loss_kill False 거부" in line for line in out.rejected)
+
+
 def test_apply_skips_field_when_value_unchanged() -> None:
     """제안값이 현재값과 같으면 accepted 에 안 들어감 (노이즈 방지)."""
     prop = DaytradeProposal(

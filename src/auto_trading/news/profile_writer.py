@@ -78,6 +78,20 @@ _PROPOSAL_FIELDS_RISK = (
 )
 
 
+def _disables_active_guard(old_v: object, new_v: object) -> bool:
+    """활성(>0) 가드를 0(비활성) 으로 끄는 전환인지 판정.
+
+    이 프로젝트 규약상 0 은 '기능 끄기' (예: stop_loss_pct=0 → 손절 없음,
+    max_buys_per_symbol=0 → 무제한). 캡은 상한만 검사하므로 0 은 통과해 버린다 —
+    LLM 자동 갱신이 보호 장치를 소리 없이 끄지 못하게 여기서 별도로 거른다.
+    """
+    if isinstance(new_v, bool) or not isinstance(new_v, int | float):
+        return False
+    if new_v != 0:
+        return False
+    return isinstance(old_v, int | float) and not isinstance(old_v, bool) and old_v > 0
+
+
 def apply_proposal(
     proposal: DaytradeProposal,
     current: DaytradeProfile,
@@ -88,6 +102,8 @@ def apply_proposal(
 
     무엇/왜:
     - LLM 이 잘못된 값을 제안해도 자동 적용을 막는 1차 방어선.
+    - 상한(캡)뿐 아니라 하한 방향도 방어: 활성 가드를 0(비활성) 으로 끄거나
+      daily_loss_kill 을 True→False 로 해제하는 제안은 거부 — 끄는 건 사람만.
     - 거부된 변경은 rejected 리스트에 한국어로 기록 → 사용자가 토요일 알림 보고 판단.
     - 새 프로파일은 last_updated_at 갱신 (created_at 은 보존).
 
@@ -122,6 +138,9 @@ def apply_proposal(
             rejected.append(f"{fname} {new_v} 거부 (캡 {cap_val})")
             continue
         old_v = new_params.get(fname)
+        if _disables_active_guard(old_v, new_v):
+            rejected.append(f"{fname} {new_v} 거부 (0=기능 끄기 — 자동 적용 안 함, 직접 변경 필요)")
+            continue
         if old_v != new_v:
             accepted.append(f"{fname}: {old_v} → {new_v}")
             new_params[fname] = new_v
@@ -136,6 +155,11 @@ def apply_proposal(
                 rejected.append(f"daily_loss_kill {new_v} 거부 (자동 변경 차단)")
                 continue
             old_v = new_risk.get(fname)
+            if old_v is True and new_v is False:
+                rejected.append(
+                    "daily_loss_kill False 거부 (안전 가드 끄기 — 자동 적용 안 함, 직접 변경 필요)"
+                )
+                continue
             if old_v != new_v:
                 accepted.append(f"daily_loss_kill: {old_v} → {new_v}")
                 new_risk[fname] = new_v
@@ -146,6 +170,9 @@ def apply_proposal(
             rejected.append(f"{fname} {new_v} 거부 (캡 {cap_val})")
             continue
         old_v = new_risk.get(fname)
+        if _disables_active_guard(old_v, new_v):
+            rejected.append(f"{fname} {new_v} 거부 (0=기능 끄기 — 자동 적용 안 함, 직접 변경 필요)")
+            continue
         if old_v != new_v:
             accepted.append(f"{fname}: {old_v} → {new_v}")
             new_risk[fname] = new_v
