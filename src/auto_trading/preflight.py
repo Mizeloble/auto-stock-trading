@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -130,22 +131,42 @@ def check_heartbeat_recent(heartbeat_path: Path, max_age_sec: int = 86_400) -> G
 
     실거래 전엔 최소 1주일 paper-day 운영을 권장하므로 1일 이내 갱신은 헐거운
     기준. 운영 검증 단계에서 더 엄격하게 잡으려면 ``max_age_sec=3600`` 으로.
+
+    정상 종료 sentinel 도 *나이 검사* 를 통과해야 한다 — check_heartbeat 의
+    "stopped" 는 cron 알림 억제용이라 무기한 유효하지만, 이 게이트의 목적은
+    "최근 운영 확인" 이므로 몇 달 전 stop 이 무기한 통과하면 안 된다.
     """
     name = "heartbeat_recent"
     # cli.py 의 heartbeat-check 와 동일하게 sentinel 을 heartbeat 와 같은
     # 디렉터리로 한정한다. 기본 stopped_path(cwd 상대경로) 를 쓰면 검사 대상과
     # 무관한 전역 stopped.txt 가 결과를 오염시킨다.
-    status = check_heartbeat(
-        heartbeat_path,
-        max_age_sec,
-        stopped_path=heartbeat_path.parent / DEFAULT_STOPPED_PATH.name,
-    )
+    stopped_path = heartbeat_path.parent / DEFAULT_STOPPED_PATH.name
+    status = check_heartbeat(heartbeat_path, max_age_sec, stopped_path=stopped_path)
     if status.ok:
         if status.reason == "stopped":
+            try:
+                stopped_age = time.time() - stopped_path.stat().st_mtime
+            except OSError:
+                # 판정 도중 sentinel 이 사라진 희귀 race — 게이트는 보수적으로 실패.
+                return GateResult(
+                    name=name,
+                    ok=False,
+                    detail="정상 종료 sentinel 확인 불가 — paper-day 재가동 후 재시도",
+                )
+            if stopped_age > max_age_sec:
+                return GateResult(
+                    name=name,
+                    ok=False,
+                    detail=(
+                        f"정상 종료 후 {stopped_age / 3600:.1f}시간 경과"
+                        f" (허용 {max_age_sec / 3600:.1f}시간) — 최근 운영 아님,"
+                        " paper-day 재가동 필요"
+                    ),
+                )
             return GateResult(
                 name=name,
                 ok=True,
-                detail="정상 종료 sentinel — 러너 stop 직후",
+                detail=f"정상 종료 sentinel — {stopped_age / 3600:.1f}시간 전 stop",
             )
         return GateResult(
             name=name,

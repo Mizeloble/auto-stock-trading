@@ -129,6 +129,38 @@ def test_heartbeat_recent_fails_when_stale(tmp_path: Path) -> None:
     assert "갱신 누락" in result.detail
 
 
+def test_heartbeat_recent_passes_for_fresh_stopped_sentinel(tmp_path: Path) -> None:
+    """방금 정상 종료한 경우 — sentinel 이 heartbeat 보다 최근이고 나이도 허용 안."""
+    hb = tmp_path / "hb.txt"
+    hb.write_text("hb", encoding="utf-8")
+    old = hb.stat().st_mtime - 600
+    os.utime(hb, (old, old))
+    stopped = tmp_path / "stopped.txt"
+    stopped.write_text("stop", encoding="utf-8")  # 방금 touch
+    result = check_heartbeat_recent(hb, max_age_sec=3600)
+    assert result.ok is True
+    assert "정상 종료" in result.detail
+
+
+def test_heartbeat_recent_fails_for_old_stopped_sentinel(tmp_path: Path) -> None:
+    """몇 달 전 stop sentinel 이 무기한 통과하던 구멍 — 나이가 허용을 넘으면 실패.
+
+    check_heartbeat 의 'stopped' 는 cron 알림 억제용이라 나이 무제한이 맞지만,
+    실거래 전환 게이트는 '최근 운영 확인' 이 목적이라 sentinel 나이도 검사한다.
+    """
+    hb = tmp_path / "hb.txt"
+    hb.write_text("hb", encoding="utf-8")
+    stopped = tmp_path / "stopped.txt"
+    stopped.write_text("stop", encoding="utf-8")
+    # heartbeat·sentinel 둘 다 7일 전 (sentinel 이 더 최근 → reason="stopped").
+    week_ago = hb.stat().st_mtime - 7 * 86_400
+    os.utime(hb, (week_ago, week_ago))
+    os.utime(stopped, (week_ago + 60, week_ago + 60))
+    result = check_heartbeat_recent(hb, max_age_sec=86_400)
+    assert result.ok is False
+    assert "최근 운영 아님" in result.detail
+
+
 # ---- check_recent_paper_day_mdd ----------------------------------------------
 
 
