@@ -112,7 +112,9 @@ def _aggregate_realized(
       재고만 소진하고 손익에서 제외(부분 가시성 — 전부 버리지 않음). 가격이
       잡힌 매칭이 0이면 (None, None, [...]).
     - 청산가 우선순위: li.sell_price → 없으면 손익 미산정(매수가만으론 불가).
-      매수가 우선순위: FIFO 큐의 매수가 → 큐가 비면 li.buy_price(로그 필드).
+      매수가 우선순위: FIFO 큐의 매수가 → lot 가격 결손·큐 소진 잔량은
+      li.buy_price(브로커 평균원가) 보충. (2026-07-26 이전엔 li.buy_price 가
+      FIFO 를 전량 덮어 장중 부분 매도가 있던 날 비용이 이중 반영됐다.)
     - 2026-06-15: 매칭이 일어난 segment 마다 RoundTrip 을 부수적으로 수집한다
       (데이터 기반 전략 분석용). 합계 손익 계산은 종전과 동일 — 가격 결손 segment 도
       RoundTrip 으로 남되 pnl=None.
@@ -174,40 +176,15 @@ def _aggregate_realized(
         nonlocal total_pnl, total_cost, matched_any
         remaining = float(qty)
         q = queues.get(symbol) or []
-        # EOD 청산이 자체 매수단가(브로커 평균원가)를 명시하면 그것을 권위로 삼고
-        # FIFO 큐는 재고만 소진 — buys 매핑보다 우선(문서화된 precedence 유지).
-        if liq_buy is not None:
-            if sell_price is not None:
-                total_pnl += (sell_price - liq_buy) * qty
-                total_cost += liq_buy * qty
-                matched_any = True
-            # 왕복 레코드 1건 — 매수 시각/이름은 가능하면 드레인되는 lot 에서 빌려온다.
-            lot_time = q[0][2] if q else None
-            lot_name = q[0][3] if q else None
-            _emit(
-                symbol,
-                float(qty),
-                liq_buy,
-                sell_price,
-                lot_time,
-                sell_time,
-                lot_name or fallback_name,
-                exit_reason,
-            )
-            while remaining > 0 and q:  # 재고만 소진(손익 계산 없이)
-                lot = q[0]
-                lot_qty = lot[0] or 0.0
-                take = min(remaining, lot_qty)
-                remaining -= take
-                lot[0] = lot_qty - take
-                if (lot[0] or 0.0) <= 0:
-                    q.pop(0)
-            return
         while remaining > 0 and q:
             lot = q[0]
             lot_qty = lot[0] or 0.0
             take = min(remaining, lot_qty)
-            buy_price = lot[1]
+            # 매수가 우선순위(모듈 docstring): FIFO lot 의 실제 매수가 → 없으면
+            # li.buy_price(브로커 평균원가). lot 가격이 있는데도 평균원가로 전량을
+            # 덮으면, 장중 부분 매도가 먼저 앞 lot 을 소진한 날 같은 단가가 이중
+            # 반영돼 총 비용·손익이 어긋난다.
+            buy_price = lot[1] if lot[1] is not None else liq_buy
             if buy_price is not None and sell_price is not None:
                 total_pnl += (sell_price - buy_price) * take
                 total_cost += buy_price * take
@@ -226,6 +203,23 @@ def _aggregate_realized(
             lot[0] = lot_qty - take
             if (lot[0] or 0.0) <= 0:
                 q.pop(0)
+        # 큐 소진 후 잔량 — 그날 매수 로그에 없는 보유분(전일 이월 등). EOD 청산이
+        # 브로커 평균원가(liq_buy)를 알려준 경우에만 손익 계산 가능.
+        if remaining > 0 and liq_buy is not None:
+            if sell_price is not None:
+                total_pnl += (sell_price - liq_buy) * remaining
+                total_cost += liq_buy * remaining
+                matched_any = True
+            _emit(
+                symbol,
+                remaining,
+                liq_buy,
+                sell_price,
+                None,
+                sell_time,
+                fallback_name,
+                exit_reason,
+            )
 
     for s in sells:
         if s.quantity > 0:
