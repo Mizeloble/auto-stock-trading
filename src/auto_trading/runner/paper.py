@@ -417,6 +417,8 @@ class PaperRunner:
 
         23단계 Phase B 의 kill switch. balance refresh 직후 메인 루프가 호출.
         `liquidate_all` 은 `_liquidation_done` 가드로 idempotent — 두 번 호출돼도 안전.
+        청산은 `_liquidate_with_retries` 경유 — 급락일 + 일시적 네트워크 오류 조합에서
+        포지션을 든 채 종료되지 않게 liquidate_at 경로와 같은 재시도를 적용.
         """
         # fail-loud — kill switch 가 켜졌는데 평가금액 기준을 못 읽어 무방비면, 조용히
         # 넘기지 말고 *1회* 경고/알림(매 갱신마다 스팸 방지). 임계·청산 로직은 불변.
@@ -445,7 +447,7 @@ class PaperRunner:
             "runner.kill_switch_triggered",
             daily_loss_limit=self.risk.limits.daily_loss_limit,
         )
-        await self.liquidate_all(rest, account, reason="daily_loss_kill")
+        await self._liquidate_with_retries(rest, account, reason="daily_loss_kill")
         self.request_stop()
 
     async def _snapshot_account(
@@ -1642,6 +1644,39 @@ class PaperRunner:
                 # kill switch 판정/청산 중 일시 오류 — 다음 주기에 재시도 (보호 지속).
                 log.warning("runner.kill_switch_check_failed", error=str(exc))
 
+    async def _liquidate_with_retries(
+        self, rest: KiwoomRestClient, account: AccountState, *, reason: str
+    ) -> None:
+        """liquidate_all + 실패분 유한 재시도. liquidate_at·kill switch 공용.
+
+        청산이 (네트워크 등으로) 일부 실패하면 STOPPING 으로 굳기 전에 실패분만
+        유한 횟수 재시도한다. liquidate_all 은 성공 종목 positions 를 0 으로
+        만들어 재호출 시 실패분만 다시 송신 = idempotent.
+        """
+        for attempt in range(self.liquidate_max_retries + 1):
+            try:
+                failed = await self.liquidate_all(rest, account, reason=reason)
+            except Exception as exc:
+                log.error("runner.liquidate_loop_error", error=str(exc), exc_info=exc)
+                failed = -1  # 예외 = 미확정, 재시도 가치 있음
+            if failed == 0:
+                return
+            if attempt < self.liquidate_max_retries:
+                log.warning(
+                    "runner.liquidate_retry",
+                    failed=failed,
+                    attempt=attempt + 1,
+                    max_retries=self.liquidate_max_retries,
+                    next_delay=self.liquidate_retry_delay_sec,
+                )
+                await asyncio.sleep(self.liquidate_retry_delay_sec)
+            else:
+                # 재시도 소진 — 미청산분이 남은 채 종료(다음날 갭 리스크). 명시 경고.
+                # 실제로 아직 보유 중인(=청산 못 한) 종목 수를 세어 정확히 알린다.
+                remaining = sum(1 for q in account.positions.values() if q > 0)
+                log.error("runner.liquidate_giving_up", failed=failed, remaining=remaining)
+                await self.notifier.notify("runner.liquidate_giving_up", failed=remaining)
+
     async def _liquidation_loop(self, rest: KiwoomRestClient) -> None:
         """KST 시계 폴링 → liquidate_at 도달 시 청산 + request_stop. 1초 간격.
 
@@ -1659,38 +1694,7 @@ class PaperRunner:
                 if account is None:
                     log.warning("runner.liquidate_skipped", reason="no_account_snapshot")
                 else:
-                    # 청산이 (네트워크 등으로) 일부 실패하면 STOPPING 으로 굳기 전에
-                    # 실패분만 유한 횟수 재시도한다. liquidate_all 은 성공 종목 positions 를
-                    # 0 으로 만들어 재호출 시 실패분만 다시 송신 = idempotent.
-                    for attempt in range(self.liquidate_max_retries + 1):
-                        try:
-                            failed = await self.liquidate_all(
-                                rest, account, reason="liquidate_at_reached"
-                            )
-                        except Exception as exc:
-                            log.error("runner.liquidate_loop_error", error=str(exc), exc_info=exc)
-                            failed = -1  # 예외 = 미확정, 재시도 가치 있음
-                        if failed == 0:
-                            break
-                        if attempt < self.liquidate_max_retries:
-                            log.warning(
-                                "runner.liquidate_retry",
-                                failed=failed,
-                                attempt=attempt + 1,
-                                max_retries=self.liquidate_max_retries,
-                                next_delay=self.liquidate_retry_delay_sec,
-                            )
-                            await asyncio.sleep(self.liquidate_retry_delay_sec)
-                        else:
-                            # 재시도 소진 — 미청산분이 남은 채 종료(다음날 갭 리스크). 명시 경고.
-                            # 실제로 아직 보유 중인(=청산 못 한) 종목 수를 세어 정확히 알린다.
-                            remaining = sum(1 for q in account.positions.values() if q > 0)
-                            log.error(
-                                "runner.liquidate_giving_up", failed=failed, remaining=remaining
-                            )
-                            await self.notifier.notify(
-                                "runner.liquidate_giving_up", failed=remaining
-                            )
+                    await self._liquidate_with_retries(rest, account, reason="liquidate_at_reached")
                 # 체결 확인용 grace — 너무 짧으면 미체결, 너무 길면 다음날까지 lingering.
                 await asyncio.sleep(self.liquidate_grace_sec)
                 self.request_stop()
