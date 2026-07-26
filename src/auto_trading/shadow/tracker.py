@@ -24,7 +24,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import structlog
+
 from .._common import Side
+
+logger = structlog.get_logger(__name__)
 
 __all__ = ["ShadowSignal", "ShadowSnapshot", "ShadowTracker"]
 
@@ -164,9 +168,18 @@ class ShadowTracker:
             "cash_after": self.cash,
             "realized_pnl_after": self.realized_pnl,
         }
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.log_path.open("a", encoding="utf-8") as fp:
-            fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+        # 기록 실패가 라이브 트레이딩을 막지 않게 swallow (shadow/CLAUDE.md 계약).
+        try:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.log_path.open("a", encoding="utf-8") as fp:
+                fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            logger.warning(
+                "shadow_log_write_failed",
+                log_path=str(self.log_path),
+                symbol=signal.symbol,
+                exc_info=True,
+            )
 
     @classmethod
     def replay(cls, log_path: Path) -> Iterator[dict]:
