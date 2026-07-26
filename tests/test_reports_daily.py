@@ -1053,11 +1053,15 @@ def test_build_includes_blocked_symbol_names_in_name_map() -> None:
 
 
 def test_liquidation_buy_price_from_log_field_overrides_buy_prices_map() -> None:
-    """liquidate_simulated 의 buy_price 필드(러너 로그) 가 buys 매핑보다 우선."""
+    """liquidate_simulated 의 buy_price 필드(러너 로그) 가 buys 매핑보다 우선(추출 단).
+
+    단, 손익 *집계* 는 FIFO 큐의 실제 매수가(100)를 우선한다 — li.buy_price(95,
+    브로커 평균원가)로 전량을 덮으면 장중 부분 매도가 있던 날 비용이 이중 반영됨.
+    """
     events = LogEvents(
         orders_simulated=[{"symbol": "A", "side": "buy", "qty": 10, "price": 100.0}],
         liquidations_accepted=[
-            # buy_price 가 명시 → 이 값을 사용
+            # buy_price 가 명시 → 추출 레코드는 이 값을 사용
             {"symbol": "A", "qty": 10, "buy_price": 95.0, "sell_price": 110.0},
         ],
     )
@@ -1066,8 +1070,48 @@ def test_liquidation_buy_price_from_log_field_overrides_buy_prices_map() -> None
     li = report.liquidations[0]
     assert li.buy_price == 95.0
     assert li.sell_price == 110.0
-    # 이 케이스는 sell + buy 둘 다 있어 realized 계산 가능
-    assert report.realized_pnl == (110.0 - 95.0) * 10
+    # 집계는 FIFO lot(100) 기준 — li.buy_price(95) 아님.
+    assert report.realized_pnl == (110.0 - 100.0) * 10
+
+
+def test_liquidation_fifo_priority_avoids_double_count_after_partial_sell() -> None:
+    """장중 부분 매도 후 EOD 청산 — FIFO 우선이라 같은 lot 단가가 이중 반영되지 않는다.
+
+    buy 10@100 + buy 10@120, 장중 10주 매도(FIFO → @100 lot 소진), EOD 잔량
+    10주 청산. EOD 는 남은 lot(@120) 기준이어야 하고, 브로커 평균원가(110)로
+    계산하면 총 비용이 100*10+110*10 으로 실제(100*10+120*10)와 어긋난다.
+    """
+    events = LogEvents(
+        orders_simulated=[
+            {"symbol": "A", "side": "buy", "qty": 10, "price": 100.0},
+            {"symbol": "A", "side": "buy", "qty": 10, "price": 120.0},
+            {"symbol": "A", "side": "sell", "qty": 10, "price": 115.0},
+        ],
+        liquidations_simulated=[
+            # 브로커 평균원가 110 명시 — 그래도 FIFO 잔여 lot(120) 우선.
+            {"symbol": "A", "qty": 10, "buy_price": 110.0, "sell_price": 125.0},
+        ],
+    )
+    report = build_daily_report(date="2026-07-26", events=events, snapshot=None)
+    # 장중 매도 (115-100)*10=150 + EOD (125-120)*10=50 = 200. (구 우선순위면 300.)
+    assert report.realized_pnl == 200.0
+
+
+def test_liquidation_carryover_remainder_uses_broker_avg_price() -> None:
+    """그날 매수 로그에 없는 이월 보유분 — 큐 소진 후 잔량은 li.buy_price 로 계산."""
+    events = LogEvents(
+        orders_simulated=[{"symbol": "A", "side": "buy", "qty": 10, "price": 100.0}],
+        liquidations_simulated=[
+            # 20주 청산: 오늘 산 10주(FIFO @100) + 이월 10주(브로커 평균원가 90).
+            {"symbol": "A", "qty": 20, "buy_price": 90.0, "sell_price": 110.0},
+        ],
+    )
+    report = build_daily_report(date="2026-07-26", events=events, snapshot=None)
+    # (110-100)*10 + (110-90)*10 = 100 + 200 = 300.
+    assert report.realized_pnl == 300.0
+    # 왕복 레코드도 lot 분·잔량분 2건으로 나뉜다.
+    eod_trips = [rt for rt in report.round_trips if rt.exit_reason == "eod"]
+    assert sorted((rt.buy_price, rt.quantity) for rt in eod_trips) == [(90.0, 10), (100.0, 10)]
 
 
 def test_build_extracts_closing_balance_from_snapshot() -> None:
