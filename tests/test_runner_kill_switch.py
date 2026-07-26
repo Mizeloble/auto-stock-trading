@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from auto_trading.account.orders import OrderResult
 from auto_trading.risk.manager import AccountState, RiskLimits, RiskManager
 from auto_trading.runner import PaperRunner, RunnerControlState
 from auto_trading.runner import paper as runner_module
@@ -82,7 +83,8 @@ async def test_kill_switch_triggers_liquidate_notify_and_request_stop() -> None:
     r.notifier = notifier
     account = _account(day_start=1_500_000, total=1_400_000, positions={"005930": 10})
 
-    with patch.object(r, "liquidate_all", AsyncMock()) as mock_liq:
+    # 반환 0 = 전부 성공 — _liquidate_with_retries 가 재시도 없이 1회로 끝나는 계약.
+    with patch.object(r, "liquidate_all", AsyncMock(return_value=0)) as mock_liq:
         await r._check_kill_switch(rest=object(), account=account)  # type: ignore[arg-type]
 
     # 알림 1회 + 라벨 정확
@@ -97,6 +99,58 @@ async def test_kill_switch_triggers_liquidate_notify_and_request_stop() -> None:
 
     # STOPPING 진입 (request_stop 호출 결과)
     assert r._control_state is RunnerControlState.STOPPING
+
+
+async def test_kill_switch_retries_failed_liquidation_then_succeeds() -> None:
+    """급락일 + 일시적 네트워크 오류 — 1차 실패해도 재시도로 청산 완주 후 STOPPING.
+
+    종전엔 kill switch 경로만 재시도가 없어(liquidate_at 경로와 비대칭) 실패분을
+    든 채 즉시 종료됐다 — _liquidate_with_retries 공용화로 같은 재시도를 보장.
+    """
+    r = _runner(daily_loss_kill=True, daily_loss_limit=0.03)
+    r.liquidate_max_retries = 2
+    r.liquidate_retry_delay_sec = 0
+    notifier = AsyncMock()
+    r.notifier = notifier
+    account = _account(day_start=1_500_000, total=1_400_000, positions={"005930": 10})
+
+    attempts = {"count": 0}
+
+    async def _flaky(rest, order, **_):  # type: ignore[no-untyped-def]
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("transient network error")
+        return OrderResult(order_no="ORD-1", raw={})
+
+    with patch.object(runner_module, "place_order", AsyncMock(side_effect=_flaky)):
+        await r._check_kill_switch(rest=object(), account=account)  # type: ignore[arg-type]
+
+    assert attempts["count"] == 2  # 1차 실패 → 재시도 성공
+    assert r._liquidation_done is True
+    assert r._control_state is RunnerControlState.STOPPING
+    events = [c.args[0] for c in notifier.notify.call_args_list]
+    assert "runner.liquidate_giving_up" not in events
+
+
+async def test_kill_switch_gives_up_after_retries_but_still_stops() -> None:
+    """청산이 끝까지 실패해도 재시도 소진 후 경고 알림 + STOPPING (hang 방지 불변식)."""
+    r = _runner(daily_loss_kill=True, daily_loss_limit=0.03)
+    r.liquidate_max_retries = 2
+    r.liquidate_retry_delay_sec = 0
+    notifier = AsyncMock()
+    r.notifier = notifier
+    account = _account(day_start=1_500_000, total=1_400_000, positions={"005930": 10})
+
+    async def _always_fail(rest, order, **_):  # type: ignore[no-untyped-def]
+        raise RuntimeError("broker down")
+
+    with patch.object(runner_module, "place_order", AsyncMock(side_effect=_always_fail)):
+        await r._check_kill_switch(rest=object(), account=account)  # type: ignore[arg-type]
+
+    assert r._control_state is RunnerControlState.STOPPING
+    events = [c.args[0] for c in notifier.notify.call_args_list]
+    assert "runner.liquidate_giving_up" in events
+    assert account.positions["005930"] == 10  # 미청산분이 남았음을 정직하게 유지
 
 
 async def test_kill_switch_idempotent_when_already_liquidated() -> None:
