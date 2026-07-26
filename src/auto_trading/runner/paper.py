@@ -187,6 +187,11 @@ class PaperRunner:
     # 같은 종목 반복 진입으로 비용만 누적되는 패턴 차단. 날짜 바뀌면 자동 리셋.
     _daily_buy_counts: dict[str, int] = field(default_factory=dict, init=False)
     _daily_buy_counts_date: _date | None = field(default=None, init=False)
+    # 일일 한도 기준(day_start_equity·today_notional_used)이 속한 KST 날짜.
+    # BUY 카운트(_roll_daily_buy_counts)와 달리 이 둘은 previous 승계로만 이어져
+    # 자정을 넘어도 리셋되지 않던 비대칭(멀티데이 swing 세션에서 한도 누적 소진 +
+    # kill switch 기준일 고착)을 _snapshot_account 가 이 필드로 감지해 재설정한다.
+    _day_baseline_date: _date | None = field(default=None, init=False)
     # churn 브레이크 — 그날 누적 실현손익(NET=비용 차감, 음수면 손실). SELL 마다 적립, 날짜
     # 바뀌면 _roll_daily_buy_counts 가 함께 리셋. risk.limits.daily_realized_loss_limit 활성 시만 의미.
     _daily_realized_net: float = field(default=0.0, init=False)
@@ -498,9 +503,28 @@ class PaperRunner:
         # 두 필드를 합산하면 매도가 cash↑·equity↓ 로 상쇄돼 안정.
         holdings_value = sum(float(h.market_value) for h in snap.holdings)
         equity = float(snap.deposit) + holdings_value
+        today = datetime.now(KST).date()
         day_start = previous.day_start_equity if previous and previous.day_start_equity else equity
-        # 23단계 Phase B — 잔고 갱신은 누적 매수대금을 리셋하지 않음 (러너 재시작 = 자정 리셋).
+        # 23단계 Phase B — 잔고 갱신은 누적 매수대금을 리셋하지 않음 (같은 날 한정).
         today_notional = previous.today_notional_used if previous is not None else 0.0
+        # KST 자정 경계 — swing `paper` 세션처럼 며칠 연속 가동하면 previous 승계가
+        # 날짜를 넘어 이어진다. BUY 카운트(_roll_daily_buy_counts)처럼 일일 기준도
+        # 오늘로 재설정: baseline=현재 평가액, 매수대금 누적=0.
+        if (
+            previous is not None
+            and self._day_baseline_date is not None
+            and self._day_baseline_date != today
+        ):
+            log.info(
+                "runner.day_baseline_rolled",
+                previous_date=self._day_baseline_date.isoformat(),
+                new_date=today.isoformat(),
+                old_day_start=round(day_start),
+                new_day_start=round(equity),
+                released_notional=round(today_notional),
+            )
+            day_start = equity
+            today_notional = 0.0
         # 2026-06-10 제3자 검토 — 첫 스냅샷이면 같은 날짜의 디스크 저장분을 복원.
         # 장중 비정상 재시동 시 baseline 이 재시작 시점 평가액으로 잡혀 일일 손실
         # 한도가 희석되던 문제 (예: -2.5% 손실 후 재시동 → 추가 -3% 까지 허용).
@@ -510,6 +534,7 @@ class PaperRunner:
                 if restored.day_start_equity > 0:
                     day_start = restored.day_start_equity
                 today_notional = restored.today_notional_used
+        self._day_baseline_date = today
         state = AccountState(
             deposit=float(snap.deposit),
             total_equity=equity,
