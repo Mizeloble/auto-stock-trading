@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 
 from auto_trading._common import KST
 from auto_trading.account.balance import AccountSnapshot
+from auto_trading.risk.manager import AccountState
 from auto_trading.runner import PaperRunner
 from auto_trading.runner import paper as runner_module
 from auto_trading.runner.day_state import DayState, DayStateStore
@@ -114,6 +115,49 @@ async def test_first_snapshot_without_saved_state_uses_current_equity(tmp_path: 
 
     assert state.day_start_equity == 10_000_000.0
     assert state.today_notional_used == 0.0
+
+
+def _previous_state(*, day_start: float, notional: float) -> AccountState:
+    return AccountState(
+        deposit=day_start * 0.5,
+        total_equity=day_start,
+        positions={},
+        avg_prices={},
+        day_start_equity=day_start,
+        today_notional_used=notional,
+    )
+
+
+async def test_midnight_rollover_resets_daily_baseline(tmp_path: Path) -> None:
+    """자정 경계: 어제 기준일의 previous 승계 시 baseline·매수대금 누적을 오늘로 재설정.
+
+    종전엔 BUY 카운트만 자정 리셋되고 day_start_equity·today_notional_used 는
+    previous 를 무조건 승계 — 멀티데이 swing 세션에서 일일 매수한도가 날짜를 넘어
+    누적 소진되고 kill switch 기준일이 첫날에 고착되던 비대칭.
+    """
+    r = PaperRunner(strategy=SmaCrossover(), symbols=["005930"], day_state=_store(tmp_path))
+    r._day_baseline_date = _today() - timedelta(days=1)  # 어제 잡힌 기준
+    previous = _previous_state(day_start=10_000_000.0, notional=8_000_000.0)
+
+    with patch.object(runner_module, "get_balance", AsyncMock(return_value=_snapshot(9_800_000))):
+        state = await r._snapshot_account(rest=object(), previous=previous)  # type: ignore[arg-type]
+
+    assert state.day_start_equity == 9_800_000.0  # 오늘 첫 평가액으로 재설정
+    assert state.today_notional_used == 0.0  # 어제 누적 8M 해제
+    assert r._day_baseline_date == _today()
+
+
+async def test_same_day_snapshot_inherits_baseline(tmp_path: Path) -> None:
+    """같은 날 잔고 갱신은 종전 동작 그대로 — baseline·매수대금 누적 승계."""
+    r = PaperRunner(strategy=SmaCrossover(), symbols=["005930"], day_state=_store(tmp_path))
+    r._day_baseline_date = _today()
+    previous = _previous_state(day_start=10_000_000.0, notional=3_000_000.0)
+
+    with patch.object(runner_module, "get_balance", AsyncMock(return_value=_snapshot(9_900_000))):
+        state = await r._snapshot_account(rest=object(), previous=previous)  # type: ignore[arg-type]
+
+    assert state.day_start_equity == 10_000_000.0
+    assert state.today_notional_used == 3_000_000.0
 
 
 async def test_snapshot_persists_state_to_disk(tmp_path: Path) -> None:
