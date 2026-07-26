@@ -153,6 +153,22 @@ def test_replay_missing_path_yields_nothing(tmp_path: Path) -> None:
     assert records == []
 
 
+def test_log_write_failure_does_not_break_apply(tmp_path: Path) -> None:
+    # log_path 의 부모가 "파일"이라 mkdir 이 OSError → swallow 계약 검증.
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("x", encoding="utf-8")
+    t = ShadowTracker(
+        initial_cash=1_000_000,
+        slippage_bps=0.0,
+        commission_rate=0.0,
+        log_path=blocker / "shadow.jsonl",
+    )
+    t.apply(_signal(side=Side.BUY, quantity=5, price=10_000))
+    # 디스크 기록은 실패했지만 메모리 누적은 정상.
+    assert t.num_signals == 1
+    assert t.holdings["AAA"] == 5
+
+
 # ---- 다중 심볼 -----------------------------------------------------------
 
 
