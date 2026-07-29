@@ -8,6 +8,12 @@
 #   cooldown_min 60 — current(90) 보다 짧음. 2026-07-04 검토에서 발견, 의도 재확인 필요.
 #   max_position_weight 0.10 / max_portfolio_exposure 0.60
 #     → 종목당 총평가금액의 10%, 전체 합산 최대 60%(=6종목×10%). 손절·트레일링·부분익절은 불변.
+#
+# 📌 2026-07-29 · 모의계좌 재발급으로 예수금 4,800만 → 1억 (2배).
+#   종목당 예산 = 평가액 × max_position_weight 라 매수 요청액만 2배가 되는데 캡은
+#   그대로여서, 계좌 대비 캡 비율이 42% → 21% 로 반토막 난다(6종목 요청 6,000만 vs
+#   캡 2,000만). daily_notional_limit 20M → 40M 으로 원래 비율 복원.
+#   절대금액이 2배가 되는 것은 의도된 결과. current·range 도 동일 사유로 40M.
 name: daytrade trend
 strategy: index_momentum_daytrade
 top_n: 6
@@ -24,7 +30,7 @@ risk:
   partial_take_pct: 0.018
   partial_take_qty_ratio: 0.5
   max_order_value: 0.0
-  daily_notional_limit: 20000000.0
+  daily_notional_limit: 40000000.0
   max_position_weight: 0.10
   max_portfolio_exposure: 0.60
   daily_loss_kill: true
