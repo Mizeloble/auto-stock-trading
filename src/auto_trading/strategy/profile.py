@@ -13,8 +13,6 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field
 
-# 새 전략을 추가하면 이 튜플과 Literal 동기화. AdvisorChange 도 같은 소스를 본다.
-STRATEGY_NAMES: tuple[str, ...] = ("sma_crossover", "rsi_reversion")
 StrategyName = Literal["sma_crossover", "rsi_reversion"]
 
 
@@ -56,4 +54,4 @@ class StrategyProfile(BaseModel):
         path.write_text(header + text, encoding="utf-8")
 
 
-__all__ = ["STRATEGY_NAMES", "StrategyName", "StrategyProfile"]
+__all__ = ["StrategyName", "StrategyProfile"]

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import csv
 import json
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -214,26 +213,3 @@ def save_result(result: BacktestResult, out_dir: Path) -> Path:
     report_path.write_text(json.dumps(result.report.as_dict(), ensure_ascii=False, indent=2))
     result.output_dir = out_dir
     return out_dir
-
-
-def frames_from_bars(bars: Iterable) -> pd.DataFrame:
-    """market.chart.Bar 리스트(또는 OHLCV dict) → 백테스트용 DataFrame."""
-    records = []
-    for b in bars:
-        if hasattr(b, "ts"):
-            records.append(
-                {
-                    "ts": b.ts,
-                    "open": float(b.open),
-                    "high": float(b.high),
-                    "low": float(b.low),
-                    "close": float(b.close),
-                    "volume": int(b.volume),
-                }
-            )
-        else:
-            records.append(b)
-    df = pd.DataFrame(records)
-    if df.empty:
-        return df
-    return df.sort_values("ts").set_index("ts")

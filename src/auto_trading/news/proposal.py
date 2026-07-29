@@ -12,16 +12,14 @@ LLM 호출은 주 1회 한정 ([feedback_llm_cost](memory)). 토요일 cron 에�
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable, Iterable
-from pathlib import Path
+from collections.abc import Iterable
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
 from ..llm import extract_tool_use_input
 from ..llm.cost import check_budget_or_raise, get_default_tracker, record_response
-from ..reports.daily import DailyReport, merge_symbol_names, with_symbol_name
+from ..reports.daily import DailyReport, merge_symbol_names
 from ..strategy.scanner import RegimeReport
 from .collector import NewsItem
 
@@ -346,111 +344,9 @@ def propose_daytrade_profile(
     return DaytradeProposal.model_validate(tool_input)
 
 
-# ---- 포맷터 -------------------------------------------------------------
-
-
-def format_proposal_message(
-    proposal: DaytradeProposal,
-    *,
-    symbol_names: dict[str, str] | None = None,
-) -> str:
-    """텔레그램 / CLI 출력용 한국어 메시지 — Phase C 가 YAML 갱신 후 같이 푸시.
-
-    `symbol_names` — 회피 종목 코드를 "코드 종목명" 으로 표시하기 위한 코드→이름 맵.
-    호출자가 `merge_symbol_names(reports)` 로 만들어 전달. 이름 없으면 코드만(폴백).
-    """
-    names = symbol_names or {}
-    lines = ["🗞 다음 주 day-trade 프로파일 제안", "", proposal.summary_ko]
-    changes: list[tuple[str, Any]] = []
-    for k in (
-        "top_n",
-        "cooldown_min",
-        "momentum_lookback_min",
-        "momentum_threshold_pct",
-        "stop_loss_pct",
-        "trailing_stop_pct",
-        "partial_take_pct",
-        "partial_take_qty_ratio",
-        "daily_loss_kill",
-        "max_buys_per_symbol",
-    ):
-        v = getattr(proposal, k)
-        if v is not None:
-            changes.append((k, v))
-    if changes:
-        lines.append("")
-        lines.append("📐 변경 파라미터")
-        for k, v in changes:
-            lines.append(f"• {k} → {v}")
-    if proposal.themes_to_watch:
-        lines.append("")
-        lines.append("📡 주목 테마: " + ", ".join(proposal.themes_to_watch))
-    if proposal.symbols_to_avoid:
-        lines.append(
-            "⛔ 회피 종목: "
-            + ", ".join(with_symbol_name(s, names.get(s)) for s in proposal.symbols_to_avoid)
-        )
-    lines.append("")
-    lines.append("📝 근거")
-    if proposal.signals_ko:
-        lines.append("📍 시그널")
-        for s in proposal.signals_ko:
-            lines.append(f"  • {s}")
-    if proposal.judgment_ko:
-        lines.append("🎯 판단")
-        lines.append(f"  {proposal.judgment_ko}")
-    if proposal.referenced_headlines_ko:
-        lines.append("🗞 영향 헤드라인")
-        for h in proposal.referenced_headlines_ko:
-            lines.append(f"  • {h}")
-    if proposal.weekly_memo_ko:
-        lines.append("📅 다음 주 메모")
-        lines.append(f"  {proposal.weekly_memo_ko}")
-    lines.append("")
-    lines.append(f"신뢰도: {proposal.confidence:.2f}")
-    return "\n".join(lines)
-
-
-def build_proposal_callback(
-    client: _AnthropicLike,
-    *,
-    days_reports: int = 7,
-    days_news: int = 7,
-    reports_root: Path = Path("data/reports"),
-    news_root: Path = Path("data/news"),
-    current_profile: dict[str, Any] | None = None,
-    model: str = "claude-opus-4-7",
-) -> Callable[[], Awaitable[DaytradeProposal | None]]:
-    """주간 cron 또는 수동 호출용 비동기 콜백.
-
-    - reports/news 둘 다 비면 None 반환 — 호출자가 "데이터 부족"으로 처리.
-    - 동기 SDK 호출은 `asyncio.to_thread` 로 별도 스레드.
-    """
-    from ..notify.insight import collect_recent_reports
-    from .collector import collect_recent_news
-
-    async def _runner() -> DaytradeProposal | None:
-        reports = collect_recent_reports(root=reports_root, days=days_reports)
-        news = collect_recent_news(days=days_news, cache_root=news_root)
-        if not reports and not news:
-            return None
-        return await asyncio.to_thread(
-            propose_daytrade_profile,
-            reports,
-            news,
-            client=client,
-            current_profile=current_profile,
-            model=model,
-        )
-
-    return _runner
-
-
 __all__ = [
     "PROPOSE_TOOL",
     "SYSTEM_PROMPT_KO",
     "DaytradeProposal",
-    "build_proposal_callback",
-    "format_proposal_message",
     "propose_daytrade_profile",
 ]

@@ -9,7 +9,6 @@ import pytest
 
 from auto_trading.reports.snapshot_reader import (
     parse_topcap_for_date,
-    parse_topcap_snapshots,
 )
 
 
@@ -119,7 +118,7 @@ def test_missing_file_and_corrupt_lines_are_safe(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    snaps = parse_topcap_snapshots(p)
+    snaps = parse_topcap_for_date("2026-06-15", root=tmp_path)
     assert "A" not in snaps.series
     assert snaps.change_pct_at("B", "09:00") == 5.0
 
