@@ -228,6 +228,30 @@ async def test_delayed_discover_failure_requests_stop(isolated_cwd) -> None:
     assert runner._universe_ready.is_set()
 
 
+async def test_delayed_discover_failure_pushes_alert(isolated_cwd) -> None:
+    """발굴 실패는 로그로 끝내지 않고 즉시 푸시한다.
+
+    2026-07-27~29: 토큰 만료로 3거래일간 매매 0 이었는데 알림이 한 통도 없었다.
+    """
+    fake_notifier = AsyncMock()
+    runner = PaperRunner(liquidate_at=time(15, 15, tzinfo=KST), notifier=fake_notifier)
+
+    with (
+        patch.object(
+            cli_helpers, "discover_and_arm", AsyncMock(side_effect=RuntimeError("인증에 실패"))
+        ),
+        patch.object(cli_helpers, "KiwoomRestClient") as mock_rest_cls,
+    ):
+        mock_rest_cls.return_value.__aenter__ = AsyncMock(return_value=object())
+        mock_rest_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await cli_helpers.delayed_discover(runner, top_n=3, delay=0)
+
+    calls = {c.args[0]: c.kwargs for c in fake_notifier.notify.call_args_list}
+    assert "daytrade.discover_failed" in calls
+    assert "인증에 실패" in str(calls["daytrade.discover_failed"].get("error"))
+
+
 async def test_delayed_discover_empty_chosen_requests_stop(isolated_cwd) -> None:
     """5/3 21:42 회귀 — 게이트 차단으로 chosen=[] 일 때도 hang 방지 위해 request_stop.
 
