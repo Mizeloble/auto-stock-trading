@@ -121,6 +121,55 @@ async def test_token_business_error_raises_with_return_msg(settings: Settings) -
     assert "8030" in ei.value.message
 
 
+async def test_repeated_failures_do_not_hammer_token_endpoint(settings: Settings) -> None:
+    """발급 실패 후 백오프 — 연속 호출이 네트워크를 다시 때리지 않는다 (2026-07-29 사고).
+
+    rest.request() 가 매 요청마다 get_token() 을 부르므로 백오프가 없으면
+    스냅샷 1라운드(200종목)가 곧바로 200회 발급 시도가 된다. 실제로 하루 2,009회를
+    때려 키움 유량 제한(429)에 걸렸고, 그 429 가 진짜 원인(8001)을 덮었다.
+    """
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        route = mock.post(PATH_TOKEN).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "return_code": 3,
+                    "return_msg": "인증에 실패했습니다[8001:App Key와 Secret Key 검증에 실패했습니다]",
+                },
+            )
+        )
+        provider = TokenProvider(settings=settings)
+        try:
+            for _ in range(50):
+                with pytest.raises(KiwoomError) as ei:
+                    await provider.get_token()
+                # 억제된 호출도 호출자에겐 동일한 오류로 보여야 한다(침묵 금지).
+                assert "8001" in ei.value.message
+        finally:
+            await provider.aclose()
+    # 50회 호출했지만 실제 발급 요청은 1회뿐.
+    assert route.call_count == 1
+
+
+async def test_backoff_clears_after_successful_issue(settings: Settings) -> None:
+    """백오프 창이 지나 발급에 성공하면 실패 상태가 초기화된다."""
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=httpx.Response(500, text="boom"))
+        provider = TokenProvider(settings=settings)
+        try:
+            with pytest.raises(KiwoomError):
+                await provider.get_token()
+            assert provider._retry_after is not None
+            # 백오프 만료 시뮬 — 창이 지난 것으로 되돌린다.
+            provider._retry_after = datetime.now() - timedelta(seconds=1)
+            mock.post(PATH_TOKEN).mock(return_value=httpx.Response(200, json={"token": "ok-token"}))
+            assert await provider.get_token() == "ok-token"
+            assert provider._retry_after is None
+            assert provider._issue_failures == 0
+        finally:
+            await provider.aclose()
+
+
 async def test_default_ttl_used_when_expires_missing(settings: Settings) -> None:
     async with respx.mock(base_url=settings.rest_base_url) as mock:
         mock.post(PATH_TOKEN).mock(return_value=httpx.Response(200, json={"token": "t"}))

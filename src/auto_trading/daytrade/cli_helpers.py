@@ -735,6 +735,9 @@ async def delayed_discover(
             runner.request_stop(reason="no_candidates")
     except Exception as exc:
         log.error("daytrade.discover_failed", error=str(exc), exc_info=exc)
+        # 발굴 실패 = 그날 매매가 통째로 사라지는 사건이라 즉시 푸시한다.
+        # 로그에만 남기면 사용자가 모른 채 며칠이 지난다 (2026-07-27~29 실측 3거래일).
+        await runner.notifier.notify("daytrade.discover_failed", error=str(exc))
         # 발굴 실패 — universe 안 채워지므로 명시적 stop 으로 hang 회피.
         runner.request_stop(reason="discover_failed")
 
