@@ -22,6 +22,7 @@ from auto_trading.kiwoom.endpoints import (
     TR,
 )
 from auto_trading.kiwoom.rest import KiwoomRestClient
+from auto_trading.kiwoom.schemas import KiwoomError
 from auto_trading.market.rank import top_value, top_volume
 
 
@@ -182,6 +183,24 @@ async def test_top_volume_one_market_failure_does_not_block_other(settings: Sett
     assert len(chosen) == 1
     assert chosen[0].symbol == "247540"
     assert chosen[0].market == "KOSDAQ"
+
+
+async def test_top_volume_all_markets_failed_raises(settings: Settings) -> None:
+    """전 시장 실패는 '후보 없음'이 아니라 예외 — 조용한 무거래일 오인 방지.
+
+    2026-07-27~29 사고: 토큰 만료로 KOSPI/KOSDAQ 모두 실패했는데 빈 리스트가
+    돌아와 호출자가 '오늘은 살 종목이 없는 날' 로 처리, 3거래일간 무거래·무알림.
+    """
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_RANK).mock(
+            return_value=httpx.Response(
+                200, json={"return_code": 9, "return_msg": "지원하지 않는 API"}
+            )
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            with pytest.raises(KiwoomError):
+                await top_volume(client, top_n=3)
 
 
 async def test_top_volume_strips_a_prefix_from_symbol(settings: Settings) -> None:

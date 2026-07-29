@@ -14,7 +14,11 @@ import httpx
 import pytest
 import respx
 
-from auto_trading.notify.telegram import TELEGRAM_API_BASE, TelegramNotifier
+from auto_trading.notify.telegram import (
+    TELEGRAM_API_BASE,
+    TelegramNotifier,
+    _format_message,
+)
 
 
 @pytest.fixture
@@ -526,3 +530,28 @@ async def test_runner_started_renders_symbols_with_names(notifier: TelegramNotif
         )
     text = json.loads(route.calls[0].request.read())["text"]
     assert "종목: 005930 삼성전자, 403550 쏘카" in text
+
+
+def test_discover_failed_auth_error_gives_key_hint() -> None:
+    """인증 실패(8001)면 '키를 확인하라' 는 구체적 조치를 안내한다."""
+    msg = _format_message(
+        "daytrade.discover_failed",
+        {"error": "[3] 인증에 실패했습니다[8001:App Key와 Secret Key 검증에 실패했습니다]"},
+    )
+    assert "발굴 실패" in msg
+    assert "앱키" in msg
+
+
+def test_discover_failed_rate_limit_gives_retry_hint() -> None:
+    """유량 초과(1700)는 사용자가 할 일이 없으므로 '자동 재시도' 안내."""
+    msg = _format_message(
+        "daytrade.discover_failed",
+        {"error": '[429] token request failed: {"return_msg":"...1700:허용된 API 요청..."}'},
+    )
+    assert "한도" in msg
+
+
+def test_discover_failed_unknown_error_points_to_log() -> None:
+    """원인 불명이면 로그 위치를 알려준다 — 빈손으로 두지 않는다."""
+    msg = _format_message("daytrade.discover_failed", {"error": "boom"})
+    assert "logs/paper-day" in msg
