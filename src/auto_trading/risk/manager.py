@@ -87,12 +87,6 @@ class RiskLimits:
     # 잘 번 날"은 안 막고 "그날 손실이 쌓인 날"만 막는다(2026-05-31 ledger 검증 — NET 기준만
     # 승자 재진입 보존). SELL·청산 불변. 누적·리셋·게이트는 러너 책임. 임계는 forward 관측 후 확정.
     daily_realized_loss_limit: float = 0.0
-    # 29단계 PR39 (#6) — ATR 기반 weight 정규화.
-    # False: signal.weight 그대로. True: ATR 데이터 있을 때 weight x (target / atr_pct).
-    # 변동성 큰 종목엔 작은 weight, 작은 종목엔 큰 weight (0~1 clamp).
-    # atr_target_risk_pct = 0.01 = "1 ATR 변동 ≈ 자본 1% 손실" 기준.
-    atr_normalized_weight: bool = False
-    atr_target_risk_pct: float = 0.01
 
 
 @dataclass
@@ -106,7 +100,6 @@ class RiskManager:
         price: float,
         account: AccountState,
         holding_correlations: Mapping[tuple[str, str], float] | None = None,
-        atr_per_symbol: Mapping[str, float] | None = None,
     ) -> RiskDecision:
         """Signal → 검증된 Order 또는 거절.
 
@@ -114,10 +107,6 @@ class RiskManager:
             러너가 미리 계산한 보유 종목 간 페어 상관계수. 키는 정렬된 튜플.
             ``max_position_correlation > 0`` 이고 이 인자가 제공되면 BUY 시 상관 가드 적용.
             None 이거나 한도 비활성이면 가드 스킵 — 기존 동작과 동일.
-
-        atr_per_symbol (29단계 PR39 #6):
-            symbol → ATR 값 (절대 가격 단위). ``atr_normalized_weight=True`` + 데이터 있으면
-            BUY weight 를 ATR 역수로 정규화 (변동성 큰 종목 비중 ↓). 비활성·없음 → 기존 동작.
         """
         if price <= 0:
             return RiskDecision(Decision.REJECT, reason="invalid price")
@@ -125,20 +114,6 @@ class RiskManager:
         # 돈·수량 산식은 float 반올림 오차를 피하기 위해 Decimal 로 환산한다.
         price_d = Decimal(str(price))
         weight = max(Decimal(0), min(Decimal(1), Decimal(str(signal.weight))))
-
-        # 29단계 PR39 (#6) — ATR 기반 weight 정규화 (BUY 시점에만 의미. SELL 은 보유 비례).
-        if (
-            signal.side is Side.BUY
-            and self.limits.atr_normalized_weight
-            and atr_per_symbol is not None
-        ):
-            atr_val = atr_per_symbol.get(signal.symbol)
-            if atr_val is not None and atr_val > 0 and price > 0:
-                atr_pct = atr_val / price
-                target_pct = self.limits.atr_target_risk_pct
-                if atr_pct > 0 and target_pct > 0:
-                    ratio = Decimal(str(target_pct)) / Decimal(str(atr_pct))
-                    weight = max(Decimal(0), min(Decimal(1), weight * ratio))
 
         if signal.side is Side.SELL:
             held = account.positions.get(signal.symbol, 0)
