@@ -166,13 +166,25 @@ async def _merged_top(
     """
     avoid = {s for s in exclude_symbols if s}
     merged: list[RankedSymbol] = []
+    last_error: Exception | None = None
+    failed = 0
     for market in markets:
         try:
             rows = await _fetch_market(client, market, sort_tp=sort_tp)
-        except Exception:
+        except Exception as exc:
             log.warning("market.rank.fetch_failed", market=market, exc_info=True)
+            last_error = exc
+            failed += 1
             continue
         merged.extend(rows)
+
+    # 전 시장 조회가 실패했으면 "오늘은 후보가 없다" 가 아니라 시세 조회 자체가 불통이다.
+    # 빈 리스트로 돌려주면 호출자가 정상적인 무거래일로 오인해 조용히 종료한다 —
+    # 2026-07-27~29 토큰 만료 때 3거래일간 무거래·무알림으로 지나간 원인. 원인 예외를
+    # 그대로 올려 상위(delayed_discover)가 실패로 다루고 사용자에게 푸시하게 한다.
+    # 일부 시장만 실패한 경우는 종전대로 남은 시장으로 진행 (부분 가용성 유지).
+    if last_error is not None and failed == len(markets):
+        raise last_error
 
     excluded: list[tuple[str, str]] = []
     skipped_known = 0

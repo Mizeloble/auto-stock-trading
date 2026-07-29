@@ -32,6 +32,12 @@ log = structlog.get_logger(__name__)
 REFRESH_MARGIN = timedelta(minutes=10)
 # expires_at 을 파싱하지 못했을 때 사용하는 안전 기본값 (문서 권장: ~24h)
 DEFAULT_TTL = timedelta(hours=23)
+# 발급 실패 후 재시도 억제 (2026-07-29 사고). rest.request() 가 매 요청마다
+# get_token() 을 부르므로, 실패 시 그대로 재발급을 때리면 스냅샷 1라운드(200종목)가
+# 곧바로 200회 발급 시도가 된다 — 실제로 하루 2,009회를 때려 키움 유량 제한(au10001)에
+# 걸렸고, 그 429 가 진짜 원인(8001 AppKey 검증 실패)을 3일간 덮었다.
+TOKEN_RETRY_BACKOFF_BASE = timedelta(seconds=5)
+TOKEN_RETRY_BACKOFF_MAX = timedelta(minutes=5)
 
 
 class TokenProvider:
@@ -57,6 +63,10 @@ class TokenProvider:
         self._token: str | None = None
         self._expires_at: datetime | None = None
         self._lock = asyncio.Lock()
+        # 발급 실패 백오프 — 연속 실패 수 / 다음 시도 가능 시각 / 마지막 오류.
+        self._issue_failures = 0
+        self._retry_after: datetime | None = None
+        self._last_issue_error: Exception | None = None
         # 시동 시 디스크에서 로드 시도. 실패는 swallow — 정상 발급으로 fallback.
         self._load_cache()
 
@@ -68,7 +78,37 @@ class TokenProvider:
                 and datetime.now() < self._expires_at - REFRESH_MARGIN
             ):
                 return self._token
-            return await self._issue()
+            # 백오프 중이면 네트워크를 때리지 않고 직전 오류를 그대로 올린다 —
+            # 호출자 입장에선 동작 동일(발급 실패 예외), 키움 유량만 아낀다.
+            if (
+                self._retry_after is not None
+                and self._last_issue_error is not None
+                and datetime.now() < self._retry_after
+            ):
+                raise self._last_issue_error
+            try:
+                token = await self._issue()
+            except Exception as exc:
+                self._note_issue_failure(exc)
+                raise
+            self._issue_failures = 0
+            self._retry_after = None
+            self._last_issue_error = None
+            return token
+
+    def _note_issue_failure(self, exc: Exception) -> None:
+        """발급 실패 기록 + 지수 백오프(5초 → 최대 5분) 설정."""
+        self._issue_failures += 1
+        shift = min(self._issue_failures - 1, 10)  # 2**shift 폭주 방지
+        delay = min(TOKEN_RETRY_BACKOFF_BASE * (2**shift), TOKEN_RETRY_BACKOFF_MAX)
+        self._retry_after = datetime.now() + delay
+        self._last_issue_error = exc
+        log.warning(
+            "kiwoom.token_issue_failed",
+            consecutive=self._issue_failures,
+            retry_after_sec=int(delay.total_seconds()),
+            error=str(exc)[:200],
+        )
 
     async def invalidate(self) -> None:
         async with self._lock:

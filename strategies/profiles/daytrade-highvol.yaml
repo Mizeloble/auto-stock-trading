@@ -18,12 +18,19 @@
 #     top_n 3 유지 (concentration_study: K↑ → 변동성 std 3.9%→1.8%, 한 종목 쏠림 완화)
 #     stop_loss_pct 0.018→0.010 (변동성장 손절 좁게 — crash 값 계승)
 #     trailing_stop_pct 0.009→0.008
-#     daily_notional_limit 20M→10M (일 매수대금 절반)
+#     daily_notional_limit 20M (2026-07-29 계좌 리셋 반영 — 아래 📌 참고)
 #     max_position_weight 0.10→0.07 / max_portfolio_exposure 0.60→0.40 (포지션 축소)
 #     daily_realized_loss_limit 150k→100k (churn 브레이크 더 빨리)
 #     momentum_threshold_pct 0.3→0.35 (변동성장에서 진입 문턱 살짝 높여 헛매수 억제)
 #     cooldown_min 45 — current(90) 보다 짧음. 조정 목록에 없던 암묵 변경 —
 #       2026-07-04 적대적 검토에서 발견, 의도 재확인 필요.
+#
+# 📌 2026-07-29 · 모의계좌 재발급으로 예수금 4,800만 → 1억 (2배).
+#   종목당 예산 = 평가액 × max_position_weight 라 매수 규모가 그대로 2배가 된다.
+#   기존 캡 10M 은 "3종목 풀배치 1회분"(4,800만 × 7% × 3 ≈ 1,008만)에 맞춰 검증된
+#   값이었는데, 계좌가 2배가 되면 요청액이 2,100만이라 1~2종목에서 캡이 걸려
+#   top_n=3 분산(변동성 std 3.9%→1.8%)이 깨진다. 캡도 2배(20M)로 올려 검증된
+#   "한도 ≈ 3종목 1회분" 비율을 복원. 투입 절대금액이 2배가 되는 것은 의도된 결과.
 #
 # ⚠️ 0 = "무제한(비활성)". max_order_value=0 은 종목당 비중(max_position_weight)·
 #   일매수한도(daily_notional_limit)가 대신 사이징을 통제하므로 의도된 값이다.
@@ -44,7 +51,7 @@ risk:
   partial_take_pct: 0.016
   partial_take_qty_ratio: 0.5
   max_order_value: 0.0
-  daily_notional_limit: 10000000.0
+  daily_notional_limit: 20000000.0
   max_position_weight: 0.07
   max_portfolio_exposure: 0.4
   daily_loss_kill: true

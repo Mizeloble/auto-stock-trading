@@ -203,6 +203,21 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
 
     # ---- 21단계 day-trade 이벤트 ----------------------------------------
 
+    if event == "daytrade.discover_failed":
+        # 발굴 자체가 실패 = 그날 매매 전부 소멸. 원인별로 "무엇을 하면 되는지" 한 줄.
+        # (에러 본문은 키움 응답 메시지라 시크릿이 섞이지 않는다.)
+        err = str(fields.get("error") or "")
+        if "8001" in err or "인증에 실패" in err:
+            hint = (
+                "키움이 앱키·시크릿을 거부했어요. 모의투자 신청 상태와"
+                " .env 의 키 3종(앱키·시크릿·계좌번호)을 확인해 주세요."
+            )
+        elif "1700" in err or "유량" in err:
+            hint = "키움 API 요청 한도를 넘었어요. 잠시 뒤 자동으로 다시 시도합니다."
+        else:
+            hint = "logs/paper-day-*.log 를 확인해 주세요."
+        return f"🛑 오늘 종목 발굴 실패 — 매매를 시작하지 못했습니다.\n💡 {hint}"
+
     if event == "daytrade.discovery_done":
         chosen = fields.get("chosen") or []
         blocked = fields.get("blocked") or []
