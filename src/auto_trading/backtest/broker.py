@@ -30,14 +30,6 @@ class Trade:
     fee: float
     tax: float
 
-    @property
-    def cash_flow(self) -> float:
-        """현금 흐름 — 매수는 음수, 매도는 양수."""
-        gross = self.price * self.quantity
-        if self.side is Side.BUY:
-            return -(gross + self.fee)
-        return gross - self.fee - self.tax
-
 
 @dataclass
 class Position:

@@ -30,15 +30,11 @@ from ..config import Settings, get_settings
 log = structlog.get_logger(__name__)
 
 __all__ = [
-    "DEFAULT_P99_ALERT_MS",
     "DailyLatencyStats",
     "LatencyEntry",
     "LatencyTracker",
     "get_default_latency_tracker",
 ]
-
-# 실거래 운영 임계 — 키움 API 1회/3.6초 제한 고려. p99 3초 넘으면 단기 전략 신호 의미 X.
-DEFAULT_P99_ALERT_MS = 3000
 
 
 @dataclass(frozen=True)

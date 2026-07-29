@@ -135,21 +135,9 @@ def bollinger(
     return mid, mid + k * sd, mid - k * sd
 
 
-def cross_above(prev_a: float, prev_b: float, cur_a: float, cur_b: float) -> bool:
-    """A 가 B 를 상향 돌파했는가."""
-    return prev_a <= prev_b and cur_a > cur_b
-
-
-def cross_below(prev_a: float, prev_b: float, cur_a: float, cur_b: float) -> bool:
-    """A 가 B 를 하향 돌파했는가."""
-    return prev_a >= prev_b and cur_a < cur_b
-
-
 __all__ = [
     "atr",
     "bollinger",
-    "cross_above",
-    "cross_below",
     "ema",
     "rsi_wilder",
     "rsi_wilder_seed",

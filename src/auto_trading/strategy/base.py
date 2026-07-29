@@ -7,14 +7,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from .._common import Bar, Side
 
-__all__ = ["Bar", "Side", "Signal", "Strategy", "StrategyContext"]
+__all__ = ["Bar", "Side", "Signal", "Strategy"]
 
 
 @dataclass(frozen=True)
@@ -56,12 +56,3 @@ class Strategy(ABC):
     def reset(self) -> None:
         """백테스트/세션 재시작 시 상태 초기화."""
         self.state.clear()
-
-
-@dataclass
-class StrategyContext:
-    """전략 실행 중 참고용 상태 (러너/백테스터가 채움)."""
-
-    current_position: int = 0  # 해당 심볼의 현재 보유 수량
-    cash: float = 0.0
-    recent_bars: list[Bar] = field(default_factory=list)

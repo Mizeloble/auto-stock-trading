@@ -15,8 +15,6 @@ from .profile_writer import (
 )
 from .proposal import (
     DaytradeProposal,
-    build_proposal_callback,
-    format_proposal_message,
     propose_daytrade_profile,
 )
 
@@ -27,10 +25,8 @@ __all__ = [
     "SafetyCaps",
     "apply_and_persist",
     "apply_proposal",
-    "build_proposal_callback",
     "collect_recent_news",
     "format_apply_message",
-    "format_proposal_message",
     "parse_feed",
     "propose_daytrade_profile",
 ]

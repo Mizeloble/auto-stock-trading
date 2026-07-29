@@ -12,8 +12,6 @@ from pydantic import ValidationError
 from auto_trading._common import KST
 from auto_trading.news.collector import NewsItem
 from auto_trading.news.proposal import (
-    DaytradeProposal,
-    format_proposal_message,
     propose_daytrade_profile,
 )
 from auto_trading.reports.daily import DailyReport
@@ -152,32 +150,6 @@ def test_propose_uses_anthropic_caching_and_forced_tool() -> None:
         "type": "tool",
         "name": "propose_daytrade_profile",
     }
-
-
-def test_format_proposal_message_includes_changes_and_themes() -> None:
-    p = DaytradeProposal(
-        summary_ko="방어",
-        rationale_ko="r",
-        confidence=0.7,
-        top_n=2,
-        stop_loss_pct=0.01,
-        themes_to_watch=["반도체"],
-        symbols_to_avoid=["xxx"],
-    )
-    msg = format_proposal_message(p)
-    assert "🗞 다음 주" in msg
-    assert "top_n → 2" in msg
-    assert "stop_loss_pct → 0.01" in msg
-    assert "📡 주목 테마: 반도체" in msg
-    assert "⛔ 회피 종목: xxx" in msg
-
-
-def test_format_proposal_no_changes_omits_section() -> None:
-    """모든 옵션 None 이면 변경 파라미터 섹션 없음."""
-    p = DaytradeProposal(summary_ko="유지", rationale_ko="ok", confidence=0.5)
-    msg = format_proposal_message(p)
-    assert "변경 파라미터" not in msg
-    assert "📡 주목 테마" not in msg
 
 
 def test_propose_max_news_items_caps_payload() -> None:

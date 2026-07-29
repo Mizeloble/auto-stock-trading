@@ -12,6 +12,12 @@ from rich.table import Table
 from auto_trading import cli
 
 from .._common import KST
+from ..heartbeat import (
+    DEFAULT_COOLDOWN_PATH,
+    DEFAULT_COOLDOWN_SEC,
+    DEFAULT_HEARTBEAT_PATH,
+    DEFAULT_MAX_AGE_SEC,
+)
 
 
 @cli.app.command()
@@ -64,22 +70,22 @@ def dashboard(
 @cli.app.command("heartbeat-check")
 def heartbeat_check(
     path: Path = typer.Option(
-        Path("data/heartbeat/runner.txt"),
+        DEFAULT_HEARTBEAT_PATH,
         "--path",
         help="러너가 갱신하는 heartbeat 파일.",
     ),
     max_age_sec: int = typer.Option(
-        3600,
+        DEFAULT_MAX_AGE_SEC,
         "--max-age-sec",
         help="이 초 이상 갱신 누락이면 'stale' 로 판정.",
     ),
     cooldown_sec: int = typer.Option(
-        1800,
+        DEFAULT_COOLDOWN_SEC,
         "--cooldown-sec",
         help="같은 누락 상황에서 텔레그램 알림 최소 간격 (spam 방지).",
     ),
     cooldown_path: Path = typer.Option(
-        Path("data/heartbeat/last_alert.txt"),
+        DEFAULT_COOLDOWN_PATH,
         "--cooldown-path",
         help="cooldown 추적용 빈 파일 경로 (mtime 만 사용).",
     ),

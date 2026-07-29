@@ -77,10 +77,3 @@ def test_bollinger_centers_on_mean() -> None:
     mid, upper, lower = bb
     assert mid == pytest.approx(12.0)
     assert upper > mid > lower
-
-
-def test_cross_above_and_below() -> None:
-    assert ind.cross_above(prev_a=1.0, prev_b=2.0, cur_a=3.0, cur_b=2.5)
-    assert not ind.cross_above(prev_a=3.0, prev_b=2.0, cur_a=4.0, cur_b=2.5)
-    assert ind.cross_below(prev_a=3.0, prev_b=2.0, cur_a=1.0, cur_b=2.0)
-    assert not ind.cross_below(prev_a=1.0, prev_b=2.0, cur_a=0.5, cur_b=2.0)

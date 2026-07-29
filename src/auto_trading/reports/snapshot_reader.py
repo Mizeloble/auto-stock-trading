@@ -98,14 +98,6 @@ class TopcapSnapshots:
         return intraday, last.change_pct
 
 
-def parse_topcap_snapshots(path: Path | str) -> TopcapSnapshots:
-    """topcap-<date>.jsonl → TopcapSnapshots. 파일 없거나 읽기 실패면 빈 리더."""
-    snap = TopcapSnapshots()
-    _parse_into(snap, Path(path))
-    _sort_series(snap)
-    return snap
-
-
 def parse_topcap_for_date(date: str, *, root: Path | str = "data/snapshots") -> TopcapSnapshots:
     """`<root>/topcap-<date>.jsonl` + `<root>/discovered-<date>.jsonl` 병합 로드.
 
@@ -194,5 +186,4 @@ __all__ = [
     "SnapshotPoint",
     "TopcapSnapshots",
     "parse_topcap_for_date",
-    "parse_topcap_snapshots",
 ]
