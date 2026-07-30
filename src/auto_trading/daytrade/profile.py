@@ -67,7 +67,10 @@ class DaytradeBreadthGate(BaseModel):
     # 다 쓰기 전에 읽으면 상위 대형주만 표본에 잡혀 시장 폭이 편향됨. 최소 이만큼
     # 모여야(또는 줄 수가 안정되어야) 판단하고, 못 모으면 fail-open(게이트 통과).
     min_sample: int = Field(default=180, ge=0)
-    settle_timeout_sec: int = Field(default=90, ge=0)
+    # 90 → 150 (2026-07-30): 정상일 정착 대기가 API 부하와 함께 45초 → 70초로 늘어
+    # 예산 90초에 여유가 20초뿐이었음. 타임아웃 = fail-open 이라 여유를 되돌림.
+    # crash·defensive·range·trend 프로파일은 이 기본값을 그대로 쓴다.
+    settle_timeout_sec: int = Field(default=150, ge=0)
 
 
 class DaytradeRiskLimits(BaseModel):
