@@ -69,7 +69,10 @@ breadth_gate:
   # 시장 폭이 편향됨. 최소 이만큼 모이고 줄 수가 안정될 때까지(최대 settle_timeout_sec)
   # 기다렸다 판단. 못 모으면 게이트 통과(fail-open).
   min_sample: 180
-  settle_timeout_sec: 90
+  # 90 → 150 (2026-07-30): 정상일 정착 대기가 API 부하와 함께 45초 → 70초로 늘어
+  # 예산 90초에 여유가 20초뿐이었음. 타임아웃이 나면 fail-open 으로 게이트가 조용히
+  # 열리므로 여유를 되돌림. 정상일은 40~70초에 끝나 무영향.
+  settle_timeout_sec: 150
 avoid_symbols:
   - '356680'
 # 게이트(지수 SMA·breadth)가 전 후보를 막은 날, 종료 대신 주문 없는 섀도우 모드로
