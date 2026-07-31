@@ -119,6 +119,23 @@ def print_study(days: list[DayResult]) -> None:
     )
     print("게이트 유지 시 같은 날들의 실적 = 0원 (진입 자체가 없음) — 위 수치와 직접 비교.")
 
+    # 완화 가설의 실제 형태는 전면 면제가 아니라 "breadth 통과일만 SMA 면제" —
+    # 그 소그룹을 같은 기준으로 따로 집계해야 판정이 한 번에 끝난다.
+    b_pnls = [
+        p
+        for d in days
+        if d.breadth_passed is True
+        if (p := d.pnl_after_cost if d.pnl_after_cost is not None else d.pnl) is not None
+    ]
+    if b_pnls:
+        b_wins = sum(1 for p in b_pnls if p > 0)
+        print(
+            f"breadth 통과일 {len(b_pnls)}일: 합계 {sum(b_pnls):+,.0f}원"
+            f" · 평균 {statistics.fmean(b_pnls):+,.0f}원"
+            f" · 흑자일 {b_wins}/{len(b_pnls)} · 최악일 {min(b_pnls):+,.0f}원"
+            " — 'breadth 통과 시 SMA 면제' 가설은 이 줄로 판정."
+        )
+
     if len(pnls) < MIN_DAYS_FOR_VERDICT:
         print(
             f"⏳ 판정 보류 — 섀도우 {MIN_DAYS_FOR_VERDICT}일 이상 모이면 판정"
