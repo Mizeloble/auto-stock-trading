@@ -8,6 +8,11 @@
 #   daily_loss_kill: true (불변, 일일 -3% 도달 시 강제 청산)
 # ⚠️ 0 = "무제한(비활성)" 이다 (max_order_value·daily_notional_limit·max_buys_per_symbol 공통).
 #   차단하려면 0 이 아니라 1 을 써야 한다 — 2026-05-29 이 값들이 0 이라 crash 장에서도 매수가 통과한 버그 수정.
+# 2026-08-02 보정: max_buys_per_symbol 0→1 (위 규약과 어긋난 마지막 잔재 — 0 은 무제한).
+#   max_position_weight 0.07 / max_portfolio_exposure 0.40 명시 — 누락이면 엔진 기본
+#   20%/80% 가 적용돼 킬스위치 프로파일이 오히려 가장 느슨했다(defensive 는 2026-07-04
+#   같은 보정, 값은 highvol 계승). max_order_value=1 이 이미 매수를 전면 차단하므로
+#   동작 변화 없음 — 이중 안전망 정합 목적.
 # 새 파라미터 도입 없음. 운영자가 daytrade-current.yaml 의 regime_router.enabled=true 면 자동 활성.
 name: daytrade crash
 strategy: index_momentum_daytrade
@@ -26,11 +31,13 @@ risk:
   partial_take_qty_ratio: 0.5
   max_order_value: 1.0
   daily_notional_limit: 1.0
+  max_position_weight: 0.07
+  max_portfolio_exposure: 0.40
   daily_loss_kill: true
   max_consecutive_losses: 3
   consecutive_loss_pause_sec: 86400
   max_position_correlation: 0.7
-  max_buys_per_symbol: 0
+  max_buys_per_symbol: 1
 avoid_symbols:
   - '356680'
 breadth_gate:

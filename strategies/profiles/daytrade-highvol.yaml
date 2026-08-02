@@ -22,8 +22,8 @@
 #     max_position_weight 0.10→0.07 / max_portfolio_exposure 0.60→0.40 (포지션 축소)
 #     daily_realized_loss_limit 150k→100k (churn 브레이크 더 빨리)
 #     momentum_threshold_pct 0.3→0.35 (변동성장에서 진입 문턱 살짝 높여 헛매수 억제)
-#     cooldown_min 45 — current(90) 보다 짧음. 조정 목록에 없던 암묵 변경 —
-#       2026-07-04 적대적 검토에서 발견, 의도 재확인 필요.
+#     cooldown_min 45 — current(현 60) 보다 짧음. 쿨다운 축은 2026-07-04 반사실
+#       그리드 검증에서 "현행 유지" 종결 — 재확인 완료 (2026-08-02 주석 정리).
 #
 # 📌 2026-07-29 · 모의계좌 재발급으로 예수금 4,800만 → 1억 (2배).
 #   종목당 예산 = 평가액 × max_position_weight 라 매수 규모가 그대로 2배가 된다.

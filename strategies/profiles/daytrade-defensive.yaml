@@ -8,7 +8,7 @@
 #   max_buys_per_symbol 1 (종목당 하루 1회만)
 #   stop_loss_pct 0.012 (-1.2%, 손절 좁게 — 약세장 추가 하락 위험)
 #   trailing_stop_pct 0.008 (트레일링 좁게)
-#   cooldown_min 60 — current(90) 보다 짧음. 2026-07-04 검토에서 발견, 의도 재확인 필요.
+#   cooldown_min 60 — current 와 동일(현 60). 쿨다운 축은 2026-07-04 반사실 검증으로 현행 유지 종결.
 # 2026-07-04: max_position_weight/max_portfolio_exposure 누락 보정 — 누락이면 엔진
 #   기본(20%/80%)이 적용돼 약세장 프로파일이 오히려 다른 프로파일(10%/60%)보다
 #   느슨했다. 다른 프로파일과 같은 10%/60% 로 명시(완화 아님 — 조임).
