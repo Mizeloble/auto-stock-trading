@@ -5,7 +5,7 @@
 # 조정 사유: 추세장에서는 진입 기회가 많아도 비용/회전율 통제 원칙 우선.
 #   top_n 6 (하루 최대 매수 종목 6개 — current 3 보다 많음)
 #   momentum_threshold_pct 0.20 (지수 상승 모멘텀 게이트 완화 — current 0.30)
-#   cooldown_min 60 — current(90) 보다 짧음. 2026-07-04 검토에서 발견, 의도 재확인 필요.
+#   cooldown_min 60 — current 와 동일(현 60). 쿨다운 축은 2026-07-04 반사실 검증으로 현행 유지 종결.
 #   max_position_weight 0.10 / max_portfolio_exposure 0.60
 #     → 종목당 총평가금액의 10%, 전체 합산 최대 60%(=6종목×10%). 손절·트레일링·부분익절은 불변.
 #
@@ -50,5 +50,5 @@ breadth_gate:
   snapshot_dir: data/snapshots
 notes: |
   TREND_UP 자동 라우팅용. daytrade-current.yaml 베이스 + top_n=6, momentum 게이트 약간 완화.
-  daily_notional_limit·max_buys_per_symbol 은 current 와 동일. cooldown_min 은 60 으로
-  current(90) 보다 짧다 — 2026-07-04 적대적 검토에서 발견, 의도 재확인 필요.
+  daily_notional_limit·max_buys_per_symbol·cooldown_min(60) 은 current 와 동일.
+  쿨다운 축은 2026-07-04 반사실 검증으로 현행 유지 종결.

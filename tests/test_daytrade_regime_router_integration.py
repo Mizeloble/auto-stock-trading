@@ -150,10 +150,9 @@ def test_real_yaml_profiles_load_without_validation_error() -> None:
         assert profile.risk.max_consecutive_losses == 3
         # 2026-07-04 회귀 방지 — 포지션·노출 한도 누락 시 엔진 기본(20%/80%)이 적용돼
         # 보수적이어야 할 레짐 프로파일이 오히려 느슨해진다(defensive 실제 사례).
-        # crash 는 max_order_value=1 로 매수 자체가 차단되므로 예외.
-        if name != "daytrade-crash":
-            assert profile.risk.max_position_weight is not None, f"{name}: 종목당 비중 한도 누락"
-            assert profile.risk.max_portfolio_exposure is not None, f"{name}: 전체 노출 한도 누락"
+        # 2026-08-02 부터 crash 도 명시(이중 안전망 정합) — 예외 없이 전 프로파일 검사.
+        assert profile.risk.max_position_weight is not None, f"{name}: 종목당 비중 한도 누락"
+        assert profile.risk.max_portfolio_exposure is not None, f"{name}: 전체 노출 한도 누락"
 
 
 # 참고: 과거엔 운영 daytrade-current.yaml 의 regime_router 가 기본 OFF 인지 단정하는

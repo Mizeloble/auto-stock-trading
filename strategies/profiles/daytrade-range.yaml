@@ -6,7 +6,7 @@
 #   partial_take_pct 0.010 (+1.0% 도달 시 절반 익절 — 박스 상단 빠르게 차익)
 #   trailing_stop_pct 0.008 (잔량 트레일링도 짧게)
 #   top_n 6 (하루 최대 매수 종목 6개 — current 3 보다 많음)
-#   cooldown_min 60 — current(90) 보다 짧음. 2026-07-04 검토에서 발견, 의도 재확인 필요.
+#   cooldown_min 60 — current 와 동일(현 60). 쿨다운 축은 2026-07-04 반사실 검증으로 현행 유지 종결.
 #   max_position_weight 0.10 / max_portfolio_exposure 0.60
 #     → 종목당 총평가금액의 10%, 전체 합산 최대 60%(=6종목×10%).
 # 손절(stop_loss_pct)·daily_notional_limit·max_buys_per_symbol 은 current 와 동일.
