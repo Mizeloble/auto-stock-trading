@@ -8,7 +8,8 @@
 |---|---|
 | `probe_orders.py` | 모의 주문 응답 dict 캡처 — `ord_no`/`odno` 등 주문번호 필드명 확인 (`account/orders.py` 매핑 검증) |
 | `probe_rank_index.py` | 거래량 순위 + 업종 일봉 응답 dict 캡처 — `TR.RANK_VOLUME` / `TR.SECTOR_INDEX_DAILY` 필드명 확인 (`market/rank.py`, `market/index.py` 후보 체인 보정) |
-| `selection_study.py` | **선별 효과 읽기전용 검증** — "거래량만 vs 거래량+전날추세 재정렬"이 고른 종목의 당일 시가→종가 수익률을 개선하는지 12개월 일봉으로 측정(gate 아님 ranking, 거래수 불변). baseline/improved/pool 평균수익·승률·페어드 t 출력 + `data/studies/*.json` 저장. ⚠️ 시가→종가 근사·비용 제외·고정 바스켓·생존편향·소표본 → 방향성 신호일 뿐 증명 아님. |
+| `selection_study.py` | **선별 효과 읽기전용 검증** — "거래량만 vs 거래량+전날추세 재정렬"이 고른 종목의 당일 시가→종가 수익률을 개선하는지 약 3년 일봉으로 측정(gate 아님 ranking, 거래수 불변). 순위는 **전날(D-1) 거래량**(룩어헤드 회피), 추세는 풀 내 횡단면 z-점수 합(연속), 추론은 이동블록 부트스트랩 95%CI. baseline/improved/pool + `처치적용일(improved≠baseline)%` + CI/p 출력 + `data/studies/*.json` 저장. ⚠️ 시가→종가 근사·비용 제외·고정 바스켓(생존편향)·mock 의존 → 방향성 신호일 뿐 증명 아님. |
+| `concentration_study.py` | **집중도/분산 효과 읽기전용 검증** — selection_study 의 일관된 pool>baseline 신호 후속. 매수 수 K∈{1,2,3,5,10}별 당일수익 평균·승률·위험조정과, 거래량 1~3등 vs 4~10등(음의선택)을 약 3년 일봉으로 비교. 페어드 차이를 이동블록 부트스트랩 95%CI로 검정 + `data/studies/*.json`. highvol 프로파일의 `top_n 3` 근거(K↑ → 변동성 std 3.9%→1.8%). ⚠️ 비용 미반영(K↑=수수료↑)·고정 바스켓 생존편향·mock 의존 → 방향성 신호일 뿐. |
 | `alt_rank_ab_study.py` | **발굴 A/B 판정** — alt-rank.jsonl(PR #164)의 거래량 풀 vs 거래대금 풀을 자체 스냅샷(09:10→15:15)과 조인해 원재료 수익률 비교. API 호출 없음. 거래일 15일 미만이면 "판정 보류". |
 | `shadow_gate_study.py` | **섀도우 vs 게이트 판정** — 차단일 가상 매매 실적(shadow-*.json, PR #172)을 집계해 SMA 게이트 완화 가설 판정 재료 생성. buy-hold 대비 출구 효과 병기. `--selftest` 로 데이터 없이 로직 검증. |
 | `tick_guard_study.py` | **틱 가드 반사실 판정** — 틱 로그(PR #157) 위에서 실제 왕복의 출구만 틱 단위 가드로 교체 시뮬(규칙·순서 PositionGuard 동일, 파라미터 highvol yaml). 봉 마감 검사 대비 Δ손익·손절 오버슈트 산출. `--selftest` 지원. |
