@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mizeloble.auto-trade.shadow-verdict</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jjmize/Project/auto-stock-trading/scripts/shadow-verdict-check.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jjmize/Project/auto-stock-trading</string>
+
+    <!-- 평일 15:50 — 15:15 청산·15:30 스냅샷 조인 재보강 이후. 주말 가드는 셸에서. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>15</integer>
+        <key>Minute</key>
+        <integer>50</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-shadow-verdict.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-shadow-verdict.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
