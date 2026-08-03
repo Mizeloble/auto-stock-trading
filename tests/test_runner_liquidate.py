@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta
 from unittest.mock import AsyncMock, patch
 
+import structlog
+
 from auto_trading._common import KST
 from auto_trading.account.orders import OrderResult
 from auto_trading.risk.manager import AccountState
@@ -50,6 +52,28 @@ async def test_liquidate_all_dry_run_skips_place_order_and_zeros_positions() -> 
     # 로컬 포지션은 0 으로 갱신되어 후속 호출이 idempotent.
     assert account.positions == {"005930": 0, "000660": 0}
     assert r._liquidation_done is True
+
+
+async def test_liquidate_all_dry_run_logs_sell_price_for_report() -> None:
+    """시뮬 청산 로그에 체결가 근사(sell_price)가 남는다 — 리포트 FIFO 집계 입력.
+
+    2026-08-03 회귀: sell_price 누락으로 섀도우 리포트가 마감 청산 손익을
+    실현손익에서 통째로 빠뜨렸다. 마지막 봉 종가 우선, 없으면 평단가 폴백.
+    """
+    r = _day_trade_runner(dry_run=True)
+    account = _account({"005930": 10, "000660": 5})
+    r._last_closes["005930"] = 12_345.0
+
+    with (
+        patch.object(runner_module, "place_order") as mock_place,
+        structlog.testing.capture_logs() as cap,
+    ):
+        await r.liquidate_all(rest=object(), account=account, reason="test")  # type: ignore[arg-type]
+
+    mock_place.assert_not_called()
+    events = {e["symbol"]: e for e in cap if e.get("event") == "runner.liquidate_simulated"}
+    assert events["005930"]["sell_price"] == 12_345.0  # 마지막 봉 종가
+    assert events["000660"]["sell_price"] == 10_000.0  # 종가 캐시 없음 → 평단가 폴백
 
 
 async def test_liquidate_all_real_sends_market_sell_per_position() -> None:
