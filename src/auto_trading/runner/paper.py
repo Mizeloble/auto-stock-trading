@@ -135,9 +135,9 @@ class PaperRunner:
     _account: AccountState | None = field(default=None, init=False)
     _recent_signals: dict[str, Signal] = field(default_factory=dict, init=False)
     _started_at: datetime | None = field(default=None, init=False)
-    # 섀도우 모드 평가용 종목별 마지막 봉 종가. tracker.equity() 의 mark 이자
-    # 청산 시뮬 SELL 가격의 근거 (실잔고가 없으니 시세는 여기서만 온다).
-    _shadow_marks: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    # 종목별 마지막 봉 종가 캐시. 섀도우 tracker.equity() 의 mark 이자, dry-run
+    # EOD 청산 시뮬 체결가 근사 — 리포트 실현손익이 청산분을 놓치지 않게 로그에 남긴다.
+    _last_closes: dict[str, float] = field(default_factory=dict, init=False, repr=False)
     # 텔레그램 v3 — 외부에서 pause/resume/request_stop 으로 토글
     _control_state: RunnerControlState = field(default=RunnerControlState.RUNNING, init=False)
     # request_stop 시 ws.messages() 루프에 즉시 신호를 주기 위한 활성 ws 참조.
@@ -584,8 +584,7 @@ class PaperRunner:
 
     async def _on_bar(self, rest: KiwoomRestClient, bar: Bar, account: AccountState) -> None:
         log.debug("runner.bar", symbol=bar.symbol, ts=bar.ts.isoformat(), close=bar.close)
-        if self.shadow_tracker is not None:
-            self._shadow_marks[bar.symbol] = bar.close
+        self._last_closes[bar.symbol] = bar.close
         strat = self.strategies.get(bar.symbol)
         if strat is None:
             return
@@ -1444,7 +1443,7 @@ class PaperRunner:
         tracker = self.shadow_tracker
         assert tracker is not None  # 호출부가 shadow 분기에서만 부른다
         positions = {sym: qty for sym, qty in tracker.holdings.items() if qty > 0}
-        equity = tracker.equity(self._shadow_marks)
+        equity = tracker.equity(self._last_closes)
         state = AccountState(
             deposit=tracker.cash,
             total_equity=equity,
@@ -1550,6 +1549,10 @@ class PaperRunner:
             )
             buy_price = account.avg_prices.get(symbol)
             if self.dry_run:
+                # 체결가 근사 = 마지막 봉 종가(없으면 평단가). sell_price 를 로그에
+                # 남겨야 리포트 FIFO 집계가 청산분 손익을 실현손익에 포함한다
+                # (2026-08-03 섀도우 리포트 과소집계 회귀).
+                liq_price = self._last_closes.get(symbol) or buy_price
                 log.info(
                     "runner.liquidate_simulated",
                     symbol=symbol,
@@ -1557,22 +1560,21 @@ class PaperRunner:
                     qty=qty,
                     reason=reason,
                     buy_price=buy_price,
+                    sell_price=liq_price,
                 )
                 # 시뮬에서도 로컬 포지션 즉시 0 으로 — 다음 청산 호출이 idempotent.
                 account.positions[symbol] = 0
-                # 섀도우 — 마지막 봉 종가(없으면 평단가)로 가상 청산 체결.
-                if self.shadow_tracker is not None:
-                    liq_price = self._shadow_marks.get(symbol) or buy_price
-                    if liq_price:
-                        self.shadow_tracker.apply(
-                            ShadowSignal(
-                                symbol=symbol,
-                                side=Side.SELL,
-                                quantity=qty,
-                                price=float(liq_price),
-                                ts=datetime.now(KST),
-                            )
+                # 섀도우 — 같은 근사가로 가상 청산 체결.
+                if self.shadow_tracker is not None and liq_price:
+                    self.shadow_tracker.apply(
+                        ShadowSignal(
+                            symbol=symbol,
+                            side=Side.SELL,
+                            quantity=qty,
+                            price=float(liq_price),
+                            ts=datetime.now(KST),
                         )
+                    )
                 success += 1
                 continue
             try:

@@ -136,7 +136,7 @@ async def test_liquidate_all_records_virtual_sell_at_last_mark() -> None:
     buy = Signal(symbol="005930", side=Side.BUY, weight=0.1, price_hint=Decimal("70000"))
     await r._evaluate_signal(buy, _bar(70_000.0), account)
     qty = account.positions["005930"]
-    r._shadow_marks["005930"] = 71_000.0  # 마지막 봉 종가
+    r._last_closes["005930"] = 71_000.0  # 마지막 봉 종가
 
     with patch.object(runner_module, "place_order") as mock_place:
         await r.liquidate_all(object(), account, reason="test")  # type: ignore[arg-type]
