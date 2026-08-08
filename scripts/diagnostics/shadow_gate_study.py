@@ -13,10 +13,22 @@
 3. 출구 효과 — 같은 픽의 buy-hold(스냅샷) 수익률과 섀도우 왕복 pnl 을 병기해
    "원재료 vs 전략 손익" 갭(출구가 자르는 몫)을 정량화.
 
+표본 산정(2026-08-03 수정):
+- 진입 0회인 날도 **0원 관측치로 센다** — 게이트를 완화했어도 그날 성과는 0원이었다는
+  사실 자체가 판정 재료다(빼면 차단일당 기대값이 과대평가된다).
+- 단, "안 산 날"과 "못 본 날"은 다르다. 봇이 늦게 떠서 아침 장을 통째로 놓친 날은
+  전략이 고르지 않은 게 아니라 물어보지도 못한 것이라 표본에서 제외한다. 판별은
+  타임라인 첫 이벤트 시각(SESSION_START_MAX_MIN) — 정상 가동일은 09:02 에 시작한다.
+  실제 사례: 2026-07-30 은 첫 이벤트 13:07 + 로그에 1시간 간격 공백(맥북 슬립 사고,
+  7/28~30 데이터 무효)이라 제외, 2026-07-17 은 09:02~15:15 정상 가동 후 시장 폭
+  게이트가 후보 10건을 전부 막은 진짜 무진입일이라 0원으로 포함.
+
 한계(정직 고지):
 - 판정은 섀도우 15일 이상(MIN_DAYS_FOR_VERDICT) — 그 전엔 "판정 보류".
 - 섀도우 가정: 즉시 체결 + 고정 슬리피지(SimulatedBroker 동일) — 실체결 잔차 없음.
 - 섀도우가 흑자여도 '차단일 평균이 양수' 만으론 부족 — 꼬리 위험(최악일)을 같이 본다.
+- 0원 관측일은 흑자일 비율의 분모에 들어가되 분자엔 안 들어간다(0 은 흑자가 아님).
+  게이트 유지 대비로는 무승부라 보수적인 쪽 — 판정을 완화 방향으로 밀지 않는다.
 
 실행: uv run python scripts/diagnostics/shadow_gate_study.py
 자가 검증(데이터 없이 집계 로직 확인): … --selftest
@@ -30,7 +42,13 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from auto_trading.reports.daily import DailyReport, RoundTrip, TradeRecord, load_daily_report
+from auto_trading.reports.daily import (
+    DailyReport,
+    RoundTrip,
+    TimelineEvent,
+    TradeRecord,
+    load_daily_report,
+)
 from auto_trading.reports.snapshot_reader import parse_topcap_for_date
 
 REPORTS_ROOT = Path("data/reports")
@@ -38,6 +56,9 @@ SNAPSHOT_ROOT = Path("data/snapshots")
 EXIT_MIN = 15 * 60 + 15
 TOL_MIN = 12
 MIN_DAYS_FOR_VERDICT = 15
+# 정상 가동일의 첫 타임라인 이벤트는 09:02(발굴). 이보다 늦게 시작했으면 아침 장을
+# 놓친 것 — 진입 0회여도 "안 샀다"가 아니라 "못 봤다"라 표본에서 뺀다.
+SESSION_START_MAX_MIN = 9 * 60 + 10
 
 
 @dataclass(frozen=True)
@@ -50,6 +71,13 @@ class DayResult:
     breadth_passed: bool | None
     # (심볼, 섀도우 왕복 pnl%, buy-hold%) — 출구 효과 병기용
     trip_vs_hold: list[tuple[str, float | None, float | None]]
+    first_event_kst: str | None  # 타임라인 첫 이벤트 "HH:MM" — 가동 커버리지 판별용
+
+    @property
+    def session_covered_open(self) -> bool:
+        """개장 구간을 실제로 관측했나 — 진입 0회를 0원으로 셀 자격."""
+        minute = _hhmm_to_minute(self.first_event_kst)
+        return minute is not None and minute <= SESSION_START_MAX_MIN
 
 
 def _hhmm_to_minute(hhmm: str | None) -> int | None:
@@ -88,17 +116,36 @@ def summarize_day(report: DailyReport) -> DayResult:
         exit_reasons=reasons,
         breadth_passed=report.breadth_passed,
         trip_vs_hold=trip_vs_hold,
+        first_event_kst=report.timeline[0].time_kst if report.timeline else None,
     )
+
+
+def counted_pnl(d: DayResult) -> float | None:
+    """표본에 넣을 손익. 진입 0회여도 개장을 관측했으면 0원, 못 봤으면 None(제외)."""
+    pnl = d.pnl_after_cost if d.pnl_after_cost is not None else d.pnl
+    if pnl is not None:
+        return pnl
+    return 0.0 if d.session_covered_open else None
 
 
 def print_study(days: list[DayResult]) -> None:
     print("=== 섀도우 vs 게이트 — 차단일 가상 매매 실적 ===")
     pnls: list[float] = []
+    dropped: list[DayResult] = []
+    n_zero_days = 0
     for d in days:
         pnl = d.pnl_after_cost if d.pnl_after_cost is not None else d.pnl
+        counted = counted_pnl(d)
+        if counted is not None:
+            pnls.append(counted)
         if pnl is not None:
-            pnls.append(pnl)
-        pnl_str = f"{pnl:+,.0f}원" if pnl is not None else "결손"
+            pnl_str = f"{pnl:+,.0f}원"
+        elif counted is not None:
+            pnl_str = "0원(무진입)"
+            n_zero_days += 1
+        else:
+            pnl_str = "표본제외"
+            dropped.append(d)
         breadth = {True: "breadth 통과", False: "breadth 차단", None: "breadth ?"}[d.breadth_passed]
         reasons = ", ".join(f"{k}x{v}" for k, v in d.exit_reasons.most_common()) or "-"
         print(f"{d.date}  {pnl_str:>12}  왕복 {d.n_round_trips}  [{breadth}]  출구: {reasons}")
@@ -107,26 +154,31 @@ def print_study(days: list[DayResult]) -> None:
             h = f"{hold:+.2f}%" if hold is not None else "?"
             print(f"    {sym}  섀도우 {t}  vs  buy-hold {h}")
 
+    # 무엇을 뺐는지 반드시 드러낸다 — 조용한 표본 축소는 "다 셌다"로 오독된다.
+    for d in dropped:
+        first = d.first_event_kst or "이벤트 없음"
+        print(
+            f"⚠️ {d.date} 표본제외 — 첫 이벤트 {first} (정상 가동일은 09:02)."
+            " 아침 장을 못 봐서 '안 샀다'가 아니라 '못 봤다'."
+        )
+
     if not pnls:
         print("\nPnL 데이터가 없습니다 (round_trips 없는 리포트뿐).")
         return
 
     wins = sum(1 for p in pnls if p > 0)
+    zero_note = f" (그중 무진입 0원 {n_zero_days}일)" if n_zero_days else ""
     print(
         f"\n--- 종합 ---\n"
-        f"섀도우 {len(pnls)}일: 합계 {sum(pnls):+,.0f}원 · 평균 {statistics.fmean(pnls):+,.0f}원"
+        f"섀도우 {len(pnls)}일{zero_note}: 합계 {sum(pnls):+,.0f}원"
+        f" · 평균 {statistics.fmean(pnls):+,.0f}원"
         f" · 흑자일 {wins}/{len(pnls)} · 최악일 {min(pnls):+,.0f}원"
     )
     print("게이트 유지 시 같은 날들의 실적 = 0원 (진입 자체가 없음) — 위 수치와 직접 비교.")
 
     # 완화 가설의 실제 형태는 전면 면제가 아니라 "breadth 통과일만 SMA 면제" —
     # 그 소그룹을 같은 기준으로 따로 집계해야 판정이 한 번에 끝난다.
-    b_pnls = [
-        p
-        for d in days
-        if d.breadth_passed is True
-        if (p := d.pnl_after_cost if d.pnl_after_cost is not None else d.pnl) is not None
-    ]
+    b_pnls = [p for d in days if d.breadth_passed is True if (p := counted_pnl(d)) is not None]
     if b_pnls:
         b_wins = sum(1 for p in b_pnls if p > 0)
         print(
@@ -187,6 +239,7 @@ def selftest() -> None:
         note_ko="셀프테스트",
         buys=[TradeRecord(symbol="005930", side="buy", quantity=10, price=1000.0, simulated=True)],
     )
+    tl = lambda hhmm: [TimelineEvent(time_kst=hhmm, kind="discovery", text="발굴 채택 0건")]  # noqa: E731
     days = [
         summarize_day(
             DailyReport(
@@ -195,7 +248,8 @@ def selftest() -> None:
                 realized_pnl_after_cost=10_000.0,
                 round_trips=[mk_rt("005930", 1.2, 12_000.0, "trailing")],
                 breadth_passed=True,
-                **base,  # type: ignore[arg-type]
+                timeline=tl("09:02"),
+                **base,
             )
         ),
         summarize_day(
@@ -205,7 +259,32 @@ def selftest() -> None:
                 realized_pnl_after_cost=-8_000.0,
                 round_trips=[mk_rt("005930", -0.6, -6_000.0, "stop_loss")],
                 breadth_passed=False,
-                **base,  # type: ignore[arg-type]
+                timeline=tl("09:02"),
+                **base,
+            )
+        ),
+        # 정상 가동 + 진입 0회 → 0원 관측치로 포함.
+        summarize_day(
+            DailyReport(
+                date="2026-07-17",
+                realized_pnl=None,
+                realized_pnl_after_cost=None,
+                round_trips=[],
+                breadth_passed=False,
+                timeline=tl("09:02"),
+                **base,
+            )
+        ),
+        # 늦게 뜬 날(아침 장 못 봄) + 진입 0회 → 표본 제외.
+        summarize_day(
+            DailyReport(
+                date="2026-07-30",
+                realized_pnl=None,
+                realized_pnl_after_cost=None,
+                round_trips=[],
+                breadth_passed=True,
+                timeline=tl("13:07"),
+                **base,
             )
         ),
     ]
@@ -213,7 +292,10 @@ def selftest() -> None:
     total = sum(d.pnl_after_cost for d in days if d.pnl_after_cost is not None)
     assert total == 2_000.0, total
     assert days[0].exit_reasons == Counter({"trailing": 1})
-    print("\n✅ selftest 통과 — 합계 +2,000원, 출구 사유 집계 정상.")
+    counted = [counted_pnl(d) for d in days]
+    assert counted == [10_000.0, -8_000.0, 0.0, None], counted
+    assert [d.session_covered_open for d in days] == [True, True, True, False]
+    print("\n✅ selftest 통과 — 합계 +2,000원, 무진입일 0원 포함·늦은 시작일 제외 정상.")
 
 
 def main() -> None:
