@@ -33,6 +33,9 @@ v2 가 축을 여러 개 동시에 축적하기 시작해(외인/기관 순매�
   전 종목 수익률이 정확히 0 인 날은 표본에서 자동 배제.
 - 스냅샷 결손은 종목-일 단위로 스킵하고 건수를 표기 — 조용히 빠지지 않게.
 
+수집 라운드: 1차 09:02(발굴 시각, **판정 표본**) · 2차 09:30(진단 — 1차 기각이
+'엣지 없음'인지 '아직 미형성'인지 가름). 2차는 스냅샷 잡이 기록하며 판정에 안 쓴다.
+
 실행: uv run python scripts/diagnostics/rank_signal_ab_study.py
       uv run python scripts/diagnostics/rank_signal_ab_study.py --selftest  # 데이터 없이 로직 검증
 """
@@ -64,6 +67,12 @@ MIN_DAYS_FOR_VERDICT = 30
 # 진입일에 잘려 있을 때 상한이 50%로 눌려 조건 ③ 이 구조적으로 항상 통과했다.
 OVERLAP_MAX = 0.7
 
+# 수집 라운드. 판정은 **1차(09:02)로만** 내린다 — 실제 매매가 그 시각에 일어나므로
+# 그것만이 "발굴 소스를 바꿀 수 있는가" 에 대한 답이다. 2차(09:30)는 1차가 기각됐을 때
+# "엣지가 없다" 와 "그 시각엔 아직 신호가 안 형성됐다" 를 가르는 진단 표본이다.
+ROUND_DISCOVERY = "0902"
+ROUND_LATE = "0930"
+
 BASELINE = "volume"  # 현행 발굴 신호
 PRIMARY_AXIS = "foreign_netbuy"  # 사전 등록된 1차 가설
 AXIS_LABELS = {
@@ -81,6 +90,7 @@ def _label(axis: str) -> str:
 @dataclass(frozen=True)
 class DayRecord:
     date: str
+    round_label: str  # "0902"(판정 표본) / "0930"(진단)
     pools: dict[str, list[str]]  # 축 이름 → 풀 종목 (BASELINE 포함)
     picks: dict[str, list[str]]  # 축 이름 → 상위 TOP_N 픽
     blocked: bool  # volume_chosen 이 비었던 날(게이트 전면 차단)
@@ -124,10 +134,20 @@ def parse_record(rec: dict) -> DayRecord | None:
     # 실제 매수 종목(chosen)을 쓰면 기준축만 게이트·회피 필터를 통과한 셈이라
     # 사과 대 오렌지가 된다(기준축에 유리한 편향). chosen 은 blocked 판정용으로만 사용.
     picks = {name: pool[:TOP_N] for name, pool in pools.items()}
-    return DayRecord(date=str(rec.get("date")), pools=pools, picks=picks, blocked=not chosen)
+    return DayRecord(
+        date=str(rec.get("date")),
+        # round 가 없는 과거 레코드(v1·초기 v2)는 전부 발굴 시각 수집분이다.
+        round_label=str(rec.get("round") or ROUND_DISCOVERY),
+        pools=pools,
+        picks=picks,
+        blocked=not chosen,
+    )
 
 
-def load_day_records(path: Path = ALT_RANK_PATH) -> list[DayRecord]:
+def load_day_records(
+    path: Path = ALT_RANK_PATH, *, round_label: str | None = ROUND_DISCOVERY
+) -> list[DayRecord]:
+    """alt-rank JSONL → DayRecord 목록. `round_label=None` 이면 라운드 무관 전부."""
     if not path.exists():
         return []
     rows: list[DayRecord] = []
@@ -140,7 +160,7 @@ def load_day_records(path: Path = ALT_RANK_PATH) -> list[DayRecord]:
         except json.JSONDecodeError:
             continue
         parsed = parse_record(rec)
-        if parsed is not None:
+        if parsed is not None and (round_label is None or parsed.round_label == round_label):
             rows.append(parsed)
     return rows
 
@@ -413,6 +433,39 @@ def main() -> None:
     print()
     for line in _verdict_lines(stats):
         print(line)
+    _print_late_round_diagnostic()
+
+
+def _print_late_round_diagnostic() -> None:
+    """2차(09:30) 라운드 요약 — 판정이 아니라 '왜 그런가' 를 가르는 진단.
+
+    1차가 기각인데 2차가 좋으면 "신호는 있는데 09:02 엔 아직 안 형성됐다" 는 뜻이고,
+    둘 다 나쁘면 "이 축엔 엣지가 없다" 로 축 자체를 닫을 수 있다. 어느 쪽이든
+    **발굴 소스 교체 판정에는 쓰지 않는다** — 매매는 09:02 에 일어나기 때문.
+    """
+    late = load_day_records(round_label=ROUND_LATE)
+    print()
+    if not late:
+        print("--- 2차 라운드(09:30) --- 아직 수집분 없음 (스냅샷 잡이 09:30~09:45 창에 기록).")
+        return
+    res = analyze(late)
+    stats: dict[str, AxisStats] = res["stats"]
+    base, primary = stats.get(BASELINE), stats.get(PRIMARY_AXIS)
+    print(f"--- 2차 라운드(09:30) 진단 · {res['evaluated_days']}일 (판정에는 미사용) ---")
+    for axis, st in stats.items():
+        print(f"{_label(axis):<12} 풀 전체: {describe(st.pool_returns)}")
+    if base is None or primary is None:
+        return
+    common = sorted(set(primary.day_pool_mean) & set(base.day_pool_mean))
+    diffs = [primary.day_pool_mean[d] - base.day_pool_mean[d] for d in common]
+    if not diffs:
+        return
+    t = paired_t(diffs)
+    t_str = f" · t≈{t:.2f}" if t is not None else ""
+    print(
+        f"{_label(PRIMARY_AXIS)} 대 {_label(BASELINE)}: 평균 {statistics.fmean(diffs):+.2f}%p"
+        f" · 우위 {sum(1 for d in diffs if d > 0)}/{len(diffs)}일{t_str}"
+    )
 
 
 def selftest() -> None:
@@ -449,6 +502,11 @@ def selftest() -> None:
         }
     )
     assert truncated is not None and truncated.pools[BASELINE] == ["A", "B", "C", "D"]
+
+    # 라운드 필터 — 판정 표본은 1차만. round 없는 과거 레코드는 1차로 간주.
+    assert rec.round_label == ROUND_DISCOVERY
+    late = parse_record({**v2, "round": ROUND_LATE})
+    assert late is not None and late.round_label == ROUND_LATE
 
     v1 = {"v": 1, "date": "2026-07-06", "volume_pool": ["A"], "value_pool": [{"symbol": "Z"}]}
     rec1 = parse_record(v1)

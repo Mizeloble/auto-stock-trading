@@ -107,7 +107,12 @@ def snapshot_top200(
     """
     from datetime import timedelta as _td
 
-    from ..daytrade.cli_helpers import ALT_RANK_PATH
+    from ..daytrade.cli_helpers import (
+        ALT_RANK_PATH,
+        alt_rank_late_round_due,
+        alt_rank_pool_n,
+        record_alt_ranking_late,
+    )
     from ..market.marketcap import load_cached_universe, universe_path_for
     from ..monitor.price_snapshot import (
         IndexSnapshotRecorder,
@@ -149,20 +154,39 @@ def snapshot_top200(
     recorder = PriceSnapshotRecorder(path=out_path)
     index_recorder = IndexSnapshotRecorder(path=index_path)
 
-    # 오늘 발굴 종목(거래량 픽/풀 + 거래대금 풀) 중 시총 200 밖 종목 — 별도 파일에
-    # 함께 스냅샷해 발굴 소형주도 일중 데이터를 갖게 한다(topcap 은 breadth 게이트가
-    # 줄 수를 세므로 섞지 않음). alt-rank 미기록일(휴장·발굴 전)은 빈 리스트 = no-op.
-    discovered = load_todays_discovery_symbols(
-        ALT_RANK_PATH, exclude_symbols={e.symbol for e in universe}
-    )
     discovered_path = discovered_snapshot_path_for(out_dir)
+    late_due = alt_rank_late_round_due(ALT_RANK_PATH)
 
-    async def _run() -> tuple[int, int, int]:
+    async def _run() -> tuple[int, int, int, int]:
         # 200종목을 10분 윈도우 안에 천천히 스윕 — 기본 0.15s 페이싱은 키움 ka10001
         # 초당 한도보다 빨라 거의 모든 호출이 429→재시도였다(2026-06-17 관측: 하루
         # ~7,600회 헛재시도). 매매 루프와 달리 시간 여유가 크므로 0.5s 로 늦춰 버스트
         # 자체를 없앤다. 200콜 x 0.5s ≈ 100s 로 10분 윈도우에 넉넉.
         async with cli.KiwoomRestClient(min_request_interval_sec=0.5) as client:
+            # 발굴 신호 A/B 2차 라운드(09:30) — 이 잡이 러너와 독립이라 게이트 차단일
+            # (러너가 09:02 에 종료되는 날)에도 빠지지 않는다. 200종목 스윕 **앞**에
+            # 두는 이유: 2차에서만 새로 등장한 종목도 이번 라운드 스냅샷에 포함돼야
+            # 09:30 진입가가 남는다(다음 라운드로 밀리면 10분 뒤 값밖에 없다).
+            if late_due:
+                try:
+                    saved = await record_alt_ranking_late(
+                        client, pool_n=alt_rank_pool_n(), exclude_etf=True
+                    )
+                    if saved is not None:
+                        cli.console.print(f"[green]✓ 발굴 신호 2차 수집(09:30):[/green] {saved}")
+                except Exception:
+                    # 진단용 부가 데이터 — 실패가 본 스냅샷 라운드를 막으면 안 된다.
+                    structlog.get_logger(__name__).warning(
+                        "snapshot.alt_rank_late_failed", exc_info=True
+                    )
+
+            # 오늘 발굴 종목(거래량 픽/풀 + 대안 축 풀) 중 시총 200 밖 종목 — 별도
+            # 파일에 함께 스냅샷해 발굴 소형주도 일중 데이터를 갖게 한다(topcap 은
+            # breadth 게이트가 줄 수를 세므로 섞지 않음). 위 2차 기록 뒤에 읽어야
+            # 2차 신규 종목이 이번 라운드에 포함된다. 미기록일은 빈 리스트 = no-op.
+            discovered = load_todays_discovery_symbols(
+                ALT_RANK_PATH, exclude_symbols={e.symbol for e in universe}
+            )
             entries = await recorder.record_round(client, list(universe))
             indices = await index_recorder.record_round(client)
             disc_count = 0
@@ -176,14 +200,14 @@ def snapshot_top200(
                     structlog.get_logger(__name__).warning(
                         "snapshot.discovered_round_failed", exc_info=True
                     )
-            return len(entries), len(indices), disc_count
+            return len(entries), len(indices), disc_count, len(discovered)
 
-    ok, idx_ok, disc_ok = asyncio.run(_run())
+    ok, idx_ok, disc_ok, disc_total = asyncio.run(_run())
     cli.console.print(f"[green]✓ 스냅샷 1라운드:[/green] 종목 {ok}/{len(universe)}건 → {out_path}")
     cli.console.print(f"[green]✓ 지수 스냅샷:[/green] {idx_ok}/2건 (KOSPI/KOSDAQ) → {index_path}")
-    if discovered:
+    if disc_total:
         cli.console.print(
-            f"[green]✓ 발굴 종목 스냅샷:[/green] {disc_ok}/{len(discovered)}건 → {discovered_path}"
+            f"[green]✓ 발굴 종목 스냅샷:[/green] {disc_ok}/{disc_total}건 → {discovered_path}"
         )
 
     # 마지막 라운드(15:30 호출)에서 오늘 일일 리포트의 스냅샷 조인을 소급 갱신 —

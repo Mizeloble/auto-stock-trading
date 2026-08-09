@@ -8,11 +8,13 @@ runner 필드만 확인하면 되므로 여기서 같이 커버.
 
 from __future__ import annotations
 
-from datetime import date, time
+import json
+from datetime import date, datetime, time
 from pathlib import Path
 
 import pytest
 
+from auto_trading._common import KST
 from auto_trading.daytrade.cli_helpers import (
     PaperDayOverrides,
     apply_daytrade_profile_overrides,
@@ -607,3 +609,112 @@ async def test_delayed_discover_blocked_stops_when_shadow_disabled(
 
     assert runner.shadow_tracker is None
     assert runner._control_state is RunnerControlState.STOPPING
+
+
+# ---- 09:30 2차 라운드 (2026-08-10, 적대적 검토 후속) --------------------------
+
+
+async def test_record_alt_ranking_late_fetches_its_own_baseline(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """2차는 발굴 결과가 없으므로 기준축(거래량)도 그 시각에 다시 뽑아야 한다.
+
+    1차의 09:02 풀을 재사용하면 '09:30 에 발굴했다면' 이 아니라 시점이 섞인 비교가 된다.
+    """
+    import json
+
+    import auto_trading.daytrade.cli_helpers as ch
+
+    async def fake_top_volume(_rest, **kw):
+        assert kw["top_n"] == 10 and kw["exclude_etf"] is True
+        return [_ranked("V1"), _ranked("V2")]
+
+    _patch_alt_pools(monkeypatch, foreign=[_ranked("F1", metric=9.0, rank=1)])
+    monkeypatch.setattr(ch, "top_volume", fake_top_volume)
+    out = tmp_path / "alt-rank.jsonl"
+
+    path = await ch.record_alt_ranking_late(
+        None,  # type: ignore[arg-type]
+        pool_n=10,
+        exclude_etf=True,
+        out_path=out,
+    )
+
+    assert path == out
+    rec = json.loads(out.read_text(encoding="utf-8").strip())
+    assert rec["round"] == ch.ALT_RANK_ROUND_LATE
+    assert [r["symbol"] for r in rec["volume_pool_rows"]] == ["V1", "V2"]
+    assert rec["volume_chosen"] == []  # 그 시각엔 '매수한 종목' 개념이 없다
+    assert set(rec["alt_pools"]) == {"foreign_netbuy"}
+
+
+async def test_record_alt_ranking_late_skips_without_baseline(tmp_path: Path, monkeypatch) -> None:
+    """기준축 조회가 실패하면 2차를 통째로 건너뛴다 — 비교 대상이 없으면 무의미."""
+    import auto_trading.daytrade.cli_helpers as ch
+
+    async def boom(_rest, **_kw):
+        raise RuntimeError("kiwoom down")
+
+    _patch_alt_pools(monkeypatch, foreign=[_ranked("F1", metric=9.0, rank=1)])
+    monkeypatch.setattr(ch, "top_volume", boom)
+    out = tmp_path / "alt-rank.jsonl"
+
+    assert (
+        await ch.record_alt_ranking_late(
+            None,  # type: ignore[arg-type]
+            pool_n=10,
+            exclude_etf=True,
+            out_path=out,
+        )
+        is None
+    )
+    assert not out.exists()
+
+
+def test_alt_rank_late_round_due_only_inside_window(tmp_path: Path) -> None:
+    """창(09:30~09:45) 밖에서는 기록하지 않는다.
+
+    맥북이 아침에 잠들어 있다가 오후에 깨어난 날, 15:00 짜리 데이터가 "09:30" 으로
+    박히면 2차 표본이 통째로 오염된다(2026-07 슬립 사고 전례).
+    """
+    import auto_trading.daytrade.cli_helpers as ch
+
+    path = tmp_path / "alt-rank.jsonl"
+    path.write_text("", encoding="utf-8")
+    day = datetime(2026, 8, 10, tzinfo=KST)
+
+    assert ch.alt_rank_late_round_due(path, now=day.replace(hour=9, minute=31)) is True
+    assert ch.alt_rank_late_round_due(path, now=day.replace(hour=9, minute=45)) is True
+    assert ch.alt_rank_late_round_due(path, now=day.replace(hour=9, minute=20)) is False
+    assert ch.alt_rank_late_round_due(path, now=day.replace(hour=15, minute=0)) is False
+
+
+def test_alt_rank_late_round_due_is_idempotent(tmp_path: Path) -> None:
+    """오늘치 2차가 이미 있으면 False — 10분마다 도는 잡이 중복 기록하지 않게."""
+    import auto_trading.daytrade.cli_helpers as ch
+
+    path = tmp_path / "alt-rank.jsonl"
+    day = datetime(2026, 8, 10, tzinfo=KST)
+    in_window = day.replace(hour=9, minute=40)
+
+    path.write_text(
+        json.dumps({"v": 2, "round": ch.ALT_RANK_ROUND_DISCOVERY, "date": "2026-08-10"}) + "\n",
+        encoding="utf-8",
+    )
+    assert ch.alt_rank_late_round_due(path, now=in_window) is True, "1차만 있으면 2차는 아직"
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"v": 2, "round": ch.ALT_RANK_ROUND_LATE, "date": "2026-08-10"}) + "\n")
+    assert ch.alt_rank_late_round_due(path, now=in_window) is False
+
+    # 어제치 2차는 오늘 판단에 영향을 주면 안 된다.
+    assert ch.alt_rank_late_round_due(path, now=in_window.replace(day=11)) is True
+
+
+def test_alt_rank_pool_n_matches_discovery_formula() -> None:
+    """수집 풀 크기는 발굴 pool_n 산식과 같아야 두 축의 깊이가 맞는다."""
+    import auto_trading.daytrade.cli_helpers as ch
+
+    for top_n in (1, 3, 5, 10):
+        assert ch.alt_rank_pool_n(top_n) == max(top_n * 3, top_n + 7)
+    assert ch.alt_rank_pool_n() == 10  # 운영 기본(top_n=3)
