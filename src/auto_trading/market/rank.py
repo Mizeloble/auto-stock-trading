@@ -281,13 +281,33 @@ async def _merged_top(
         merged = kept
 
     merged.sort(key=source.sort_key, reverse=True)
-    chosen = merged[:top_n]
+    # 종목 중복 제거 — ka10030 은 두 시장이 서로소라 무의미했지만, 다른 순위 TR 이
+    # `mrkt_tp` 를 무시하면 같은 종목이 시장 라벨만 바꿔 두 번 들어와 풀의 실질 크기가
+    # 절반이 된다(2026-08-09 적대적 검토). ka10065 는 실측상 교집합 0 이지만, 조용히
+    # 오염되면 판정 데이터가 통째로 못 쓰게 되므로 정렬 뒤 상위 것만 남기는 가드를 둔다.
+    deduped: list[RankedSymbol] = []
+    seen: set[str] = set()
+    for r in merged:
+        if r.symbol not in seen:
+            seen.add(r.symbol)
+            deduped.append(r)
+    dropped_dup = len(merged) - len(deduped)
+    if dropped_dup:
+        log.warning(
+            "market.rank.duplicate_symbols", event_source=source.log_event, count=dropped_dup
+        )
+    chosen = deduped[:top_n]
     log.info(
         source.log_event,
         markets=list(markets),
         top_n=top_n,
         exclude_etf=exclude_etf,
-        chosen=[(r.symbol, r.market, r.volume) for r in chosen],
+        # 축마다 의미 있는 값이 다르다 — 거래량/거래대금은 volume, 순매수는 metric·rank.
+        # volume 만 찍으면 순매수 축 로그가 전부 0 이 되어 수집 정상 여부를 못 본다.
+        chosen=[
+            (r.symbol, r.market, r.volume if r.metric is None else (r.metric, r.rank))
+            for r in chosen
+        ],
         excluded_count=len(excluded),
         skipped_known=skipped_known,
     )
@@ -363,10 +383,14 @@ async def top_net_buy(
     """장중 투자자별 순매수 상위 (`ka10065`) — 발굴 대안 신호 연구용 read-only 조회.
 
     무엇/왜: 거래량·거래대금 순위는 둘 다 "얼마나 많이 거래됐나" 라는 한 축의
-    변형이라 풀이 크게 겹쳤고, 그래서 2026-07-31 거래대금 A/B 는 검정력이 안 나와
+    변형이라, 2026-07-31 거래대금 A/B 는 풀 수준 우위가 실제 top3 픽에서 뒤집히며
     기각됐다(memory: project_alt_rank_collecting). 순매수 상위는 "누가 사고 있나"
-    라는 다른 축이라 실측 겹침이 4/30(13%)에 그치고, ETF/ETN 이 상위를 점유하지도
-    않는다(probe 2026-08-09). 매매 경로는 건드리지 않고 A/B 판정용으로만 수집한다.
+    라는 다른 축이고, ETF/ETN 이 상위를 점유하지도 않는다(probe 2026-08-09 —
+    ka10065 100행 중 ETF 0). 매매 경로는 건드리지 않고 A/B 판정용으로만 수집한다.
+
+    겹침 실측 주의: 운영 풀 크기(10) 기준 거래량 풀과 2/10(20%). 다만 이 수치는
+    휴장일(2026-08-09) mock 의 **전일 종일 누적** 응답 1회 관측이라, 실제 수집
+    시각인 09:02(개장 2분)의 겹침과 다를 수 있다 — 수집 1일차에 재확인 대상.
 
     `investor`: "foreign"(외국인) 이 사전 등록된 1차 가설, "institution"(기관계)는
     탐색용 2차 — 판정 규칙은 scripts/diagnostics/rank_signal_ab_study.py 참조.

@@ -453,3 +453,25 @@ async def test_top_net_buy_keeps_rows_without_price_or_volume(settings: Settings
     assert chosen[0].metric == 219000.0
     assert chosen[1].metric == -37649.0  # abs 를 씌우면 순매도가 순매수로 둔갑
     assert chosen[0].price == 0.0 and chosen[0].volume == 0
+
+
+async def test_merged_top_dedupes_symbols_across_markets(settings: Settings) -> None:
+    """순위 TR 이 `mrkt_tp` 를 무시해 두 시장이 같은 행을 돌려줘도 풀이 오염되면 안 된다.
+
+    ka10030 은 두 시장이 서로소라 문제가 없었고 ka10065 도 실측 교집합 0 이지만,
+    이 전제가 깨지면 같은 종목이 시장 라벨만 바꿔 두 번 들어가 top_n=10 이 실질
+    5종목이 되고 A/B 풀 평균이 중복 가중된다 — 조용히 오염되는 유일한 경로였다.
+    """
+    rows = [
+        {"stk_cd": "005930", "stk_nm": "삼성전자", "netslmt": "+219000"},
+        {"stk_cd": "247540", "stk_nm": "에코프로비엠", "netslmt": "+150000"},
+    ]
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        # 두 시장 요청 모두 같은 행을 반환 = mrkt_tp 무시 시나리오
+        mock.post(PATH_RANK).mock(return_value=httpx.Response(200, json=_netbuy_payload(rows)))
+        async with KiwoomRestClient(settings=settings) as client:
+            chosen = await top_net_buy(client, top_n=10)
+
+    assert [r.symbol for r in chosen] == ["005930", "247540"], "중복 종목이 제거돼야 한다"
+    assert len({r.symbol for r in chosen}) == len(chosen)

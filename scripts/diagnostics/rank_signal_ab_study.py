@@ -1,10 +1,17 @@
 """발굴 신호 A/B (N축) — 거래량 순위 vs 대안 순위 원재료 수익률 비교 (read-only).
 
-무엇/왜: 거래대금 A/B(`alt_rank_ab_study.py`, 2026-07-31 기각)는 두 풀이 크게 겹쳐
-검정력이 안 나왔다. 그 후속으로 `data/discovery/alt-rank.jsonl` v2 가 축을 여러 개
-동시에 축적하기 시작했고(외인/기관 순매수 — 겹침 실측 13%), 이 스크립트는 축이
-몇 개든 같은 방법으로 한 번에 판정한다. 방법 자체는 selection_alpha_study →
-alt_rank_ab_study 계보를 그대로 잇는다(창 09:10→15:15 buy-and-hold, KOSPI 통제).
+무엇/왜: 거래대금 A/B(`alt_rank_ab_study.py`, 2026-07-31 기각)의 후속. `alt-rank.jsonl`
+v2 가 축을 여러 개 동시에 축적하기 시작해(외인/기관 순매수), 이 스크립트는 축이 몇 개든
+같은 방법으로 한 번에 판정한다. 방법 자체는 selection_alpha_study → alt_rank_ab_study
+계보를 그대로 잇는다(창 09:10→15:15 buy-and-hold, KOSPI 통제).
+
+거래대금이 왜 기각됐는지 정확히(적대적 재검증 2026-08-09 — 착각 방지):
+- 원인은 **풀 겹침이 아니다.** 실측 겹침은 22일 평균 37%(최대 60%)로 아래 조건 ③의
+  70% 문턱을 한 번도 넘지 않았다. "겹쳐서 검정력이 없었다"는 서술은 틀렸다.
+- 진짜 원인은 **풀 수준 우위가 top3 픽에서 뒤집힌 것**(풀은 거래대금 +1.22%p 우위인데
+  실제 픽은 거래량 우위). 즉 순위의 '상단'에서 신호가 깨졌다.
+- 시사점: 새 축도 풀 평균이 좋다고 채택하면 같은 함정에 빠진다. **조건 ②(픽 기준)가
+  실질 관문**이고, 조건 ①(풀 평균)만 통과한 축은 채택하지 않는다.
 
 사전 등록(중요 — 사후 축 고르기 방지):
 - **1차 가설은 `foreign_netbuy`(외인 순매수) 하나.** 판정은 이 축으로만 내린다.
@@ -12,6 +19,9 @@ alt_rank_ab_study 계보를 그대로 잇는다(창 09:10→15:15 buy-and-hold, 
   둘은 참고 출력이며, 여기서 나온 수치로 "그럼 이 축으로 바꾸자"는 결론을 내지 않는다
   (축을 여러 개 보면 우연히 좋은 축이 하나는 나오게 돼 있다 — 다중비교).
 - 판정 조건 3종은 아래 `_verdict_lines()` 에 박아 두고 표본 15일에 자동 출력.
+- **조기 중단 규칙**: 수집 1~3일차의 실측 겹침(각 일자 줄의 "겹침" 표기)이 70%를 넘으면
+  15일을 채우지 말고 중단한다. TR 선정 근거였던 겹침 20%는 휴장일 mock 의 *전일 종일*
+  누적 응답 1회 관측이고, 실제 수집은 09:02(개장 2분) — 조건이 달라 뒤집힐 수 있다.
 
 한계(정직 고지):
 - 수익률은 buy-and-hold 근사 — 실제 출구 규칙(트레일링 등)과 다르다. 여기서 재는 건
@@ -44,6 +54,9 @@ TOL_MIN = 12  # 스냅샷 10분 캐던스 — 목표 시각에서 이 이상 멀
 TOP_N = 3  # 실제 픽 크기
 ROUND_TRIP_COST_PCT = 0.33  # 왕복비용 근사 (reports/daily COST_* 합)
 MIN_DAYS_FOR_VERDICT = 15
+# 겹침은 자카드(교집합/합집합)로 잰다. 예전처럼 대안 풀 크기로만 나누면 기준 풀이
+# 진입일에 잘려 있을 때 상한이 50%로 눌려 조건 ③ 이 구조적으로 항상 통과했다.
+OVERLAP_MAX = 0.7
 
 BASELINE = "volume"  # 현행 발굴 신호
 PRIMARY_AXIS = "foreign_netbuy"  # 사전 등록된 1차 가설
@@ -79,7 +92,10 @@ def _pool_symbols(rows: object) -> list[str]:
 
 def parse_record(rec: dict) -> DayRecord | None:
     """alt-rank 한 줄 → DayRecord. v1(value_pool 만) · v2(alt_pools) 모두 지원."""
-    volume_pool = [str(s) for s in rec.get("volume_pool") or []]
+    # v2 는 발굴 후보 전체를 rows 로 남긴다 — 진입일에 잘린 volume_pool 보다 이쪽이 정확.
+    volume_pool = _pool_symbols(rec.get("volume_pool_rows")) or [
+        str(s) for s in rec.get("volume_pool") or []
+    ]
     if not volume_pool:
         return None
     chosen = [str(s) for s in rec.get("volume_chosen") or []]
@@ -98,9 +114,10 @@ def parse_record(rec: dict) -> DayRecord | None:
 
     if len(pools) < 2:  # 대안 축이 하나도 없으면 비교 불가
         return None
+    # 모든 축이 '그 신호로 뽑았다면' 의 원시 상위 TOP_N — 기준축도 동일 조건.
+    # 실제 매수 종목(chosen)을 쓰면 기준축만 게이트·회피 필터를 통과한 셈이라
+    # 사과 대 오렌지가 된다(기준축에 유리한 편향). chosen 은 blocked 판정용으로만 사용.
     picks = {name: pool[:TOP_N] for name, pool in pools.items()}
-    # 거래량 축의 '픽' 은 실제로 산 종목 — 차단일엔 풀 상위로 대체(다른 축과 동일 조건).
-    picks[BASELINE] = (chosen or volume_pool)[:TOP_N]
     return DayRecord(date=str(rec.get("date")), pools=pools, picks=picks, blocked=not chosen)
 
 
@@ -198,6 +215,10 @@ class AxisStats:
     pick_returns: list[float] = field(default_factory=list)
     excess: list[float] = field(default_factory=list)
     day_pool_mean: dict[str, float] = field(default_factory=dict)
+    # 조건 ② 는 반드시 **같은 날끼리** 비교해야 한다 — 축마다 수집 시작일이 달라
+    # 전체 풀링 평균을 빼면 시장 국면 차이가 그대로 '효과' 로 둔갑한다(적대적 검토
+    # 실측: 픽이 글자 그대로 동일한데도 -3.18%p 가 나옴). 그래서 일자별로 보관한다.
+    day_pick_mean: dict[str, float] = field(default_factory=dict)
     overlap_with_baseline: list[float] = field(default_factory=list)
 
 
@@ -220,18 +241,17 @@ def _verdict_lines(stats: dict[str, AxisStats]) -> list[str]:
     t = paired_t(diffs)
     mean_diff = statistics.fmean(diffs) if diffs else 0.0
     pos = sum(1 for d in diffs if d > 0)
-    pick_gap = (
-        statistics.fmean(primary.pick_returns) - statistics.fmean(base.pick_returns)
-        if primary.pick_returns and base.pick_returns
-        else 0.0
-    )
+    # 픽도 공통일 페어드로 — 전체 풀링 평균 차는 날짜 집합 불일치를 효과로 오인한다.
+    pick_common = sorted(set(primary.day_pick_mean) & set(base.day_pick_mean))
+    pick_diffs = [primary.day_pick_mean[d] - base.day_pick_mean[d] for d in pick_common]
+    pick_gap = statistics.fmean(pick_diffs) if pick_diffs else 0.0
     overlap = (
         statistics.fmean(primary.overlap_with_baseline) if primary.overlap_with_baseline else 0
     )
 
     cond1 = t is not None and abs(t) >= 2.0 and mean_diff > 0
     cond2 = pick_gap >= ROUND_TRIP_COST_PCT
-    cond3 = overlap <= 0.7
+    cond3 = overlap <= OVERLAP_MAX
 
     out.append(
         f"판정 대상(1차 가설): {_label(PRIMARY_AXIS)} vs {_label(BASELINE)} · 공통 {len(diffs)}일"
@@ -248,10 +268,11 @@ def _verdict_lines(stats: dict[str, AxisStats]) -> list[str]:
     )
     out.append(
         f"  ② top{TOP_N} 픽 차이가 왕복비용({ROUND_TRIP_COST_PCT}%) 이상: "
-        f"{'✅' if cond2 else '❌'} {pick_gap:+.2f}%p"
+        f"{'✅' if cond2 else '❌'} {pick_gap:+.2f}%p (공통 {len(pick_diffs)}일 페어드)"
     )
     out.append(
-        f"  ③ 풀 겹침이 작아 검정력 있음(≤70%): {'✅' if cond3 else '❌'} 겹침 {overlap:.0%}"
+        f"  ③ 풀이 실제로 다름(자카드 겹침 ≤{OVERLAP_MAX:.0%}): "
+        f"{'✅' if cond3 else '❌'} 겹침 {overlap:.0%}"
     )
     if len(diffs) < MIN_DAYS_FOR_VERDICT:
         return out  # 표본 미달이면 채택/기각 문구를 아예 내지 않는다(조기 결론 방지).
@@ -311,15 +332,21 @@ def analyze(records: list[DayRecord], *, snapshot_root: Path = SNAPSHOT_ROOT) ->
                 st.pool_returns.append(r)
                 if kospi is not None:
                     st.excess.append(r - kospi)
+            day_picks: list[float] = []
             for sym in rec.picks.get(axis, []):
                 r = ret.get(sym)
                 if r is not None:
+                    day_picks.append(r)
                     st.pick_returns.append(r)
             if day_returns:
                 st.day_pool_mean[rec.date] = statistics.fmean(day_returns)
+            if day_picks:
+                st.day_pick_mean[rec.date] = statistics.fmean(day_picks)
+            union = set(pool) | base_pool
+            jac = len(set(pool) & base_pool) / len(union) if union else 0.0
             if axis != BASELINE and pool:
-                st.overlap_with_baseline.append(len(set(pool) & base_pool) / len(pool))
-            ov = "" if axis == BASELINE else f" 겹침 {len(set(pool) & base_pool)}/{len(pool)}"
+                st.overlap_with_baseline.append(jac)
+            ov = "" if axis == BASELINE else f" 겹침 {jac:.0%}"
             lines.append(f"    {_label(axis):<12}{describe(day_returns)}{ov}")
 
     return {
@@ -398,12 +425,24 @@ def selftest() -> None:
     assert rec is not None
     assert rec.pools[BASELINE] == ["A", "B", "C"]
     assert rec.pools["foreign_netbuy"] == ["X", "A"]
-    assert rec.picks[BASELINE] == ["A", "B"]  # 실제 픽 우선
+    # 픽은 모든 축이 '원시 풀 상위 TOP_N' — 기준축도 실제 매수 종목이 아니라 풀 상위.
+    assert rec.picks[BASELINE] == ["A", "B", "C"]
+    assert rec.picks["foreign_netbuy"] == ["X", "A"]
     assert not rec.blocked
 
     blocked = parse_record({**v2, "volume_chosen": []})
     assert blocked is not None and blocked.blocked
-    assert blocked.picks[BASELINE] == ["A", "B", "C"][:TOP_N]  # 차단일은 풀 상위로 대체
+    assert blocked.picks[BASELINE] == ["A", "B", "C"]  # 차단 여부와 무관하게 동일
+
+    # v2 의 volume_pool_rows 가 있으면 (진입일에 잘린) volume_pool 보다 우선한다.
+    truncated = parse_record(
+        {
+            **v2,
+            "volume_pool": ["A", "B"],
+            "volume_pool_rows": [{"symbol": s_} for s_ in ["A", "B", "C", "D"]],
+        }
+    )
+    assert truncated is not None and truncated.pools[BASELINE] == ["A", "B", "C", "D"]
 
     v1 = {"v": 1, "date": "2026-07-06", "volume_pool": ["A"], "value_pool": [{"symbol": "Z"}]}
     rec1 = parse_record(v1)
@@ -415,9 +454,21 @@ def selftest() -> None:
     t = paired_t([1.0, 2.0, 3.0])
     assert t is not None and t > 0
 
+    # 조건 ② 는 공통일 페어드여야 한다 — 날짜가 안 겹치면 0 이 나와야 정상.
+    disjoint = {
+        BASELINE: AxisStats(day_pick_mean={"d1": 5.0}, day_pool_mean={"d1": 0.0}),
+        PRIMARY_AXIS: AxisStats(day_pick_mean={"d2": 5.0}, day_pool_mean={"d2": 1.0}),
+    }
+    line2 = next(x for x in _verdict_lines(disjoint) if "②" in x)
+    assert "+0.00%p" in line2 and "공통 0일" in line2, line2
+
     st = {
-        BASELINE: AxisStats(pick_returns=[0.0], day_pool_mean={"d1": 0.0}),
-        PRIMARY_AXIS: AxisStats(pick_returns=[1.0], day_pool_mean={"d1": 1.0}),
+        BASELINE: AxisStats(
+            pick_returns=[0.0], day_pool_mean={"d1": 0.0}, day_pick_mean={"d1": 0.0}
+        ),
+        PRIMARY_AXIS: AxisStats(
+            pick_returns=[1.0], day_pool_mean={"d1": 1.0}, day_pick_mean={"d1": 1.0}
+        ),
     }
     lines = _verdict_lines(st)
     # 공통 1일 = 표본 미달 → 채택/기각 문구가 나오면 안 된다(조기 결론 방지).

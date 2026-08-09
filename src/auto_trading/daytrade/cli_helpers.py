@@ -601,12 +601,21 @@ async def record_alt_ranking(
         chosen = [c.symbol for c in result.chosen]
         blocked = [s for s, _ in result.blocked]
         now = datetime.now(KST)
+        # 기준축(거래량) 풀은 **발굴 후보 전체**(`result.candidates`)로 남긴다.
+        # `[*chosen, *blocked]` 는 오케스트레이터가 top_n 을 채우면 루프를 break 해서
+        # 진입일엔 4~5종목으로 잘린다 — 대안 축은 항상 pool_n(10)개라, 그대로 두면
+        # A/B 가 '신호 차이' 가 아니라 '순위 깊이 차이' 를 재게 된다(2026-08-09 적대적
+        # 검토). market/rank/metric 까지 남겨야 나중에 다른 병합 규칙으로 재구성도 된다.
+        baseline_rows = _pool_rows(result.candidates)
         record: dict[str, Any] = {
             "v": 2,
             "date": now.date().isoformat(),
             "ts": now.isoformat(),
             "volume_chosen": chosen,
-            "volume_pool": [*chosen, *blocked],
+            # v1 리더 호환: 코드 문자열 리스트라는 형태를 유지한다(타입 바꾸면 기존
+            # 소비자 3종이 조용히 깨진다). 내용은 후보 전체로 넓히되 과거와 동일한 순서.
+            "volume_pool": [r["symbol"] for r in baseline_rows] or [*chosen, *blocked],
+            "volume_pool_rows": baseline_rows,
             "alt_pools": {name: _pool_rows(pool) for name, pool in pools.items()},
         }
         # v1 리더(과거 판정 스크립트)가 계속 읽을 수 있도록 거래대금 풀은 최상위에도 남긴다.

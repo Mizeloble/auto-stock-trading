@@ -249,12 +249,16 @@ def _patch_alt_pools(monkeypatch, *, value=None, foreign=None, institution=None)
     monkeypatch.setattr(ch, "top_net_buy", fake_top_net_buy)
 
 
-def _discovery(chosen: list[str], blocked: list[str]) -> DiscoveryResult:
+def _discovery(
+    chosen: list[str], blocked: list[str], candidates: list[str] | None = None
+) -> DiscoveryResult:
+    pool = candidates if candidates is not None else [*chosen, *blocked]
     return DiscoveryResult(
         chosen=[_ranked(s) for s in chosen],
         blocked=[(s, "reason") for s in blocked],
         gates={},
         note_ko="테스트",
+        candidates=[_ranked(s) for s in pool],
     )
 
 
@@ -299,6 +303,35 @@ async def test_record_alt_ranking_appends_jsonl(tmp_path: Path, monkeypatch) -> 
     assert pools["institution_netbuy"][0]["metric"] == -1_000.0
     # v1 리더 하위 호환 — 거래대금 풀은 최상위에도 미러링.
     assert [r["symbol"] for r in rec["value_pool"]] == ["222222", "111111"]
+
+
+async def test_record_alt_ranking_records_full_baseline_pool(tmp_path: Path, monkeypatch) -> None:
+    """기준(거래량) 풀은 `chosen+blocked` 가 아니라 발굴 후보 **전체**로 남아야 한다.
+
+    오케스트레이터는 top_n 을 채우면 후보 루프를 break 해서 진입일엔 chosen+blocked 가
+    4~5종목으로 잘린다. 대안 축은 항상 pool_n(10)개라, 그대로 두면 A/B 가 '신호 차이'
+    가 아니라 '순위 깊이 차이' 를 재게 된다(2026-08-09 적대적 검토).
+    """
+    import json
+
+    _patch_alt_pools(monkeypatch, foreign=[_ranked("X", metric=1.0, rank=1)])
+    out = tmp_path / "alt-rank.jsonl"
+
+    await record_alt_ranking(
+        None,  # type: ignore[arg-type]
+        # 진입일 재현: 실제 매수 1 + 차단 1 인데 후보 풀은 4종목
+        _discovery(chosen=["A"], blocked=["B"], candidates=["A", "B", "C", "D"]),
+        pool_n=10,
+        exclude_etf=True,
+        out_path=out,
+    )
+
+    rec = json.loads(out.read_text(encoding="utf-8").strip())
+    assert [r["symbol"] for r in rec["volume_pool_rows"]] == ["A", "B", "C", "D"]
+    # v1 리더 호환: volume_pool 은 여전히 '코드 문자열 리스트' 여야 한다.
+    assert rec["volume_pool"] == ["A", "B", "C", "D"]
+    assert all(isinstance(s, str) for s in rec["volume_pool"])
+    assert rec["volume_chosen"] == ["A"]
 
 
 async def test_record_alt_ranking_skips_only_failed_pool(tmp_path: Path, monkeypatch) -> None:
