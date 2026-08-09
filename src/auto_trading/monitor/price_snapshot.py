@@ -12,10 +12,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 
@@ -100,12 +101,15 @@ def load_todays_discovery_symbols(
 
     무엇/왜: topcap 스냅샷은 시총 상위만 담아 거래량 발굴 소형주의 일중 데이터가
     비어 있었다(진입 피처·MFE/MAE None — memory: project_snapshot_join_coverage).
-    발굴 기록(volume_pool + value_pool, PR #164)을 읽어 그 종목들도 10분 스냅샷
+    발굴 기록(volume_pool + 대안 신호 풀들, PR #164)을 읽어 그 종목들도 10분 스냅샷
     대상에 추가한다. read-only 로컬 파일 파싱 — 외부 호출 없음(monitor/ 규칙).
 
     - 오늘(when) 날짜 레코드만 사용. 손상 라인·파일 없음은 빈 리스트.
     - `exclude_symbols`(보통 topcap universe)에 이미 있는 종목은 제외 — 중복 호출 방지.
-    - 이름·시장은 value_pool 레코드에서 보강(volume_pool 은 코드만 기록됨).
+    - 이름·시장은 대안 풀 레코드에서 보강(volume_pool 은 코드만 기록됨).
+    - 대안 풀은 v2 의 `alt_pools` 맵(거래대금·외인/기관 순매수) 전체를 대상으로 한다.
+      v1 레코드는 최상위 `value_pool` 만 있으므로 둘 다 읽는다. **여기에 새 풀을 빠뜨리면
+      그 종목의 일중 가격이 안 쌓여 A/B 판정 자체가 불가능해진다.**
     """
     target_day = (when or datetime.now(tz=KST).date()).isoformat()
     excluded = exclude_symbols or set()
@@ -130,19 +134,30 @@ def load_todays_discovery_symbols(
         for sym in rec.get("volume_pool") or []:
             if isinstance(sym, str) and sym and sym not in excluded:
                 symbols.setdefault(sym, SnapshotTarget(symbol=sym))
-        for row in rec.get("value_pool") or []:
-            if not isinstance(row, dict):
-                continue
+        for row in _alt_pool_rows(rec):
             sym = row.get("symbol")
             if not isinstance(sym, str) or not sym or sym in excluded:
                 continue
-            # value_pool 엔 이름·시장이 있으므로 volume_pool 만의 항목도 보강.
+            # 대안 풀엔 이름·시장이 있으므로 volume_pool 만의 항목도 보강.
             symbols[sym] = SnapshotTarget(
                 symbol=sym,
                 name=str(row.get("name") or ""),
                 market=str(row.get("market") or ""),
             )
     return list(symbols.values())
+
+
+def _alt_pool_rows(rec: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """alt-rank 레코드의 모든 대안 풀 행을 훑는다 (v2 `alt_pools` + v1 `value_pool`)."""
+    pools = rec.get("alt_pools")
+    if isinstance(pools, dict):
+        for pool in pools.values():
+            if isinstance(pool, list):
+                yield from (row for row in pool if isinstance(row, dict))
+    # v1 레코드(또는 v2 의 하위 호환 미러) — 중복은 호출자의 dict 병합이 흡수.
+    legacy = rec.get("value_pool")
+    if isinstance(legacy, list):
+        yield from (row for row in legacy if isinstance(row, dict))
 
 
 @dataclass

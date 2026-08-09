@@ -201,10 +201,52 @@ def test_merge_base_avoid_symbols_ignores_empty_entries() -> None:
     assert routed.avoid_symbols == ["005930"]
 
 
-def _ranked(symbol: str, *, volume: int = 100, price: float = 1000.0) -> RankedSymbol:
+def _ranked(
+    symbol: str,
+    *,
+    volume: int = 100,
+    price: float = 1000.0,
+    metric: float | None = None,
+    rank: int | None = None,
+) -> RankedSymbol:
     return RankedSymbol(
-        symbol=symbol, market="KOSPI", name=f"이름{symbol}", volume=volume, price=price
+        symbol=symbol,
+        market="KOSPI",
+        name=f"이름{symbol}",
+        volume=volume,
+        price=price,
+        metric=metric,
+        rank=rank,
     )
+
+
+def _patch_alt_pools(monkeypatch, *, value=None, foreign=None, institution=None) -> None:
+    """record_alt_ranking 이 부르는 순위 조회 3종을 한 번에 페이크로 교체.
+
+    각 인자는 `(rest, top_n, exclude_etf) -> list[RankedSymbol]` 을 흉내 내는 async
+    콜러블이거나, 그대로 돌려줄 리스트. None 이면 빈 풀(= 그 축 스킵).
+    """
+    import auto_trading.daytrade.cli_helpers as ch
+
+    def _as_fetch(spec):
+        if callable(spec):
+            return spec
+
+        async def _fixed(_rest, **_kw):
+            return list(spec or [])
+
+        return _fixed
+
+    fake_value = _as_fetch(value)
+    fake_foreign = _as_fetch(foreign)
+    fake_institution = _as_fetch(institution)
+
+    async def fake_top_net_buy(rest, *, investor, top_n, exclude_etf):
+        fetch = fake_foreign if investor == "foreign" else fake_institution
+        return await fetch(rest, top_n=top_n, exclude_etf=exclude_etf)
+
+    monkeypatch.setattr(ch, "top_value", fake_value)
+    monkeypatch.setattr(ch, "top_net_buy", fake_top_net_buy)
 
 
 def _discovery(chosen: list[str], blocked: list[str]) -> DiscoveryResult:
@@ -217,20 +259,23 @@ def _discovery(chosen: list[str], blocked: list[str]) -> DiscoveryResult:
 
 
 async def test_record_alt_ranking_appends_jsonl(tmp_path: Path, monkeypatch) -> None:
-    """발굴 결과 + 거래대금 풀이 JSONL 한 줄로 축적된다 (새 발굴 신호 A/B 데이터)."""
+    """발굴 결과 + 대안 순위 풀 3종이 JSONL 한 줄(v2)로 축적된다."""
     import json
 
-    import auto_trading.daytrade.cli_helpers as ch
-
-    async def fake_top_value(_rest, *, top_n, exclude_etf):
-        assert top_n == 10 and exclude_etf is True
+    async def fake_top_value(_rest, **kw):
+        assert kw["top_n"] == 10 and kw["exclude_etf"] is True
         return [_ranked("222222", volume=10, price=300_000.0), _ranked("111111")]
 
-    monkeypatch.setattr(ch, "top_value", fake_top_value)
+    _patch_alt_pools(
+        monkeypatch,
+        value=fake_top_value,
+        foreign=[_ranked("333333", volume=0, price=0.0, metric=594_000.0, rank=1)],
+        institution=[_ranked("444444", volume=0, price=0.0, metric=-1_000.0, rank=2)],
+    )
     out = tmp_path / "alt-rank.jsonl"
 
     path = await record_alt_ranking(
-        None,  # type: ignore[arg-type]  # top_value 를 패치했으므로 rest 미사용
+        None,  # type: ignore[arg-type]  # 순위 조회를 전부 패치했으므로 rest 미사용
         _discovery(chosen=["005930"], blocked=["356680"]),
         pool_n=10,
         exclude_etf=True,
@@ -241,21 +286,57 @@ async def test_record_alt_ranking_appends_jsonl(tmp_path: Path, monkeypatch) -> 
     lines = out.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
     rec = json.loads(lines[0])
-    assert rec["v"] == 1
+    assert rec["v"] == 2
     assert rec["volume_chosen"] == ["005930"]
     assert rec["volume_pool"] == ["005930", "356680"]
+    pools = rec["alt_pools"]
+    assert set(pools) == {"value", "foreign_netbuy", "institution_netbuy"}
+    assert [r["symbol"] for r in pools["value"]] == ["222222", "111111"]
+    assert pools["value"][0]["price"] == 300_000.0
+    # 순매수 축은 metric/rank 로만 의미가 있고 부호를 유지해야 한다(병합 규칙 재구성용).
+    assert pools["foreign_netbuy"][0]["metric"] == 594_000.0
+    assert pools["foreign_netbuy"][0]["rank"] == 1
+    assert pools["institution_netbuy"][0]["metric"] == -1_000.0
+    # v1 리더 하위 호환 — 거래대금 풀은 최상위에도 미러링.
     assert [r["symbol"] for r in rec["value_pool"]] == ["222222", "111111"]
-    assert rec["value_pool"][0]["price"] == 300_000.0
+
+
+async def test_record_alt_ranking_skips_only_failed_pool(tmp_path: Path, monkeypatch) -> None:
+    """한 축의 조회 실패가 나머지 축의 그날 데이터를 통째로 날리면 안 된다."""
+    import json
+
+    async def boom(_rest, **_kw):
+        raise RuntimeError("kiwoom down")
+
+    _patch_alt_pools(
+        monkeypatch,
+        value=boom,
+        foreign=[_ranked("333333", metric=1.0, rank=1)],
+        institution=None,  # 빈 풀 — 이 축도 스킵
+    )
+    out = tmp_path / "alt-rank.jsonl"
+
+    path = await record_alt_ranking(
+        None,  # type: ignore[arg-type]
+        _discovery(chosen=["005930"], blocked=[]),
+        pool_n=10,
+        exclude_etf=True,
+        out_path=out,
+    )
+
+    assert path == out
+    rec = json.loads(out.read_text(encoding="utf-8").strip())
+    assert set(rec["alt_pools"]) == {"foreign_netbuy"}
+    assert "value_pool" not in rec  # 거래대금 축이 없으면 하위 호환 미러도 없다
 
 
 async def test_record_alt_ranking_swallows_fetch_failure(tmp_path: Path, monkeypatch) -> None:
     """대안 순위 조회 실패는 매매를 막으면 안 된다 — None 반환 + 파일 미생성 + 예외 없음."""
-    import auto_trading.daytrade.cli_helpers as ch
 
-    async def boom(_rest, *, top_n, exclude_etf):
+    async def boom(_rest, **_kw):
         raise RuntimeError("kiwoom down")
 
-    monkeypatch.setattr(ch, "top_value", boom)
+    _patch_alt_pools(monkeypatch, value=boom, foreign=boom, institution=boom)
     out = tmp_path / "alt-rank.jsonl"
 
     path = await record_alt_ranking(
@@ -271,14 +352,9 @@ async def test_record_alt_ranking_swallows_fetch_failure(tmp_path: Path, monkeyp
 
 
 async def test_record_alt_ranking_skips_empty_pool(tmp_path: Path, monkeypatch) -> None:
-    """빈 대안 풀은 기록하지 않는다 — 2026-07-05 pytest 가 value_pool 0 라인 12줄을
+    """모든 대안 풀이 비면 기록하지 않는다 — 2026-07-05 pytest 가 0 라인 12줄을
     운영 파일에 오염시킨 회귀 방지(조회 실패·페이크 fetch 모두 이 분기로 걸러짐)."""
-    import auto_trading.daytrade.cli_helpers as ch
-
-    async def empty(_rest, *, top_n, exclude_etf):
-        return []
-
-    monkeypatch.setattr(ch, "top_value", empty)
+    _patch_alt_pools(monkeypatch)  # 셋 다 빈 풀
     out = tmp_path / "alt-rank.jsonl"
 
     path = await record_alt_ranking(

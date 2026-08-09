@@ -15,6 +15,8 @@ import respx
 
 from auto_trading.config import KiwoomMode, Settings
 from auto_trading.kiwoom.endpoints import (
+    INVESTOR_TP_FOREIGN,
+    INVESTOR_TP_INSTITUTION,
     MARKET_TP_KOSDAQ,
     MARKET_TP_KOSPI,
     PATH_RANK,
@@ -23,7 +25,7 @@ from auto_trading.kiwoom.endpoints import (
 )
 from auto_trading.kiwoom.rest import KiwoomRestClient
 from auto_trading.kiwoom.schemas import KiwoomError
-from auto_trading.market.rank import top_value, top_volume
+from auto_trading.market.rank import top_net_buy, top_value, top_volume
 
 
 @pytest.fixture
@@ -343,3 +345,111 @@ async def test_top_volume_sends_all_required_body_fields(settings: Settings) -> 
     }
     missing = required - set(body)
     assert not missing, f"필수 필드 누락: {missing} (probe 2026-05-03 에러 회귀)"
+
+
+# ---- 장중 투자자별 순매수 상위 (ka10065, 발굴 대안 신호 A/B — probe 2026-08-09) ----
+
+
+def _netbuy_payload(rows: list[dict]) -> dict:
+    """ka10065 응답 — 가격·누적거래량 필드가 아예 없는 것이 이 TR 의 특징."""
+    return {
+        "return_code": 0,
+        "return_msg": "정상",
+        "opmr_invsr_trde_upper": rows,
+    }
+
+
+async def test_top_net_buy_sends_ka10065_with_required_body(settings: Settings) -> None:
+    """api-id 와 필수 3필드(trde_tp/mrkt_tp/orgn_tp) 회귀 게이트 — probe 2026-08-09 실측."""
+    captured: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json=_netbuy_payload([]))
+
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        route = mock.post(PATH_RANK).mock(side_effect=_handler)
+        async with KiwoomRestClient(settings=settings) as client:
+            await top_net_buy(client, investor="foreign", top_n=1, markets=("KOSPI",))
+
+    assert route.calls[0].request.headers["api-id"] == TR.RANK_INTRADAY_INVESTOR
+    body = captured[0]
+    assert body["trde_tp"] == "1"  # 1=순매수
+    assert body["orgn_tp"] == INVESTOR_TP_FOREIGN
+    assert body["mrkt_tp"] == MARKET_TP_KOSPI
+    # 거래량 TR 전용 필드가 섞여 들어가면 안 된다(TR 별 바디 분리 회귀).
+    assert "sort_tp" not in body
+
+
+async def test_top_net_buy_institution_switches_orgn_tp(settings: Settings) -> None:
+    captured: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json=_netbuy_payload([]))
+
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_RANK).mock(side_effect=_handler)
+        async with KiwoomRestClient(settings=settings) as client:
+            await top_net_buy(client, investor="institution", top_n=1, markets=("KOSPI",))
+
+    assert captured[0]["orgn_tp"] == INVESTOR_TP_INSTITUTION
+
+
+async def test_top_net_buy_merges_by_rank_not_raw_quantity(settings: Settings) -> None:
+    """두 시장 병합은 '시장 내 순위' 인터리브 — 순매수 *수량* desc 가 아니다.
+
+    수량으로 병합하면 주가가 낮은 KOSDAQ 소형주가 상위를 독식해(거래량 순위가 겪는
+    바로 그 편향) 대안 신호로서 의미가 사라진다. KOSPI 1위 · KOSDAQ 1위 · KOSPI 2위 …
+    순서가 나와야 한다.
+    """
+    kospi_rows = [
+        {"stk_cd": "005930", "stk_nm": "삼성전자", "netslmt": "+219000"},
+        {"stk_cd": "096770", "stk_nm": "SK이노베이션", "netslmt": "+150000"},
+    ]
+    # KOSDAQ 1위의 수량이 KOSPI 1위보다 크다 — 수량 병합이면 이 종목이 1등이 된다.
+    kosdaq_rows = [
+        {"stk_cd": "247540", "stk_nm": "에코프로비엠", "netslmt": "+900000"},
+        {"stk_cd": "086520", "stk_nm": "에코프로", "netslmt": "+100000"},
+    ]
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        body = json.loads(request.content)
+        rows = kospi_rows if body["mrkt_tp"] == MARKET_TP_KOSPI else kosdaq_rows
+        return httpx.Response(200, json=_netbuy_payload(rows))
+
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_RANK).mock(side_effect=_handler)
+        async with KiwoomRestClient(settings=settings) as client:
+            chosen = await top_net_buy(client, top_n=4)
+
+    assert [r.symbol for r in chosen] == ["005930", "247540", "096770", "086520"]
+    assert [r.rank for r in chosen] == [1, 1, 2, 2]
+    assert [r.market for r in chosen] == ["KOSPI", "KOSDAQ", "KOSPI", "KOSDAQ"]
+
+
+async def test_top_net_buy_keeps_rows_without_price_or_volume(settings: Settings) -> None:
+    """가격·거래량이 없는 행도 살아남고, 순매수는 부호를 유지한다(음수 = 순매도)."""
+    rows = [
+        {"stk_cd": "005930", "stk_nm": "삼성전자", "netslmt": "+219000"},
+        {"stk_cd": "000660", "stk_nm": "SK하이닉스", "netslmt": "-37649"},
+    ]
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_RANK).mock(return_value=httpx.Response(200, json=_netbuy_payload(rows)))
+        async with KiwoomRestClient(settings=settings) as client:
+            chosen = await top_net_buy(client, top_n=5, markets=("KOSPI",))
+
+    assert len(chosen) == 2, "trde_qty 부재로 행이 통째로 버려지면 안 된다"
+    assert chosen[0].metric == 219000.0
+    assert chosen[1].metric == -37649.0  # abs 를 씌우면 순매도가 순매수로 둔갑
+    assert chosen[0].price == 0.0 and chosen[0].volume == 0

@@ -8,6 +8,13 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [ ] **새 발굴 신호 A/B — 외인/기관 순매수 순위 수집 시작** (2026-08-09 착수, `feat/rank-signal-ab` · 표본 0/15일)
+  - **무엇**: 발굴 원천을 거래량 순위(ka10030) 하나에서 늘리기 위한 **수집·판정 인프라만** 추가. 매매 경로는 한 줄도 안 바뀐다. ① probe 로 순매수 계열 순위 TR 4종을 mock 실측(`scripts/diagnostics/probe_rank_netbuy.py`) → **ka10065(장중 투자자별 순매수 상위)** 채택. ② `market/rank.py` 의 TR·바디 하드코딩을 `RankSource` 값 객체로 파라미터화하고 `top_net_buy(investor="foreign"|"institution")` 추가(`_merged_top` 몸통은 무변경 재사용). ③ `record_alt_ranking` 레코드를 v2 로 — `alt_pools` 맵에 축을 몇 개든 담고, **한 축의 조회 실패가 그날 데이터를 통째로 날리지 않게 축 단위 스킵**(기존은 all-or-nothing). `value_pool` 은 v1 리더용 미러로 유지. ④ 새 풀 종목도 10분 스냅샷 대상에 포함(`monitor/price_snapshot.py`). ⑤ 판정 스크립트 `scripts/diagnostics/rank_signal_ab_study.py` 선작성(N축, `--selftest`).
+  - **왜**: 2026-08 전면 재검토 결론 = 파라미터 전 축이 "현행 유지"로 종결, 남은 경로는 새 신호뿐. 거래대금 A/B 가 기각된 실제 원인은 **풀 겹침**(같은 "많이 거래됐나" 축의 변형이라 검정력 부족, t≈−1.77). 순매수는 "누가 사고 있나"라는 다른 축이라 **실측 겹침 4/30(13%)**, ETF/ETN 이 상위를 점유하지도 않는다(ka10065 100행 중 ETF 0). 후보 4종 중 ka90009 는 mrkt_tp 를 무시해 시장 분리 불가, ka10034·ka10035 는 인버스 ETF 가 상위 점유 + 거래량 필드가 uint32 max 로 깨져 탈락.
+  - **사전 등록(중요)**: **1차 가설은 `foreign_netbuy` 하나**, 기관계는 탐색용 2차. 판정 조건 3종 — ① 일별 풀 평균 차 페어드 |t|≥2 & 양수 ② top3 픽 차이 ≥ 왕복비용 0.33%p ③ 풀 겹침 ≤70%. **셋 다 충족해야 채택 후보**, 하나라도 미달이면 기각(현행 유지). 표본 문턱은 *두 축이 함께 있는 날* 15일 — 전체 평가일로 재면 수집 이전 v1 일자까지 세어 조기 판정이 난다. 채택돼도 발굴 소스 교체는 출구 규칙 반영 반사실을 한 번 더 통과한 뒤.
+  - **어떻게 확인**: 다음 paper-day 장중 `tail -1 data/discovery/alt-rank.jsonl | python3 -m json.tool` → `alt_pools` 에 `foreign_netbuy`·`institution_netbuy` 목록. 스냅샷은 `data/snapshots/discovered-*.jsonl` 에 그 종목 라인 증가. 판정은 `uv run python scripts/diagnostics/rank_signal_ab_study.py` (표본 미달이면 "판정 보류"만 출력). 로직 검증은 `… --selftest`. 테스트 `uv run pytest tests/test_market_rank.py tests/test_daytrade_cli_helpers.py tests/test_monitor_price_snapshot.py`.
+  - **남은 것**: 거래일 15일 축적(9월 초 예상) 후 판정. 수집 비용은 발굴당 API 4콜 + 스냅샷 대상 ~15종목 증가로 저비용.
+
 - [x] **시뮬 EOD 청산 체결가 로깅 — 리포트 실현손익 과소집계 수정** (2026-08-03, `fix/liquidation-price-in-reports`)
   - **무엇**: dry-run 청산 이벤트(`runner.liquidate_simulated`)에 체결가 근사 `sell_price`(마지막 봉 종가, 없으면 평단가)를 추가. 리포트 FIFO 집계는 원래 sell_price 를 받을 준비가 돼 있었는데 러너가 안 남겨서, 마감 청산 손익이 실현손익에서 통째로 빠졌다. 종가 캐시(`_last_closes`)는 섀도우 전용에서 전 모드 공용으로 승격.
   - **왜**: 8/3 섀도우 데이 실측 — 원장(jsonl)은 484810 마감 청산 @17,450 포함 +475,771원인데 리포트는 +254,813원(청산분 약 +22만원 누락). 이 리포트가 **15일 섀도우 게이트 판정**(`shadow_gate_study.py`, 현재 11일차)의 입력이라 과소집계가 판정을 게이트 유지 쪽으로 왜곡한다. shadow-2026-08-03.json 은 원장 가격으로 재생성 완료(실현 +543,180 / 비용 차감 +475,751 — 원장과 ~20원 오차로 정합).

@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
@@ -33,7 +33,7 @@ from ..heartbeat import Heartbeat
 from ..kiwoom.rest import KiwoomRestClient
 from ..market.chart import bars_to_dataframe
 from ..market.index import IndexMomentumTracker, Market
-from ..market.rank import top_value
+from ..market.rank import RankedSymbol, top_net_buy, top_value
 from ..notify.factory import build_notifier
 from ..notify.reporting import ReportingNotifier
 from ..notify.telegram_commands import TelegramCommandHandler
@@ -520,6 +520,37 @@ async def _cancel_aux(*tasks: asyncio.Task[None] | None) -> None:
 
 ALT_RANK_PATH = Path("data/discovery/alt-rank.jsonl")
 
+# 수집할 대안 발굴 신호 — 이름은 JSONL 의 `alt_pools` 키가 되고 판정 스크립트의 축 이름이 된다.
+# "value"(거래대금)는 2026-07-31 A/B 기각됐으나, 저비용이고 판정 스크립트의 대조군으로
+# 계속 쓰이므로 수집은 유지한다.
+_ALT_POOL_FETCHERS: dict[
+    str, Callable[[KiwoomRestClient, int, bool], Awaitable[list[RankedSymbol]]]
+] = {
+    "value": lambda rest, n, etf: top_value(rest, top_n=n, exclude_etf=etf),
+    "foreign_netbuy": lambda rest, n, etf: top_net_buy(
+        rest, investor="foreign", top_n=n, exclude_etf=etf
+    ),
+    "institution_netbuy": lambda rest, n, etf: top_net_buy(
+        rest, investor="institution", top_n=n, exclude_etf=etf
+    ),
+}
+
+
+def _pool_rows(pool: list[RankedSymbol]) -> list[dict[str, Any]]:
+    """순위 행 → JSONL 직렬화 형태. metric/rank 는 병합 규칙 재구성용으로 함께 남긴다."""
+    return [
+        {
+            "symbol": r.symbol,
+            "name": r.name,
+            "market": r.market,
+            "price": r.price,
+            "volume": r.volume,
+            "metric": r.metric,
+            "rank": r.rank,
+        }
+        for r in pool
+    ]
+
 
 async def record_alt_ranking(
     rest: KiwoomRestClient,
@@ -529,57 +560,65 @@ async def record_alt_ranking(
     exclude_etf: bool,
     out_path: Path = ALT_RANK_PATH,
 ) -> Path | None:
-    """발굴 시점의 대안 순위(거래대금 상위)를 JSONL 로 축적 — 새 발굴 신호 A/B 용.
+    """발굴 시점의 대안 순위 풀들을 JSONL 로 축적 — 새 발굴 신호 A/B 용.
 
     무엇/왜: 키움 순위 TR 은 당일 것만 조회 가능해 과거로 거슬러 반사실을 만들 수
-    없다(2026-07-04 선정 알파 검증의 한계). 그래서 발굴 직후 같은 시점에 거래대금
-    순위 풀을 기록해 두면 몇 주 뒤 "거래량 vs 거래대금 발굴" 비교가 가능해진다.
+    없다(2026-07-04 선정 알파 검증의 한계). 그래서 발굴 직후 같은 시점에 대안 순위
+    풀을 기록해 둬야 몇 주 뒤 "거래량 발굴 vs 대안 신호" 비교가 가능해진다.
     매매 동작 무영향 — 순수 데이터 축적이며, 실패는 로그만 남기고 삼킨다.
 
-    기록 형식(한 줄 = 한 발굴):
-    {"v":1, "date", "ts", "volume_chosen": [...], "volume_pool": [...],
-     "value_pool": [{"symbol","name","market","price","volume"}...]}
-    value_pool 은 ETF 필터만 발굴과 동일 적용, 회피/거래불가 제외는 하지 않는다
+    기록 형식(한 줄 = 한 발굴, v2):
+    {"v":2, "date", "ts", "volume_chosen": [...], "volume_pool": [...],
+     "alt_pools": {"<축이름>": [{"symbol","name","market","price","volume","metric","rank"}...]},
+     "value_pool": [...]}   # v1 하위 호환 미러 — 신규 소비자는 alt_pools 를 쓸 것
+    각 풀은 ETF 필터만 발굴과 동일 적용, 회피/거래불가 제외는 하지 않는다
     (선정 '원천'의 원시 신호를 남기는 게 목적 — 필터 효과는 이미 리포트가 기록).
+
+    한 축의 조회가 실패해도 나머지 축은 기록한다(축 단위 스킵) — 전부 비면 그때만
+    줄을 안 쓴다. 빈 줄을 막는 이유는 조회 실패·시장 이상 때 무의미한 라인이 쌓이고,
+    테스트가 fetch 를 페이크로 돌릴 때 운영 파일을 오염시키기 때문
+    (2026-07-05 실측 — pytest 가 0 라인 12줄 오염).
 
     어떻게 확인: tests/test_daytrade_cli_helpers.py 의 record_alt_ranking 케이스.
     """
     log = structlog.get_logger("daytrade.cli")
     try:
-        value_pool = await top_value(rest, top_n=pool_n, exclude_etf=exclude_etf)
-        if not value_pool:
-            # 빈 풀은 기록 가치가 없고(조회 실패·시장 이상), 테스트가 fetch 를
-            # 페이크로 돌릴 때 무의미한 줄이 운영 파일에 쌓이는 것도 막는다
-            # (2026-07-05 실측 — pytest 가 value_pool 0 라인 12줄 오염).
-            log.warning("daytrade.alt_rank_empty_pool_skipped")
+        pools: dict[str, list[RankedSymbol]] = {}
+        for name, fetch in _ALT_POOL_FETCHERS.items():
+            try:
+                pool = await fetch(rest, pool_n, exclude_etf)
+            except Exception:
+                # 축 하나의 실패가 나머지 축의 그날 데이터를 통째로 날리면 안 된다.
+                log.warning("daytrade.alt_rank_pool_failed", pool=name, exc_info=True)
+                continue
+            if pool:
+                pools[name] = pool
+            else:
+                log.warning("daytrade.alt_rank_empty_pool_skipped", pool=name)
+        if not pools:
+            log.warning("daytrade.alt_rank_all_pools_empty")
             return None
         chosen = [c.symbol for c in result.chosen]
         blocked = [s for s, _ in result.blocked]
         now = datetime.now(KST)
-        record = {
-            "v": 1,
+        record: dict[str, Any] = {
+            "v": 2,
             "date": now.date().isoformat(),
             "ts": now.isoformat(),
             "volume_chosen": chosen,
             "volume_pool": [*chosen, *blocked],
-            "value_pool": [
-                {
-                    "symbol": r.symbol,
-                    "name": r.name,
-                    "market": r.market,
-                    "price": r.price,
-                    "volume": r.volume,
-                }
-                for r in value_pool
-            ],
+            "alt_pools": {name: _pool_rows(pool) for name, pool in pools.items()},
         }
+        # v1 리더(과거 판정 스크립트)가 계속 읽을 수 있도록 거래대금 풀은 최상위에도 남긴다.
+        if "value" in pools:
+            record["value_pool"] = _pool_rows(pools["value"])
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with out_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
         log.info(
             "daytrade.alt_rank_recorded",
             path=str(out_path),
-            value_pool=[r.symbol for r in value_pool],
+            pools={name: [r.symbol for r in pool] for name, pool in pools.items()},
         )
         return out_path
     except Exception:

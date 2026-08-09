@@ -11,6 +11,8 @@ import structlog
 from .._common import extract_rows, to_decimal
 from .._common import normalize_symbol as _normalize_symbol
 from ..kiwoom.endpoints import (
+    INVESTOR_TP_FOREIGN,
+    INVESTOR_TP_INSTITUTION,
     MARKET_TP_KOSDAQ,
     MARKET_TP_KOSPI,
     PATH_RANK,
@@ -21,22 +23,55 @@ from ..kiwoom.rest import KiwoomRestClient
 log = structlog.get_logger(__name__)
 
 Market = Literal["KOSPI", "KOSDAQ"]
+NetBuyInvestor = Literal["foreign", "institution"]
 
 _MRKT_TP: dict[Market, str] = {
     "KOSPI": MARKET_TP_KOSPI,
     "KOSDAQ": MARKET_TP_KOSDAQ,
 }
 
+_INVESTOR_TP: dict[NetBuyInvestor, str] = {
+    "foreign": INVESTOR_TP_FOREIGN,
+    "institution": INVESTOR_TP_INSTITUTION,
+}
+
 
 @dataclass(frozen=True)
 class RankedSymbol:
-    """거래량 순위 한 행. day-trade 발굴기 입력으로 쓴다."""
+    """순위 TR 응답 한 행. day-trade 발굴기 입력으로 쓴다.
+
+    `volume`/`price` 는 거래량·거래대금 순위(ka10030)가 채우고, 순매수 순위(ka10065)
+    응답엔 두 필드가 아예 없어 0 이 된다 — 그 축의 실제 지표는 `metric` 이 담는다.
+    `rank` 는 시장 내 1-based 응답 순서(키움이 이미 그 축으로 정렬해 준 순위).
+    """
 
     symbol: str
     market: Market
     name: str
-    volume: int  # 누적 거래량
-    price: float  # 현재가 (절댓값)
+    volume: int  # 누적 거래량 (미제공 TR 은 0)
+    price: float  # 현재가 (절댓값, 미제공 TR 은 0.0)
+    metric: float | None = None  # TR 고유 순위 지표 (순매수 수량 등). 부호 유지.
+    rank: int | None = None  # 시장 내 1-based 순위 (응답 순서)
+
+
+@dataclass(frozen=True)
+class RankSource:
+    """순위 TR 한 축의 요청·해석 사양.
+
+    무엇/왜: 순위 TR 마다 api-id 와 필수 바디가 완전히 달라(ka10030 은 8개,
+    ka10065 는 3개) 조회 함수에 하드코딩하면 축을 늘릴 때마다 분기가 생긴다.
+    축의 차이를 이 값 객체로 모아 `_fetch_market`/`_merged_top` 몸통은 하나로 유지.
+
+    - `body`: `mrkt_tp` 를 뺀 고정 바디 (시장은 호출 시점에 주입).
+    - `sort_key`: 두 시장 병합 후 desc 정렬 키.
+    - `metric_keys`: 행에서 `metric` 을 뽑을 필드명 후보 (문서 버전차 흡수).
+    """
+
+    tr_id: str
+    body: dict[str, str]
+    sort_key: Callable[[RankedSymbol], float]
+    log_event: str
+    metric_keys: tuple[str, ...] = ()
 
 
 def _pick(row: dict, *keys: str) -> object:
@@ -96,20 +131,32 @@ def _is_etf_or_etn(name: str) -> bool:
     return any(kw in upper or kw in name for kw in _ETF_KEYWORDS)
 
 
-def _parse_row(row: dict, market: Market) -> RankedSymbol | None:
+def _parse_row(
+    row: dict,
+    market: Market,
+    *,
+    metric_keys: tuple[str, ...] = (),
+    rank: int | None = None,
+) -> RankedSymbol | None:
     """키움 응답 한 행 → RankedSymbol. 필드명이 문서 버전마다 달라 후보를 순회한다."""
     raw_symbol = _pick(row, "stk_cd", "stkcd", "symbol")
     raw_name = _pick(row, "stk_nm", "hts_kor_isnm", "name")
     raw_volume = _pick(row, "trde_qty", "acml_vol", "volume")
     raw_price = _pick(row, "cur_prc", "stck_prpr", "prpr", "price")
-    if not raw_symbol or raw_volume is None:
+    raw_metric = _pick(row, *metric_keys) if metric_keys else None
+    # 순위 지표가 하나도 없는 행은 어느 축으로도 정렬할 수 없어 버린다.
+    # (거래량 축은 trde_qty, 순매수 축은 metric_keys 가 각각 필수 역할)
+    if not raw_symbol or (raw_volume is None and raw_metric is None):
         return None
     return RankedSymbol(
         symbol=_normalize_symbol(raw_symbol),
         market=market,
         name=str(raw_name or "").strip(),
-        volume=int(to_decimal(raw_volume)),
+        volume=int(to_decimal(raw_volume)) if raw_volume is not None else 0,
         price=float(abs(to_decimal(raw_price))),
+        # 순매수는 음수도 의미가 있으므로 abs 를 씌우지 않는다.
+        metric=float(to_decimal(raw_metric)) if raw_metric is not None else None,
+        rank=rank,
     )
 
 
@@ -117,52 +164,86 @@ async def _fetch_market(
     client: KiwoomRestClient,
     market: Market,
     *,
-    sort_tp: str = "1",
+    source: RankSource,
 ) -> list[RankedSymbol]:
     """단일 시장(KOSPI 또는 KOSDAQ) 순위 상위 행을 가져온다.
 
-    `sort_tp`: 1=거래량(주식 수), 2=거래대금. 응답 길이는 키움이 정함(보통 100).
-    잘림(top_n) 과 ETF 필터는 호출자가 처리.
+    응답 길이는 키움이 정함(보통 100). 잘림(top_n) 과 ETF 필터는 호출자가 처리.
     """
-    # ka10030 (당일거래량상위) 필수 파라미터 — probe(2026-05-03) 로 확정.
-    # crd_tp / trde_qty_tp / pric_tp / trde_prica_tp / mrkt_open_tp 가 빠지면
-    # "1511: 필수 입력 값에 값이 존재하지 않습니다" 로 거절. 모두 "전체"(0/000) 기본.
-    body = {
-        "mrkt_tp": _MRKT_TP[market],
-        "sort_tp": sort_tp,  # 1=거래량, 2=거래대금
-        "mang_stk_incls": "0",  # 관리종목 제외
-        "crd_tp": "0",  # 신용 구분: 0=전체
-        "trde_qty_tp": "0",  # 거래량 구분: 0=전체
-        "pric_tp": "0",  # 가격 구분: 0=전체
-        "trde_prica_tp": "0",  # 거래대금 구분: 0=전체
-        "mrkt_open_tp": "0",  # 장운영 구분: 0=전체
-        "stex_tp": "3",  # 거래소: 1=KRX 2=NXT 3=통합
-    }
-    page = await client.request(TR.RANK_VOLUME, PATH_RANK, body)
+    body = {**source.body, "mrkt_tp": _MRKT_TP[market]}
+    page = await client.request(source.tr_id, PATH_RANK, body)
     rows = extract_rows(page)
     parsed: list[RankedSymbol] = []
-    for row in rows:
-        item = _parse_row(row, market)
+    for idx, row in enumerate(rows, start=1):
+        item = _parse_row(row, market, metric_keys=source.metric_keys, rank=idx)
         if item is not None:
             parsed.append(item)
-        # ETF 필터는 호출자(top_volume/top_value) 단계에서 적용 — 여기서는 매핑만.
+        # ETF 필터는 호출자(top_volume 등) 단계에서 적용 — 여기서는 매핑만.
     return parsed
+
+
+# ka10030 (당일거래량상위) 필수 파라미터 — probe(2026-05-03) 로 확정.
+# crd_tp / trde_qty_tp / pric_tp / trde_prica_tp / mrkt_open_tp 가 빠지면
+# "1511: 필수 입력 값에 값이 존재하지 않습니다" 로 거절. 모두 "전체"(0/000) 기본.
+_RANK_VOLUME_BODY = {
+    "mang_stk_incls": "0",  # 관리종목 제외
+    "crd_tp": "0",  # 신용 구분: 0=전체
+    "trde_qty_tp": "0",  # 거래량 구분: 0=전체
+    "pric_tp": "0",  # 가격 구분: 0=전체
+    "trde_prica_tp": "0",  # 거래대금 구분: 0=전체
+    "mrkt_open_tp": "0",  # 장운영 구분: 0=전체
+    "stex_tp": "3",  # 거래소: 1=KRX 2=NXT 3=통합
+}
+
+_SOURCE_VOLUME = RankSource(
+    tr_id=TR.RANK_VOLUME,
+    body={**_RANK_VOLUME_BODY, "sort_tp": "1"},  # 1=거래량
+    sort_key=lambda r: r.volume,
+    log_event="market.rank.top_volume",
+)
+
+_SOURCE_VALUE = RankSource(
+    tr_id=TR.RANK_VOLUME,
+    body={**_RANK_VOLUME_BODY, "sort_tp": "2"},  # 2=거래대금
+    sort_key=lambda r: r.volume * r.price,
+    log_event="market.rank.top_value",
+)
+
+
+def _net_buy_source(investor: NetBuyInvestor) -> RankSource:
+    """ka10065 장중 투자자별 순매수 상위 — 투자자 구분만 다른 축.
+
+    병합 정렬 키가 `metric`(순매수 수량)이 아니라 **시장 내 순위**인 이유:
+    KOSPI 와 KOSDAQ 의 순매수 '수량' 은 주가 수준이 달라 직접 비교하면 저가주가
+    구조적으로 상위를 독식한다(거래량 순위가 겪는 바로 그 편향). 키움이 각 시장
+    안에서 이미 이 축으로 정렬해 주므로, 순위를 그대로 존중해 두 시장을 번갈아
+    끼워 넣는다(KOSPI 1위 · KOSDAQ 1위 · KOSPI 2위 …). 원본 `metric`/`rank`/`market`
+    은 레코드에 그대로 남기므로 분석 단계에서 다른 병합 규칙으로 재구성할 수 있다.
+    """
+    return RankSource(
+        tr_id=TR.RANK_INTRADAY_INVESTOR,
+        body={
+            "trde_tp": "1",  # 1=순매수
+            "orgn_tp": _INVESTOR_TP[investor],
+        },
+        sort_key=lambda r: -(r.rank if r.rank is not None else 10_000),
+        log_event=f"market.rank.top_net_buy.{investor}",
+        metric_keys=("netslmt", "netprps_qty", "netprps"),
+    )
 
 
 async def _merged_top(
     client: KiwoomRestClient,
     *,
-    sort_tp: str,
-    sort_key: Callable[[RankedSymbol], float],
-    log_event: str,
+    source: RankSource,
     top_n: int,
     markets: tuple[Market, ...],
     exclude_etf: bool,
     exclude_symbols: Collection[str],
 ) -> list[RankedSymbol]:
-    """두 시장 순위를 합쳐 필터(ETF/회피) 후 `sort_key` desc 상위 `top_n`.
+    """두 시장 순위를 합쳐 필터(ETF/회피) 후 `source.sort_key` desc 상위 `top_n`.
 
-    top_volume/top_value 의 공통 몸통 — 정렬 축(sort_tp·sort_key)만 갈라진다.
+    모든 순위 축의 공통 몸통 — TR·바디·정렬 축의 차이는 `source` 가 전부 흡수한다.
     """
     avoid = {s for s in exclude_symbols if s}
     merged: list[RankedSymbol] = []
@@ -170,7 +251,7 @@ async def _merged_top(
     failed = 0
     for market in markets:
         try:
-            rows = await _fetch_market(client, market, sort_tp=sort_tp)
+            rows = await _fetch_market(client, market, source=source)
         except Exception as exc:
             log.warning("market.rank.fetch_failed", market=market, exc_info=True)
             last_error = exc
@@ -199,10 +280,10 @@ async def _merged_top(
                 kept.append(r)
         merged = kept
 
-    merged.sort(key=sort_key, reverse=True)
+    merged.sort(key=source.sort_key, reverse=True)
     chosen = merged[:top_n]
     log.info(
-        log_event,
+        source.log_event,
         markets=list(markets),
         top_n=top_n,
         exclude_etf=exclude_etf,
@@ -234,9 +315,7 @@ async def top_volume(
     """
     return await _merged_top(
         client,
-        sort_tp="1",
-        sort_key=lambda r: r.volume,
-        log_event="market.rank.top_volume",
+        source=_SOURCE_VOLUME,
         top_n=top_n,
         markets=markets,
         exclude_etf=exclude_etf,
@@ -264,9 +343,7 @@ async def top_value(
     """
     return await _merged_top(
         client,
-        sort_tp="2",
-        sort_key=lambda r: r.volume * r.price,
-        log_event="market.rank.top_value",
+        source=_SOURCE_VALUE,
         top_n=top_n,
         markets=markets,
         exclude_etf=exclude_etf,
@@ -274,4 +351,45 @@ async def top_value(
     )
 
 
-__all__ = ["Market", "RankedSymbol", "top_value", "top_volume"]
+async def top_net_buy(
+    client: KiwoomRestClient,
+    *,
+    investor: NetBuyInvestor = "foreign",
+    top_n: int = 3,
+    markets: tuple[Market, ...] = ("KOSPI", "KOSDAQ"),
+    exclude_etf: bool = True,
+    exclude_symbols: Collection[str] = (),
+) -> list[RankedSymbol]:
+    """장중 투자자별 순매수 상위 (`ka10065`) — 발굴 대안 신호 연구용 read-only 조회.
+
+    무엇/왜: 거래량·거래대금 순위는 둘 다 "얼마나 많이 거래됐나" 라는 한 축의
+    변형이라 풀이 크게 겹쳤고, 그래서 2026-07-31 거래대금 A/B 는 검정력이 안 나와
+    기각됐다(memory: project_alt_rank_collecting). 순매수 상위는 "누가 사고 있나"
+    라는 다른 축이라 실측 겹침이 4/30(13%)에 그치고, ETF/ETN 이 상위를 점유하지도
+    않는다(probe 2026-08-09). 매매 경로는 건드리지 않고 A/B 판정용으로만 수집한다.
+
+    `investor`: "foreign"(외국인) 이 사전 등록된 1차 가설, "institution"(기관계)는
+    탐색용 2차 — 판정 규칙은 scripts/diagnostics/rank_signal_ab_study.py 참조.
+
+    응답에 가격·누적거래량이 없어 `RankedSymbol.volume/price` 는 0 이다. 정렬·분석에
+    쓸 값은 `metric`(순매수 수량, 부호 유지) 과 `rank`(시장 내 순위).
+    """
+    return await _merged_top(
+        client,
+        source=_net_buy_source(investor),
+        top_n=top_n,
+        markets=markets,
+        exclude_etf=exclude_etf,
+        exclude_symbols=exclude_symbols,
+    )
+
+
+__all__ = [
+    "Market",
+    "NetBuyInvestor",
+    "RankSource",
+    "RankedSymbol",
+    "top_net_buy",
+    "top_value",
+    "top_volume",
+]
