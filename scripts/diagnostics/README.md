@@ -12,6 +12,7 @@
 | `concentration_study.py` | **집중도/분산 효과 읽기전용 검증** — selection_study 의 일관된 pool>baseline 신호 후속. 매수 수 K∈{1,2,3,5,10}별 당일수익 평균·승률·위험조정과, 거래량 1~3등 vs 4~10등(음의선택)을 약 3년 일봉으로 비교. 페어드 차이를 이동블록 부트스트랩 95%CI로 검정 + `data/studies/*.json`. highvol 프로파일의 `top_n 3` 근거(K↑ → 변동성 std 3.9%→1.8%). ⚠️ 비용 미반영(K↑=수수료↑)·고정 바스켓 생존편향·mock 의존 → 방향성 신호일 뿐. |
 | `alt_rank_ab_study.py` | **발굴 A/B 판정(거래대금 — 2026-07-31 기각, 기록 보존)** — alt-rank.jsonl(PR #164)의 거래량 풀 vs 거래대금 풀을 자체 스냅샷(09:10→15:15)과 조인해 원재료 수익률 비교. API 호출 없음. |
 | `rank_signal_ab_study.py` | **발굴 A/B 판정(N축, 후속)** — alt-rank v2 의 `alt_pools` 전 축(거래대금·외인/기관 순매수)을 같은 방법으로 한 번에 비교. 판정은 사전 등록된 1차 가설 `foreign_netbuy` 하나로만 내리고 나머지는 참고 출력(다중비교 방지). 판정은 1차(09:02) 라운드로만 내리고 2차(09:30)는 진단으로 병기. 표본 문턱은 *두 축이 함께 있는 날* 30일(검정력 확보 — 15일은 통계량이 표류). API 호출 없음. `--selftest` 지원. |
+| `shadow_arm_replay.py` | **대안 축 출구 반영 재생** — alt-rank 픽을 분봉(ka10080)으로 사후 재생해 실제 `PositionGuard`+`ShadowTracker` 로 실현손익 비교. 축마다 독립 트래커라 예산 잠식 없음. 분봉 조회 범위(최근 며칠) 밖 일자는 결손 스킵 — 정기 실행 필요. `--days N` / `--selftest`. |
 | `probe_rank_netbuy.py` | **순매수 계열 순위 TR probe(1회용)** — ka90009/ka10065/ka10035/ka10034 의 mock 응답·필수 파라미터 실측. mock 모드에서만 동작. |
 | `shadow_gate_study.py` | **섀도우 vs 게이트 판정** — 차단일 가상 매매 실적(shadow-*.json, PR #172)을 집계해 SMA 게이트 완화 가설 판정 재료 생성. buy-hold 대비 출구 효과 병기. `--selftest` 로 데이터 없이 로직 검증. |
 | `tick_guard_study.py` | **틱 가드 반사실 판정** — 틱 로그(PR #157) 위에서 실제 왕복의 출구만 틱 단위 가드로 교체 시뮬(규칙·순서 PositionGuard 동일, 파라미터 highvol yaml). 봉 마감 검사 대비 Δ손익·손절 오버슈트 산출. `--selftest` 지원. |

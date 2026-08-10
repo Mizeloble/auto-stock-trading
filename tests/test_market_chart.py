@@ -18,7 +18,7 @@ from auto_trading.config import KiwoomMode, Settings
 from auto_trading.kiwoom.endpoints import PATH_CHART, PATH_TOKEN, TR
 from auto_trading.kiwoom.rest import KiwoomRestClient
 from auto_trading.kiwoom.schemas import KiwoomError
-from auto_trading.market.chart import get_daily_bars
+from auto_trading.market.chart import get_daily_bars, get_minute_bars
 
 
 @pytest.fixture
@@ -99,3 +99,63 @@ async def test_get_daily_bars_raises_on_unsupported_uri(settings: Settings) -> N
 
     assert exc.value.code == "9"
     assert "지원하는 API ID" in exc.value.message
+
+
+# ---- 분봉 (ka10080) — 대안 축 출구 반영 재생의 입력 (2026-08-10) ----------------
+
+
+def _minute_payload(rows: list[dict]) -> dict:
+    """ka10080 mock 실측 형태 — 체결시각 키가 일봉(`dt`)과 달리 `cntr_tm`."""
+    return {"return_code": 0, "return_msg": "정상", "stk_min_pole_chart_qry": rows}
+
+
+async def test_get_minute_bars_uses_cntr_tm_and_sorts_ascending(settings: Settings) -> None:
+    """분봉 체결시각 키(`cntr_tm`) 파싱 + 오름차순 정렬 — 응답은 최신부터 온다."""
+    rows = [
+        {
+            "cntr_tm": "20260810093000",
+            "open_pric": "1010",
+            "high_pric": "1020",
+            "low_pric": "1000",
+            "cur_prc": "1015",
+            "trde_qty": "500",
+        },
+        {
+            "cntr_tm": "20260810091000",
+            "open_pric": "1000",
+            "high_pric": "1005",
+            "low_pric": "995",
+            "cur_prc": "1002",
+            "trde_qty": "300",
+        },
+    ]
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        route = mock.post(PATH_CHART).mock(
+            return_value=httpx.Response(200, json=_minute_payload(rows))
+        )
+        async with KiwoomRestClient(settings=settings) as client:
+            bars = await get_minute_bars(client, "005930", max_pages=1)
+
+    assert route.calls[0].request.headers["api-id"] == TR.CHART_MINUTE
+    assert [b.ts.strftime("%H:%M") for b in bars] == ["09:10", "09:30"]
+    assert bars[0].close == 1002.0 and bars[1].high == 1020.0
+
+
+async def test_get_minute_bars_filters_by_date(settings: Settings) -> None:
+    """한 페이지가 여러 거래일에 걸쳐 오므로 `on_date` 필터가 없으면 다른 날 봉이 섞인다."""
+    rows = [
+        {"cntr_tm": "20260810090100", "cur_prc": "1100", "trde_qty": "1"},
+        {"cntr_tm": "20260807150000", "cur_prc": "900", "trde_qty": "1"},
+        {"cntr_tm": "20260807090100", "cur_prc": "890", "trde_qty": "1"},
+    ]
+    async with respx.mock(base_url=settings.rest_base_url) as mock:
+        mock.post(PATH_TOKEN).mock(return_value=_token_resp())
+        mock.post(PATH_CHART).mock(return_value=httpx.Response(200, json=_minute_payload(rows)))
+        async with KiwoomRestClient(settings=settings) as client:
+            bars = await get_minute_bars(client, "005930", on_date=date(2026, 8, 7), max_pages=1)
+
+    assert [b.ts.strftime("%Y-%m-%d %H:%M") for b in bars] == [
+        "2026-08-07 09:01",
+        "2026-08-07 15:00",
+    ]
