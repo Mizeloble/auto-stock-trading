@@ -109,7 +109,7 @@ def snapshot_top200(
 
     from ..daytrade.cli_helpers import (
         ALT_RANK_PATH,
-        alt_rank_late_round_due,
+        alt_rank_due_round,
         alt_rank_pool_n,
         record_alt_ranking_late,
     )
@@ -155,7 +155,7 @@ def snapshot_top200(
     index_recorder = IndexSnapshotRecorder(path=index_path)
 
     discovered_path = discovered_snapshot_path_for(out_dir)
-    late_due = alt_rank_late_round_due(ALT_RANK_PATH)
+    due_round = alt_rank_due_round(ALT_RANK_PATH)
 
     async def _run() -> tuple[int, int, int, int]:
         # 200종목을 10분 윈도우 안에 천천히 스윕 — 기본 0.15s 페이싱은 키움 ka10001
@@ -163,17 +163,22 @@ def snapshot_top200(
         # ~7,600회 헛재시도). 매매 루프와 달리 시간 여유가 크므로 0.5s 로 늦춰 버스트
         # 자체를 없앤다. 200콜 x 0.5s ≈ 100s 로 10분 윈도우에 넉넉.
         async with cli.KiwoomRestClient(min_request_interval_sec=0.5) as client:
-            # 발굴 신호 A/B 2차 라운드(09:30) — 이 잡이 러너와 독립이라 게이트 차단일
-            # (러너가 09:02 에 종료되는 날)에도 빠지지 않는다. 200종목 스윕 **앞**에
-            # 두는 이유: 2차에서만 새로 등장한 종목도 이번 라운드 스냅샷에 포함돼야
-            # 09:30 진입가가 남는다(다음 라운드로 밀리면 10분 뒤 값밖에 없다).
-            if late_due:
+            # 발굴 신호 A/B 진단 라운드(09:10/09:20/09:30) — 이 잡이 러너와 독립이라
+            # 게이트 차단일(러너가 09:02 에 종료되는 날)에도 빠지지 않는다. 200종목 스윕
+            # **앞**에 두는 이유: 그 라운드에서만 새로 등장한 종목도 이번 스냅샷에 포함돼야
+            # 해당 시각 진입가가 남는다(다음 라운드로 밀리면 10분 뒤 값밖에 없다).
+            if due_round:
                 try:
                     saved = await record_alt_ranking_late(
-                        client, pool_n=alt_rank_pool_n(), exclude_etf=True
+                        client,
+                        pool_n=alt_rank_pool_n(),
+                        exclude_etf=True,
+                        round_label=due_round,
                     )
                     if saved is not None:
-                        cli.console.print(f"[green]✓ 발굴 신호 2차 수집(09:30):[/green] {saved}")
+                        cli.console.print(
+                            f"[green]✓ 발굴 신호 진단 수집({due_round}):[/green] {saved}"
+                        )
                 except Exception:
                     # 진단용 부가 데이터 — 실패가 본 스냅샷 라운드를 막으면 안 된다.
                     structlog.get_logger(__name__).warning(

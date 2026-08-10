@@ -71,7 +71,10 @@ OVERLAP_MAX = 0.7
 # 그것만이 "발굴 소스를 바꿀 수 있는가" 에 대한 답이다. 2차(09:30)는 1차가 기각됐을 때
 # "엣지가 없다" 와 "그 시각엔 아직 신호가 안 형성됐다" 를 가르는 진단 표본이다.
 ROUND_DISCOVERY = "0902"
-ROUND_LATE = "0930"
+# 진단 라운드(10분 격자) — 순매수 신호가 **형성되는 최소 시각**을 찾기 위한 탐색용.
+# 2026-08-10 실측: 09:02 는 0행, 09:30 은 정상. 그 사이 어디서 켜지는지가 관건.
+DIAGNOSTIC_ROUNDS = ("0910", "0920", "0930")
+ROUND_LATE = "0930"  # 하위 호환
 
 BASELINE = "volume"  # 현행 발굴 신호
 PRIMARY_AXIS = "foreign_netbuy"  # 사전 등록된 1차 가설
@@ -433,7 +436,60 @@ def main() -> None:
     print()
     for line in _verdict_lines(stats):
         print(line)
+    _print_round_coverage()
     _print_late_round_diagnostic()
+
+
+def _print_round_coverage() -> None:
+    """라운드별 축 수집 성공률 — "신호가 언제부터 존재하나" 에 대한 직접적인 답.
+
+    2026-08-10 운영 첫날 실측에서 `ka10065` 가 09:02 엔 0행(TR 자체가 빈 응답)이고
+    09:30 엔 정상임이 드러났다. 즉 1차 가설을 09:02 로 등록해 두면 표본이 영원히 0 이다.
+    09:10·09:20 라운드를 더해 10분 격자로 훑고, 이 표로 최소 형성 시각을 읽는다.
+
+    읽는 법: 어떤 라운드에서 `외인순매수` 수집일이 전체 일수에 근접하면 그 시각부터
+    신호가 존재한다는 뜻. 09:10 이면 봇의 진입 창(09:10+)과 맞아 그대로 쓸 수 있고,
+    09:30 이 최소라면 발굴 시각 자체를 옮기는 별도 검증이 필요하다.
+    """
+    rounds: dict[str, dict[str, int]] = {}
+    days_per_round: dict[str, set[str]] = {}
+    if not ALT_RANK_PATH.exists():
+        return
+    for line in ALT_RANK_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        label = str(rec.get("round") or ROUND_DISCOVERY)
+        day = str(rec.get("date") or "")
+        if not day:
+            continue
+        days_per_round.setdefault(label, set()).add(day)
+        axes = rec.get("alt_pools")
+        present = set(axes) if isinstance(axes, dict) else set()
+        if rec.get("value_pool"):
+            present.add("value")
+        counts = rounds.setdefault(label, {})
+        for axis in present:
+            counts[axis] = counts.get(axis, 0) + 1
+
+    if not rounds:
+        return
+    all_axes = sorted({a for c in rounds.values() for a in c})
+    print("\n--- 라운드별 신호 형성 커버리지 (수집일 / 그 라운드 전체일) ---")
+    header = f"{'라운드':<8}{'전체':>5}" + "".join(f"{_label(a):>12}" for a in all_axes)
+    print(header)
+    for label in sorted(rounds):
+        total = len(days_per_round.get(label, ()))
+        cells = "".join(f"{rounds[label].get(a, 0):>12}" for a in all_axes)
+        print(f"{label:<8}{total:>5}{cells}")
+    print(
+        "→ 외인순매수 수집일이 전체일에 근접하는 **가장 이른 라운드**가 최소 형성 시각."
+        " 09:10 이면 현행 진입 창에서 바로 사용 가능."
+    )
 
 
 def _print_late_round_diagnostic() -> None:
@@ -443,15 +499,15 @@ def _print_late_round_diagnostic() -> None:
     둘 다 나쁘면 "이 축엔 엣지가 없다" 로 축 자체를 닫을 수 있다. 어느 쪽이든
     **발굴 소스 교체 판정에는 쓰지 않는다** — 매매는 09:02 에 일어나기 때문.
     """
-    late = load_day_records(round_label=ROUND_LATE)
+    late = [r for label in DIAGNOSTIC_ROUNDS for r in load_day_records(round_label=label)]
     print()
     if not late:
-        print("--- 2차 라운드(09:30) --- 아직 수집분 없음 (스냅샷 잡이 09:30~09:45 창에 기록).")
+        print("--- 진단 라운드 --- 아직 수집분 없음 (스냅샷 잡이 09:10/09:20/09:30 창에 기록).")
         return
     res = analyze(late)
     stats: dict[str, AxisStats] = res["stats"]
     base, primary = stats.get(BASELINE), stats.get(PRIMARY_AXIS)
-    print(f"--- 2차 라운드(09:30) 진단 · {res['evaluated_days']}일 (판정에는 미사용) ---")
+    print(f"--- 진단 라운드 합산 · {res['evaluated_days']}일 (판정에는 미사용) ---")
     for axis, st in stats.items():
         print(f"{_label(axis):<12} 풀 전체: {describe(st.pool_returns)}")
     if base is None or primary is None:

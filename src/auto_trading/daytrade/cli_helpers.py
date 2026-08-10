@@ -536,14 +536,6 @@ _ALT_POOL_FETCHERS: dict[
 }
 
 
-# 수집 라운드 식별자. 09:02 는 실제 발굴 시각(= 매매가 일어나는 시점)이라 판정의
-# 본 표본이고, 09:30 은 진단용 2차다.
-#
-# 왜 2차가 필요한가: ka10065 는 '장중 누적' 순매수라 09:02 엔 시가 단일가 + 2분치뿐이다.
-# 1차만 모으면 기각이 나왔을 때 "신호에 엣지가 없다" 와 "신호가 아직 안 형성됐다" 를
-# 영원히 구분할 수 없다(2026-08-09 적대적 검토). 2차가 살아 있고 1차만 죽으면 후자,
-# 둘 다 죽으면 전자 — 15일이 아니라 30일을 쓰기로 한 만큼 이 구분이 더 중요해졌다.
-# 2차는 '만약 09:30 에 발굴했다면' 이므로 기준축(거래량)도 그 시각에 다시 뽑는다.
 def alt_rank_pool_n(top_n: int = 3) -> int:
     """A/B 수집 풀 크기 — `orchestrator.discover_and_arm` 의 발굴 pool_n 산식과 동일.
 
@@ -553,10 +545,27 @@ def alt_rank_pool_n(top_n: int = 3) -> int:
     return max(top_n * 3, top_n + 7)
 
 
+# 수집 라운드. 09:02 는 실제 발굴 시각(= 매매가 일어나는 시점)이라 판정의 본 표본이고,
+# 나머지는 진단용이다.
+#
+# 왜 여러 라운드인가: ka10065 는 '장중 누적' 순매수라 개장 직후엔 데이터가 없다.
+# 2026-08-10 운영 첫날 실측 — 09:02 에 **0행**(필터가 아니라 TR 자체가 빈 응답,
+# `chosen=0 excluded=0 skipped=0`), 09:30 엔 외국인 10종목 정상. 즉 1차 가설을 09:02
+# 로 등록해 두면 표본이 영원히 0 이다. 신호가 **형성되는 최소 시각**을 찾기 위해
+# 09:10·09:20 을 더해 10분 격자로 훑는다 — 09:10 에 이미 나온다면 봇의 실제 진입
+# 창(09:10+)과 맞아 그대로 쓸 수 있고, 09:30 이 최소라면 발굴 시각 자체를 옮기는
+# 별도 검증이 필요하다는 뜻이 된다.
+#
+# 창은 서로 겹치지 않아 한 시점에 정확히 하나만 due 다. 잡이 늦게 돌면 그 시각이 속한
+# 창의 라벨로 기록되고 이전 라운드는 그날 결손 — 라벨이 실제 시각을 속이지 않게.
 ALT_RANK_ROUND_DISCOVERY = "0902"
-ALT_RANK_ROUND_LATE = "0930"
-# 2차 수집 창 — 스냅샷 잡(10분 주기)이 이 안에 들어온 라운드에서 한 번만 기록한다.
-ALT_RANK_LATE_WINDOW = (time(9, 30), time(9, 45))
+ALT_RANK_EXTRA_ROUNDS: tuple[tuple[str, time, time], ...] = (
+    ("0910", time(9, 10), time(9, 19)),
+    ("0920", time(9, 20), time(9, 29)),
+    ("0930", time(9, 30), time(9, 45)),
+)
+# 형성 시각 탐색이 끝나면 최소 시각 하나만 남기고 나머지는 지운다(수집 비용 절감).
+ALT_RANK_ROUND_LATE = "0930"  # 하위 호환 — 기존 참조·테스트용
 
 
 def _pool_rows(pool: list[RankedSymbol]) -> list[dict[str, Any]]:
@@ -640,14 +649,16 @@ async def record_alt_ranking_late(
     *,
     pool_n: int,
     exclude_etf: bool,
+    round_label: str = ALT_RANK_ROUND_LATE,
     out_path: Path = ALT_RANK_PATH,
 ) -> Path | None:
-    """09:30 2차 수집 — "만약 09:30 에 발굴했다면" 의 풀들을 같은 스키마로 축적.
+    """발굴 이후 진단 라운드 수집 — "만약 그 시각에 발굴했다면" 의 풀들을 같은 스키마로.
 
     무엇/왜: 1차(09:02)는 매매가 실제로 일어나는 시점이라 판정의 본 표본이지만,
-    `ka10065` 순매수는 장중 누적이라 그 시점엔 시가 단일가 + 2분치뿐이다. 1차만
-    모으면 기각이 나왔을 때 "엣지가 없다" 와 "아직 신호가 안 형성됐다" 를 구분할 수
-    없다. 2차는 그 구분 전용 진단 표본이다 — **판정 자체는 1차로만 내린다.**
+    `ka10065` 순매수는 장중 누적이라 그 시점엔 데이터가 아예 없다(2026-08-10 실측
+    0행). 이후 라운드(09:10/09:20/09:30)를 10분 격자로 훑어 **신호가 형성되는 최소
+    시각**을 찾는다 — 그게 봇의 진입 창(09:10+) 안이면 그대로 쓸 수 있고, 더 늦으면
+    발굴 시각 이전이 별도 검증 대상이 된다. **판정 자체는 1차로만 내린다.**
 
     1차와 달리 발굴 결과가 없으므로 기준축(거래량 순위)도 이 시각에 다시 뽑는다.
     `volume_chosen` 은 빈 리스트(그 시각엔 매수 개념이 없음).
@@ -664,17 +675,21 @@ async def record_alt_ranking_late(
         except Exception:
             log.warning("daytrade.alt_rank_pool_failed", pool="volume", exc_info=True)
             baseline = []
-        # 기준축이 없으면 비교 자체가 성립하지 않는다 — 2차는 통째로 건너뛴다.
+        # 기준축이 없으면 비교 자체가 성립하지 않는다 — 그 라운드는 통째로 건너뛴다.
+        # 반면 **대안 축이 비는 것은 정상적인 관측**이다(그 시각엔 아직 신호 미형성).
+        # 거래대금 축은 어느 시각에도 응답하므로 pools 는 보통 비지 않고, 레코드에
+        # `foreign_netbuy` 키가 없다는 사실 자체가 "그 시각엔 없었다"는 데이터가 된다.
         if not baseline or not pools:
             log.warning(
                 "daytrade.alt_rank_late_skipped",
+                round=round_label,
                 baseline=len(baseline),
                 pools=sorted(pools),
             )
             return None
         return _write_alt_rank_record(
             out_path,
-            round_label=ALT_RANK_ROUND_LATE,
+            round_label=round_label,
             baseline_rows=_pool_rows(baseline),
             fallback_pool=[],
             chosen=[],
@@ -682,7 +697,7 @@ async def record_alt_ranking_late(
             log=log,
         )
     except Exception:
-        log.warning("daytrade.alt_rank_record_failed", round=ALT_RANK_ROUND_LATE, exc_info=True)
+        log.warning("daytrade.alt_rank_record_failed", round=round_label, exc_info=True)
         return None
 
 
@@ -747,23 +762,27 @@ def _write_alt_rank_record(
     return out_path
 
 
-def alt_rank_late_round_due(path: Path = ALT_RANK_PATH, *, now: datetime | None = None) -> bool:
-    """지금이 2차 수집 창이고 오늘 2차가 아직 없으면 True (스냅샷 잡이 호출).
+def alt_rank_due_round(path: Path = ALT_RANK_PATH, *, now: datetime | None = None) -> str | None:
+    """지금 기록해야 할 진단 라운드 라벨. 창 밖이거나 오늘치가 이미 있으면 None.
 
-    무엇/왜: 스냅샷 잡은 10분마다 도는 별개 프로세스라 "창 안의 첫 라운드"를 스스로
-    알 수 없다. 파일을 보고 오늘치 2차 유무로 판단하면 잡 재시작·지연에도 정확히
-    한 번만 기록된다(멱등). 창을 벗어난 시각엔 아예 기록하지 않는다 — 맥북이 아침에
-    잠들어 있다가 오후에 깨어난 날 15:00 짜리 데이터가 "09:30" 으로 박히면 안 되므로.
+    무엇/왜: 스냅샷 잡은 10분마다 도는 별개 프로세스라 "어느 라운드 차례인지"를 스스로
+    알 수 없다. 파일을 보고 (오늘, 라운드) 유무로 판단하면 잡 재시작·지연에도 라운드당
+    정확히 한 번만 기록된다(멱등). 창을 벗어난 시각엔 아무것도 기록하지 않는다 —
+    맥북이 아침에 잠들어 있다가 오후에 깨어난 날 15:00 짜리 데이터가 "09:30" 으로
+    박히면 라운드 라벨이 시각을 속이게 되므로(2026-07 슬립 사고 전례).
     """
     at = now or datetime.now(KST)
-    start, end = ALT_RANK_LATE_WINDOW
-    if not (start <= at.time() <= end):
-        return False
+    label = next(
+        (name for name, start, end in ALT_RANK_EXTRA_ROUNDS if start <= at.time() <= end),
+        None,
+    )
+    if label is None:
+        return None
     today = at.date().isoformat()
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return True  # 파일이 아직 없으면 1차도 없는 날 — 기록 시도 자체는 해 본다.
+        return label  # 파일이 아직 없으면 1차도 없는 날 — 기록 시도 자체는 해 본다.
     for raw in lines:
         raw = raw.strip()
         if not raw.startswith("{"):
@@ -772,9 +791,9 @@ def alt_rank_late_round_due(path: Path = ALT_RANK_PATH, *, now: datetime | None 
             rec = json.loads(raw)
         except json.JSONDecodeError:
             continue
-        if rec.get("date") == today and rec.get("round") == ALT_RANK_ROUND_LATE:
-            return False
-    return True
+        if rec.get("date") == today and rec.get("round") == label:
+            return None
+    return label
 
 
 _SHADOW_FALLBACK_CASH = 10_000_000.0  # 잔고 조회 실패 시 가상 시작 자본
@@ -934,7 +953,7 @@ async def delayed_discover(
 __all__ = [
     "PaperDayOverrides",
     "RegimeRoutingResult",
-    "alt_rank_late_round_due",
+    "alt_rank_due_round",
     "alt_rank_pool_n",
     "apply_daytrade_profile_overrides",
     "apply_profile_to_runner",
