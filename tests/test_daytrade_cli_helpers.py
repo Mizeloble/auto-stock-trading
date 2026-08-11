@@ -8,11 +8,13 @@ runner 필드만 확인하면 되므로 여기서 같이 커버.
 
 from __future__ import annotations
 
-from datetime import date, time
+import json
+from datetime import date, datetime, time
 from pathlib import Path
 
 import pytest
 
+from auto_trading._common import KST
 from auto_trading.daytrade.cli_helpers import (
     PaperDayOverrides,
     apply_daytrade_profile_overrides,
@@ -201,36 +203,85 @@ def test_merge_base_avoid_symbols_ignores_empty_entries() -> None:
     assert routed.avoid_symbols == ["005930"]
 
 
-def _ranked(symbol: str, *, volume: int = 100, price: float = 1000.0) -> RankedSymbol:
+def _ranked(
+    symbol: str,
+    *,
+    volume: int = 100,
+    price: float = 1000.0,
+    metric: float | None = None,
+    rank: int | None = None,
+) -> RankedSymbol:
     return RankedSymbol(
-        symbol=symbol, market="KOSPI", name=f"이름{symbol}", volume=volume, price=price
+        symbol=symbol,
+        market="KOSPI",
+        name=f"이름{symbol}",
+        volume=volume,
+        price=price,
+        metric=metric,
+        rank=rank,
     )
 
 
-def _discovery(chosen: list[str], blocked: list[str]) -> DiscoveryResult:
+def _patch_alt_pools(monkeypatch, *, value=None, foreign=None, institution=None) -> None:
+    """record_alt_ranking 이 부르는 순위 조회 3종을 한 번에 페이크로 교체.
+
+    각 인자는 `(rest, top_n, exclude_etf) -> list[RankedSymbol]` 을 흉내 내는 async
+    콜러블이거나, 그대로 돌려줄 리스트. None 이면 빈 풀(= 그 축 스킵).
+    """
+    import auto_trading.daytrade.cli_helpers as ch
+
+    def _as_fetch(spec):
+        if callable(spec):
+            return spec
+
+        async def _fixed(_rest, **_kw):
+            return list(spec or [])
+
+        return _fixed
+
+    fake_value = _as_fetch(value)
+    fake_foreign = _as_fetch(foreign)
+    fake_institution = _as_fetch(institution)
+
+    async def fake_top_net_buy(rest, *, investor, top_n, exclude_etf):
+        fetch = fake_foreign if investor == "foreign" else fake_institution
+        return await fetch(rest, top_n=top_n, exclude_etf=exclude_etf)
+
+    monkeypatch.setattr(ch, "top_value", fake_value)
+    monkeypatch.setattr(ch, "top_net_buy", fake_top_net_buy)
+
+
+def _discovery(
+    chosen: list[str], blocked: list[str], candidates: list[str] | None = None
+) -> DiscoveryResult:
+    pool = candidates if candidates is not None else [*chosen, *blocked]
     return DiscoveryResult(
         chosen=[_ranked(s) for s in chosen],
         blocked=[(s, "reason") for s in blocked],
         gates={},
         note_ko="테스트",
+        candidates=[_ranked(s) for s in pool],
     )
 
 
 async def test_record_alt_ranking_appends_jsonl(tmp_path: Path, monkeypatch) -> None:
-    """발굴 결과 + 거래대금 풀이 JSONL 한 줄로 축적된다 (새 발굴 신호 A/B 데이터)."""
+    """발굴 결과 + 대안 순위 풀 3종이 JSONL 한 줄(v2)로 축적된다."""
     import json
 
-    import auto_trading.daytrade.cli_helpers as ch
-
-    async def fake_top_value(_rest, *, top_n, exclude_etf):
-        assert top_n == 10 and exclude_etf is True
+    async def fake_top_value(_rest, **kw):
+        assert kw["top_n"] == 10 and kw["exclude_etf"] is True
         return [_ranked("222222", volume=10, price=300_000.0), _ranked("111111")]
 
-    monkeypatch.setattr(ch, "top_value", fake_top_value)
+    _patch_alt_pools(
+        monkeypatch,
+        value=fake_top_value,
+        foreign=[_ranked("333333", volume=0, price=0.0, metric=594_000.0, rank=1)],
+        institution=[_ranked("444444", volume=0, price=0.0, metric=-1_000.0, rank=2)],
+    )
     out = tmp_path / "alt-rank.jsonl"
 
     path = await record_alt_ranking(
-        None,  # type: ignore[arg-type]  # top_value 를 패치했으므로 rest 미사용
+        None,  # type: ignore[arg-type]  # 순위 조회를 전부 패치했으므로 rest 미사용
         _discovery(chosen=["005930"], blocked=["356680"]),
         pool_n=10,
         exclude_etf=True,
@@ -241,21 +292,86 @@ async def test_record_alt_ranking_appends_jsonl(tmp_path: Path, monkeypatch) -> 
     lines = out.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
     rec = json.loads(lines[0])
-    assert rec["v"] == 1
+    assert rec["v"] == 2
     assert rec["volume_chosen"] == ["005930"]
     assert rec["volume_pool"] == ["005930", "356680"]
+    pools = rec["alt_pools"]
+    assert set(pools) == {"value", "foreign_netbuy", "institution_netbuy"}
+    assert [r["symbol"] for r in pools["value"]] == ["222222", "111111"]
+    assert pools["value"][0]["price"] == 300_000.0
+    # 순매수 축은 metric/rank 로만 의미가 있고 부호를 유지해야 한다(병합 규칙 재구성용).
+    assert pools["foreign_netbuy"][0]["metric"] == 594_000.0
+    assert pools["foreign_netbuy"][0]["rank"] == 1
+    assert pools["institution_netbuy"][0]["metric"] == -1_000.0
+    # v1 리더 하위 호환 — 거래대금 풀은 최상위에도 미러링.
     assert [r["symbol"] for r in rec["value_pool"]] == ["222222", "111111"]
-    assert rec["value_pool"][0]["price"] == 300_000.0
+
+
+async def test_record_alt_ranking_records_full_baseline_pool(tmp_path: Path, monkeypatch) -> None:
+    """기준(거래량) 풀은 `chosen+blocked` 가 아니라 발굴 후보 **전체**로 남아야 한다.
+
+    오케스트레이터는 top_n 을 채우면 후보 루프를 break 해서 진입일엔 chosen+blocked 가
+    4~5종목으로 잘린다. 대안 축은 항상 pool_n(10)개라, 그대로 두면 A/B 가 '신호 차이'
+    가 아니라 '순위 깊이 차이' 를 재게 된다(2026-08-09 적대적 검토).
+    """
+    import json
+
+    _patch_alt_pools(monkeypatch, foreign=[_ranked("X", metric=1.0, rank=1)])
+    out = tmp_path / "alt-rank.jsonl"
+
+    await record_alt_ranking(
+        None,  # type: ignore[arg-type]
+        # 진입일 재현: 실제 매수 1 + 차단 1 인데 후보 풀은 4종목
+        _discovery(chosen=["A"], blocked=["B"], candidates=["A", "B", "C", "D"]),
+        pool_n=10,
+        exclude_etf=True,
+        out_path=out,
+    )
+
+    rec = json.loads(out.read_text(encoding="utf-8").strip())
+    assert [r["symbol"] for r in rec["volume_pool_rows"]] == ["A", "B", "C", "D"]
+    # v1 리더 호환: volume_pool 은 여전히 '코드 문자열 리스트' 여야 한다.
+    assert rec["volume_pool"] == ["A", "B", "C", "D"]
+    assert all(isinstance(s, str) for s in rec["volume_pool"])
+    assert rec["volume_chosen"] == ["A"]
+
+
+async def test_record_alt_ranking_skips_only_failed_pool(tmp_path: Path, monkeypatch) -> None:
+    """한 축의 조회 실패가 나머지 축의 그날 데이터를 통째로 날리면 안 된다."""
+    import json
+
+    async def boom(_rest, **_kw):
+        raise RuntimeError("kiwoom down")
+
+    _patch_alt_pools(
+        monkeypatch,
+        value=boom,
+        foreign=[_ranked("333333", metric=1.0, rank=1)],
+        institution=None,  # 빈 풀 — 이 축도 스킵
+    )
+    out = tmp_path / "alt-rank.jsonl"
+
+    path = await record_alt_ranking(
+        None,  # type: ignore[arg-type]
+        _discovery(chosen=["005930"], blocked=[]),
+        pool_n=10,
+        exclude_etf=True,
+        out_path=out,
+    )
+
+    assert path == out
+    rec = json.loads(out.read_text(encoding="utf-8").strip())
+    assert set(rec["alt_pools"]) == {"foreign_netbuy"}
+    assert "value_pool" not in rec  # 거래대금 축이 없으면 하위 호환 미러도 없다
 
 
 async def test_record_alt_ranking_swallows_fetch_failure(tmp_path: Path, monkeypatch) -> None:
     """대안 순위 조회 실패는 매매를 막으면 안 된다 — None 반환 + 파일 미생성 + 예외 없음."""
-    import auto_trading.daytrade.cli_helpers as ch
 
-    async def boom(_rest, *, top_n, exclude_etf):
+    async def boom(_rest, **_kw):
         raise RuntimeError("kiwoom down")
 
-    monkeypatch.setattr(ch, "top_value", boom)
+    _patch_alt_pools(monkeypatch, value=boom, foreign=boom, institution=boom)
     out = tmp_path / "alt-rank.jsonl"
 
     path = await record_alt_ranking(
@@ -271,14 +387,9 @@ async def test_record_alt_ranking_swallows_fetch_failure(tmp_path: Path, monkeyp
 
 
 async def test_record_alt_ranking_skips_empty_pool(tmp_path: Path, monkeypatch) -> None:
-    """빈 대안 풀은 기록하지 않는다 — 2026-07-05 pytest 가 value_pool 0 라인 12줄을
+    """모든 대안 풀이 비면 기록하지 않는다 — 2026-07-05 pytest 가 0 라인 12줄을
     운영 파일에 오염시킨 회귀 방지(조회 실패·페이크 fetch 모두 이 분기로 걸러짐)."""
-    import auto_trading.daytrade.cli_helpers as ch
-
-    async def empty(_rest, *, top_n, exclude_etf):
-        return []
-
-    monkeypatch.setattr(ch, "top_value", empty)
+    _patch_alt_pools(monkeypatch)  # 셋 다 빈 풀
     out = tmp_path / "alt-rank.jsonl"
 
     path = await record_alt_ranking(
@@ -498,3 +609,143 @@ async def test_delayed_discover_blocked_stops_when_shadow_disabled(
 
     assert runner.shadow_tracker is None
     assert runner._control_state is RunnerControlState.STOPPING
+
+
+# ---- 09:30 2차 라운드 (2026-08-10, 적대적 검토 후속) --------------------------
+
+
+async def test_record_alt_ranking_late_fetches_its_own_baseline(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """2차는 발굴 결과가 없으므로 기준축(거래량)도 그 시각에 다시 뽑아야 한다.
+
+    1차의 09:02 풀을 재사용하면 '09:30 에 발굴했다면' 이 아니라 시점이 섞인 비교가 된다.
+    """
+    import json
+
+    import auto_trading.daytrade.cli_helpers as ch
+
+    async def fake_top_volume(_rest, **kw):
+        assert kw["top_n"] == 10 and kw["exclude_etf"] is True
+        return [_ranked("V1"), _ranked("V2")]
+
+    _patch_alt_pools(monkeypatch, foreign=[_ranked("F1", metric=9.0, rank=1)])
+    monkeypatch.setattr(ch, "top_volume", fake_top_volume)
+    out = tmp_path / "alt-rank.jsonl"
+
+    path = await ch.record_alt_ranking_late(
+        None,  # type: ignore[arg-type]
+        pool_n=10,
+        exclude_etf=True,
+        out_path=out,
+    )
+
+    assert path == out
+    rec = json.loads(out.read_text(encoding="utf-8").strip())
+    assert rec["round"] == ch.ALT_RANK_ROUND_LATE  # 기본 라벨
+    assert [r["symbol"] for r in rec["volume_pool_rows"]] == ["V1", "V2"]
+    assert rec["volume_chosen"] == []  # 그 시각엔 '매수한 종목' 개념이 없다
+    assert set(rec["alt_pools"]) == {"foreign_netbuy"}
+
+
+async def test_record_alt_ranking_late_honors_round_label(tmp_path: Path, monkeypatch) -> None:
+    """라운드 라벨이 레코드에 그대로 박혀야 형성 시각 분석이 성립한다."""
+    import json
+
+    import auto_trading.daytrade.cli_helpers as ch
+
+    async def fake_top_volume(_rest, **_kw):
+        return [_ranked("V1")]
+
+    _patch_alt_pools(monkeypatch, foreign=[_ranked("F1", metric=9.0, rank=1)])
+    monkeypatch.setattr(ch, "top_volume", fake_top_volume)
+    out = tmp_path / "alt-rank.jsonl"
+
+    await ch.record_alt_ranking_late(
+        None,  # type: ignore[arg-type]
+        pool_n=10,
+        exclude_etf=True,
+        round_label="0910",
+        out_path=out,
+    )
+
+    assert json.loads(out.read_text(encoding="utf-8").strip())["round"] == "0910"
+
+
+async def test_record_alt_ranking_late_skips_without_baseline(tmp_path: Path, monkeypatch) -> None:
+    """기준축 조회가 실패하면 2차를 통째로 건너뛴다 — 비교 대상이 없으면 무의미."""
+    import auto_trading.daytrade.cli_helpers as ch
+
+    async def boom(_rest, **_kw):
+        raise RuntimeError("kiwoom down")
+
+    _patch_alt_pools(monkeypatch, foreign=[_ranked("F1", metric=9.0, rank=1)])
+    monkeypatch.setattr(ch, "top_volume", boom)
+    out = tmp_path / "alt-rank.jsonl"
+
+    assert (
+        await ch.record_alt_ranking_late(
+            None,  # type: ignore[arg-type]
+            pool_n=10,
+            exclude_etf=True,
+            out_path=out,
+        )
+        is None
+    )
+    assert not out.exists()
+
+
+def test_alt_rank_due_round_maps_time_to_label(tmp_path: Path) -> None:
+    """10분 격자 라운드 — 시각이 속한 창의 라벨을 돌려주고, 창 밖이면 None.
+
+    라벨이 실제 시각을 속이면 "신호 형성 최소 시각" 분석이 통째로 무너진다. 맥북이
+    오후에 깨어난 날 15:00 데이터가 "0930" 으로 박히는 것도 이 가드가 막는다
+    (2026-07 슬립 사고 전례).
+    """
+    import auto_trading.daytrade.cli_helpers as ch
+
+    path = tmp_path / "alt-rank.jsonl"
+    path.write_text("", encoding="utf-8")
+    day = datetime(2026, 8, 10, tzinfo=KST)
+
+    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=10)) == "0910"
+    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=19)) == "0910"
+    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=20)) == "0920"
+    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=31)) == "0930"
+    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=45)) == "0930"
+    # 발굴(09:02)은 러너가 기록 — 이 잡의 창이 아니다.
+    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=2)) is None
+    assert ch.alt_rank_due_round(path, now=day.replace(hour=15, minute=0)) is None
+
+
+def test_alt_rank_due_round_is_idempotent_per_round(tmp_path: Path) -> None:
+    """라운드마다 하루 한 번 — 10분 잡이 같은 라운드를 두 번 기록하지 않게."""
+    import auto_trading.daytrade.cli_helpers as ch
+
+    path = tmp_path / "alt-rank.jsonl"
+    day = datetime(2026, 8, 10, tzinfo=KST)
+    at0910 = day.replace(hour=9, minute=12)
+    at0920 = day.replace(hour=9, minute=22)
+
+    path.write_text(
+        json.dumps({"v": 2, "round": ch.ALT_RANK_ROUND_DISCOVERY, "date": "2026-08-10"}) + "\n",
+        encoding="utf-8",
+    )
+    assert ch.alt_rank_due_round(path, now=at0910) == "0910", "1차 기록은 진단 라운드와 무관"
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"v": 2, "round": "0910", "date": "2026-08-10"}) + "\n")
+    assert ch.alt_rank_due_round(path, now=at0910) is None
+    # 다른 라운드는 여전히 due — 라운드 단위로 독립이어야 격자 탐색이 성립한다.
+    assert ch.alt_rank_due_round(path, now=at0920) == "0920"
+    # 어제치는 오늘 판단에 영향을 주면 안 된다.
+    assert ch.alt_rank_due_round(path, now=at0910.replace(day=11)) == "0910"
+
+
+def test_alt_rank_pool_n_matches_discovery_formula() -> None:
+    """수집 풀 크기는 발굴 pool_n 산식과 같아야 두 축의 깊이가 맞는다."""
+    import auto_trading.daytrade.cli_helpers as ch
+
+    for top_n in (1, 3, 5, 10):
+        assert ch.alt_rank_pool_n(top_n) == max(top_n * 3, top_n + 7)
+    assert ch.alt_rank_pool_n() == 10  # 운영 기본(top_n=3)

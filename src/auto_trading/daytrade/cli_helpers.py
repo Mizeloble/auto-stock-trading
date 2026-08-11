@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
@@ -33,7 +33,7 @@ from ..heartbeat import Heartbeat
 from ..kiwoom.rest import KiwoomRestClient
 from ..market.chart import bars_to_dataframe
 from ..market.index import IndexMomentumTracker, Market
-from ..market.rank import top_value
+from ..market.rank import RankedSymbol, top_net_buy, top_value, top_volume
 from ..notify.factory import build_notifier
 from ..notify.reporting import ReportingNotifier
 from ..notify.telegram_commands import TelegramCommandHandler
@@ -520,6 +520,69 @@ async def _cancel_aux(*tasks: asyncio.Task[None] | None) -> None:
 
 ALT_RANK_PATH = Path("data/discovery/alt-rank.jsonl")
 
+# 수집할 대안 발굴 신호 — 이름은 JSONL 의 `alt_pools` 키가 되고 판정 스크립트의 축 이름이 된다.
+# "value"(거래대금)는 2026-07-31 A/B 기각됐으나, 저비용이고 판정 스크립트의 대조군으로
+# 계속 쓰이므로 수집은 유지한다.
+_ALT_POOL_FETCHERS: dict[
+    str, Callable[[KiwoomRestClient, int, bool], Awaitable[list[RankedSymbol]]]
+] = {
+    "value": lambda rest, n, etf: top_value(rest, top_n=n, exclude_etf=etf),
+    "foreign_netbuy": lambda rest, n, etf: top_net_buy(
+        rest, investor="foreign", top_n=n, exclude_etf=etf
+    ),
+    "institution_netbuy": lambda rest, n, etf: top_net_buy(
+        rest, investor="institution", top_n=n, exclude_etf=etf
+    ),
+}
+
+
+def alt_rank_pool_n(top_n: int = 3) -> int:
+    """A/B 수집 풀 크기 — `orchestrator.discover_and_arm` 의 발굴 pool_n 산식과 동일.
+
+    두 축의 풀 깊이가 다르면 A/B 가 '신호 차이' 가 아니라 '순위 깊이 차이' 를 재게
+    되므로(2026-08-09 적대적 검토), 1차·2차·발굴이 같은 값을 쓰도록 여기 한 곳에 둔다.
+    """
+    return max(top_n * 3, top_n + 7)
+
+
+# 수집 라운드. 09:02 는 실제 발굴 시각(= 매매가 일어나는 시점)이라 판정의 본 표본이고,
+# 나머지는 진단용이다.
+#
+# 왜 여러 라운드인가: ka10065 는 '장중 누적' 순매수라 개장 직후엔 데이터가 없다.
+# 2026-08-10 운영 첫날 실측 — 09:02 에 **0행**(필터가 아니라 TR 자체가 빈 응답,
+# `chosen=0 excluded=0 skipped=0`), 09:30 엔 외국인 10종목 정상. 즉 1차 가설을 09:02
+# 로 등록해 두면 표본이 영원히 0 이다. 신호가 **형성되는 최소 시각**을 찾기 위해
+# 09:10·09:20 을 더해 10분 격자로 훑는다 — 09:10 에 이미 나온다면 봇의 실제 진입
+# 창(09:10+)과 맞아 그대로 쓸 수 있고, 09:30 이 최소라면 발굴 시각 자체를 옮기는
+# 별도 검증이 필요하다는 뜻이 된다.
+#
+# 창은 서로 겹치지 않아 한 시점에 정확히 하나만 due 다. 잡이 늦게 돌면 그 시각이 속한
+# 창의 라벨로 기록되고 이전 라운드는 그날 결손 — 라벨이 실제 시각을 속이지 않게.
+ALT_RANK_ROUND_DISCOVERY = "0902"
+ALT_RANK_EXTRA_ROUNDS: tuple[tuple[str, time, time], ...] = (
+    ("0910", time(9, 10), time(9, 19)),
+    ("0920", time(9, 20), time(9, 29)),
+    ("0930", time(9, 30), time(9, 45)),
+)
+# 형성 시각 탐색이 끝나면 최소 시각 하나만 남기고 나머지는 지운다(수집 비용 절감).
+ALT_RANK_ROUND_LATE = "0930"  # 하위 호환 — 기존 참조·테스트용
+
+
+def _pool_rows(pool: list[RankedSymbol]) -> list[dict[str, Any]]:
+    """순위 행 → JSONL 직렬화 형태. metric/rank 는 병합 규칙 재구성용으로 함께 남긴다."""
+    return [
+        {
+            "symbol": r.symbol,
+            "name": r.name,
+            "market": r.market,
+            "price": r.price,
+            "volume": r.volume,
+            "metric": r.metric,
+            "rank": r.rank,
+        }
+        for r in pool
+    ]
+
 
 async def record_alt_ranking(
     rest: KiwoomRestClient,
@@ -529,63 +592,208 @@ async def record_alt_ranking(
     exclude_etf: bool,
     out_path: Path = ALT_RANK_PATH,
 ) -> Path | None:
-    """발굴 시점의 대안 순위(거래대금 상위)를 JSONL 로 축적 — 새 발굴 신호 A/B 용.
+    """발굴 시점의 대안 순위 풀들을 JSONL 로 축적 — 새 발굴 신호 A/B 용.
 
     무엇/왜: 키움 순위 TR 은 당일 것만 조회 가능해 과거로 거슬러 반사실을 만들 수
-    없다(2026-07-04 선정 알파 검증의 한계). 그래서 발굴 직후 같은 시점에 거래대금
-    순위 풀을 기록해 두면 몇 주 뒤 "거래량 vs 거래대금 발굴" 비교가 가능해진다.
+    없다(2026-07-04 선정 알파 검증의 한계). 그래서 발굴 직후 같은 시점에 대안 순위
+    풀을 기록해 둬야 몇 주 뒤 "거래량 발굴 vs 대안 신호" 비교가 가능해진다.
     매매 동작 무영향 — 순수 데이터 축적이며, 실패는 로그만 남기고 삼킨다.
 
-    기록 형식(한 줄 = 한 발굴):
-    {"v":1, "date", "ts", "volume_chosen": [...], "volume_pool": [...],
-     "value_pool": [{"symbol","name","market","price","volume"}...]}
-    value_pool 은 ETF 필터만 발굴과 동일 적용, 회피/거래불가 제외는 하지 않는다
+    기록 형식(한 줄 = 한 발굴, v2):
+    {"v":2, "date", "ts", "volume_chosen": [...], "volume_pool": [...],
+     "alt_pools": {"<축이름>": [{"symbol","name","market","price","volume","metric","rank"}...]},
+     "value_pool": [...]}   # v1 하위 호환 미러 — 신규 소비자는 alt_pools 를 쓸 것
+    각 풀은 ETF 필터만 발굴과 동일 적용, 회피/거래불가 제외는 하지 않는다
     (선정 '원천'의 원시 신호를 남기는 게 목적 — 필터 효과는 이미 리포트가 기록).
+
+    한 축의 조회가 실패해도 나머지 축은 기록한다(축 단위 스킵) — 전부 비면 그때만
+    줄을 안 쓴다. 빈 줄을 막는 이유는 조회 실패·시장 이상 때 무의미한 라인이 쌓이고,
+    테스트가 fetch 를 페이크로 돌릴 때 운영 파일을 오염시키기 때문
+    (2026-07-05 실측 — pytest 가 0 라인 12줄 오염).
+
+    2차(09:30) 수집은 `record_alt_ranking_late` — 스키마는 같고 `round` 만 다르다.
 
     어떻게 확인: tests/test_daytrade_cli_helpers.py 의 record_alt_ranking 케이스.
     """
     log = structlog.get_logger("daytrade.cli")
     try:
-        value_pool = await top_value(rest, top_n=pool_n, exclude_etf=exclude_etf)
-        if not value_pool:
-            # 빈 풀은 기록 가치가 없고(조회 실패·시장 이상), 테스트가 fetch 를
-            # 페이크로 돌릴 때 무의미한 줄이 운영 파일에 쌓이는 것도 막는다
-            # (2026-07-05 실측 — pytest 가 value_pool 0 라인 12줄 오염).
-            log.warning("daytrade.alt_rank_empty_pool_skipped")
+        pools = await _fetch_alt_pools(rest, pool_n=pool_n, exclude_etf=exclude_etf, log=log)
+        if not pools:
+            log.warning("daytrade.alt_rank_all_pools_empty")
             return None
         chosen = [c.symbol for c in result.chosen]
         blocked = [s for s, _ in result.blocked]
-        now = datetime.now(KST)
-        record = {
-            "v": 1,
-            "date": now.date().isoformat(),
-            "ts": now.isoformat(),
-            "volume_chosen": chosen,
-            "volume_pool": [*chosen, *blocked],
-            "value_pool": [
-                {
-                    "symbol": r.symbol,
-                    "name": r.name,
-                    "market": r.market,
-                    "price": r.price,
-                    "volume": r.volume,
-                }
-                for r in value_pool
-            ],
-        }
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-        log.info(
-            "daytrade.alt_rank_recorded",
-            path=str(out_path),
-            value_pool=[r.symbol for r in value_pool],
+        # 기준축(거래량) 풀은 **발굴 후보 전체**(`result.candidates`)로 남긴다.
+        # `[*chosen, *blocked]` 는 오케스트레이터가 top_n 을 채우면 루프를 break 해서
+        # 진입일엔 4~5종목으로 잘린다 — 대안 축은 항상 pool_n(10)개라, 그대로 두면
+        # A/B 가 '신호 차이' 가 아니라 '순위 깊이 차이' 를 재게 된다(2026-08-09 적대적
+        # 검토). market/rank/metric 까지 남겨야 나중에 다른 병합 규칙으로 재구성도 된다.
+        baseline_rows = _pool_rows(result.candidates) or None
+        return _write_alt_rank_record(
+            out_path,
+            round_label=ALT_RANK_ROUND_DISCOVERY,
+            baseline_rows=baseline_rows if baseline_rows is not None else [],
+            fallback_pool=[*chosen, *blocked],
+            chosen=chosen,
+            pools=pools,
+            log=log,
         )
-        return out_path
     except Exception:
         # 데이터 축적 실패가 매매를 막으면 안 된다 — 경고만 남기고 계속.
         log.warning("daytrade.alt_rank_record_failed", exc_info=True)
         return None
+
+
+async def record_alt_ranking_late(
+    rest: KiwoomRestClient,
+    *,
+    pool_n: int,
+    exclude_etf: bool,
+    round_label: str = ALT_RANK_ROUND_LATE,
+    out_path: Path = ALT_RANK_PATH,
+) -> Path | None:
+    """발굴 이후 진단 라운드 수집 — "만약 그 시각에 발굴했다면" 의 풀들을 같은 스키마로.
+
+    무엇/왜: 1차(09:02)는 매매가 실제로 일어나는 시점이라 판정의 본 표본이지만,
+    `ka10065` 순매수는 장중 누적이라 그 시점엔 데이터가 아예 없다(2026-08-10 실측
+    0행). 이후 라운드(09:10/09:20/09:30)를 10분 격자로 훑어 **신호가 형성되는 최소
+    시각**을 찾는다 — 그게 봇의 진입 창(09:10+) 안이면 그대로 쓸 수 있고, 더 늦으면
+    발굴 시각 이전이 별도 검증 대상이 된다. **판정 자체는 1차로만 내린다.**
+
+    1차와 달리 발굴 결과가 없으므로 기준축(거래량 순위)도 이 시각에 다시 뽑는다.
+    `volume_chosen` 은 빈 리스트(그 시각엔 매수 개념이 없음).
+
+    매매 무영향 — 러너가 아니라 스냅샷 잡(10분 주기)이 부르며, 실패는 삼킨다.
+
+    어떻게 확인: tests/test_daytrade_cli_helpers.py 의 record_alt_ranking_late 케이스.
+    """
+    log = structlog.get_logger("daytrade.cli")
+    try:
+        pools = await _fetch_alt_pools(rest, pool_n=pool_n, exclude_etf=exclude_etf, log=log)
+        try:
+            baseline = await top_volume(rest, top_n=pool_n, exclude_etf=exclude_etf)
+        except Exception:
+            log.warning("daytrade.alt_rank_pool_failed", pool="volume", exc_info=True)
+            baseline = []
+        # 기준축이 없으면 비교 자체가 성립하지 않는다 — 그 라운드는 통째로 건너뛴다.
+        # 반면 **대안 축이 비는 것은 정상적인 관측**이다(그 시각엔 아직 신호 미형성).
+        # 거래대금 축은 어느 시각에도 응답하므로 pools 는 보통 비지 않고, 레코드에
+        # `foreign_netbuy` 키가 없다는 사실 자체가 "그 시각엔 없었다"는 데이터가 된다.
+        if not baseline or not pools:
+            log.warning(
+                "daytrade.alt_rank_late_skipped",
+                round=round_label,
+                baseline=len(baseline),
+                pools=sorted(pools),
+            )
+            return None
+        return _write_alt_rank_record(
+            out_path,
+            round_label=round_label,
+            baseline_rows=_pool_rows(baseline),
+            fallback_pool=[],
+            chosen=[],
+            pools=pools,
+            log=log,
+        )
+    except Exception:
+        log.warning("daytrade.alt_rank_record_failed", round=round_label, exc_info=True)
+        return None
+
+
+async def _fetch_alt_pools(
+    rest: KiwoomRestClient,
+    *,
+    pool_n: int,
+    exclude_etf: bool,
+    log: Any,
+) -> dict[str, list[RankedSymbol]]:
+    """대안 축들을 조회 — 축 하나의 실패/빈 풀이 나머지를 날리지 않게 축 단위로 격리."""
+    pools: dict[str, list[RankedSymbol]] = {}
+    for name, fetch in _ALT_POOL_FETCHERS.items():
+        try:
+            pool = await fetch(rest, pool_n, exclude_etf)
+        except Exception:
+            log.warning("daytrade.alt_rank_pool_failed", pool=name, exc_info=True)
+            continue
+        if pool:
+            pools[name] = pool
+        else:
+            log.warning("daytrade.alt_rank_empty_pool_skipped", pool=name)
+    return pools
+
+
+def _write_alt_rank_record(
+    out_path: Path,
+    *,
+    round_label: str,
+    baseline_rows: list[dict[str, Any]],
+    fallback_pool: list[str],
+    chosen: list[str],
+    pools: dict[str, list[RankedSymbol]],
+    log: Any,
+) -> Path:
+    """alt-rank JSONL 한 줄 append — 1·2차 라운드 공용 직렬화."""
+    now = datetime.now(KST)
+    record: dict[str, Any] = {
+        "v": 2,
+        "round": round_label,
+        "date": now.date().isoformat(),
+        "ts": now.isoformat(),
+        "volume_chosen": chosen,
+        # v1 리더 호환: 코드 문자열 리스트라는 형태를 유지한다(타입 바꾸면 기존
+        # 소비자 3종이 조용히 깨진다). 내용은 후보 전체로 넓히되 과거와 동일한 순서.
+        "volume_pool": [r["symbol"] for r in baseline_rows] or fallback_pool,
+        "volume_pool_rows": baseline_rows,
+        "alt_pools": {name: _pool_rows(pool) for name, pool in pools.items()},
+    }
+    # v1 리더(과거 판정 스크립트)가 계속 읽을 수 있도록 거래대금 풀은 최상위에도 남긴다.
+    if "value" in pools:
+        record["value_pool"] = _pool_rows(pools["value"])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    log.info(
+        "daytrade.alt_rank_recorded",
+        path=str(out_path),
+        round=round_label,
+        pools={name: [r.symbol for r in pool] for name, pool in pools.items()},
+    )
+    return out_path
+
+
+def alt_rank_due_round(path: Path = ALT_RANK_PATH, *, now: datetime | None = None) -> str | None:
+    """지금 기록해야 할 진단 라운드 라벨. 창 밖이거나 오늘치가 이미 있으면 None.
+
+    무엇/왜: 스냅샷 잡은 10분마다 도는 별개 프로세스라 "어느 라운드 차례인지"를 스스로
+    알 수 없다. 파일을 보고 (오늘, 라운드) 유무로 판단하면 잡 재시작·지연에도 라운드당
+    정확히 한 번만 기록된다(멱등). 창을 벗어난 시각엔 아무것도 기록하지 않는다 —
+    맥북이 아침에 잠들어 있다가 오후에 깨어난 날 15:00 짜리 데이터가 "09:30" 으로
+    박히면 라운드 라벨이 시각을 속이게 되므로(2026-07 슬립 사고 전례).
+    """
+    at = now or datetime.now(KST)
+    label = next(
+        (name for name, start, end in ALT_RANK_EXTRA_ROUNDS if start <= at.time() <= end),
+        None,
+    )
+    if label is None:
+        return None
+    today = at.date().isoformat()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return label  # 파일이 아직 없으면 1차도 없는 날 — 기록 시도 자체는 해 본다.
+    for raw in lines:
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            continue
+        try:
+            rec = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("date") == today and rec.get("round") == label:
+            return None
+    return label
 
 
 _SHADOW_FALLBACK_CASH = 10_000_000.0  # 잔고 조회 실패 시 가상 시작 자본
@@ -694,7 +902,7 @@ async def delayed_discover(
             await record_alt_ranking(
                 rest,
                 result,
-                pool_n=max(top_n * 3, top_n + 7),
+                pool_n=alt_rank_pool_n(top_n),
                 exclude_etf=exclude_etf,
             )
             # 게이트 전면 차단 + 옵트인 → 주문 없는 섀도우 세션으로 전환 시도.
@@ -745,6 +953,8 @@ async def delayed_discover(
 __all__ = [
     "PaperDayOverrides",
     "RegimeRoutingResult",
+    "alt_rank_due_round",
+    "alt_rank_pool_n",
     "apply_daytrade_profile_overrides",
     "apply_profile_to_runner",
     "build_paper_day_runner",
@@ -754,5 +964,6 @@ __all__ = [
     "paper_day_main",
     "paper_day_with_commands",
     "record_alt_ranking",
+    "record_alt_ranking_late",
     "route_profile_by_regime",
 ]

@@ -49,6 +49,11 @@ class TR:
 
     # 순위 / 지수 (day-trade 발굴·게이트용 — probe 2026-05-03 확정)
     RANK_VOLUME = "ka10030"  # 당일 거래량 상위 (필수: crd_tp 등 — market/rank.py 참고)
+    # 장중 투자자별 순매수 상위 — 발굴 대안 신호 A/B 연구용(probe 2026-08-09 mock 실측).
+    # 필수: trde_tp / mrkt_tp / orgn_tp 3개뿐. 응답 행은 stk_cd/stk_nm/sel_qty/buy_qty/netslmt
+    # (가격·누적거래량 필드 없음). ka90009·ka10034 는 시장 분리가 안 되거나 인버스 ETF 가
+    # 상위를 점유해 후보에서 탈락 — 상세는 scripts/diagnostics/probe_rank_netbuy.py.
+    RANK_INTRADAY_INVESTOR = "ka10065"
     # ka20006 은 "업종현재가" 라 일봉 미지원 — ka20009 "업종일봉조회" 가 정답.
     SECTOR_INDEX_DAILY = "ka20009"  # 업종 일봉 (KOSPI 종합 001 / KOSDAQ 종합 101)
 
@@ -62,6 +67,10 @@ MARKET_TP_ALL = "000"
 MARKET_TP_KOSPI = "001"
 MARKET_TP_KOSDAQ = "101"
 
+# 장중 투자자별 매매상위(ka10065) 의 투자자 구분(`orgn_tp`).
+INVESTOR_TP_FOREIGN = "9000"  # 외국인
+INVESTOR_TP_INSTITUTION = "9999"  # 기관계
+
 # 업종 일봉(ka20009) 요청의 시장 구분(`mrkt_tp`) — 순위 TR 과 코드 체계 다름.
 # probe 2026-05-03 로 ka20009 가 mrkt_tp 필수임이 확인됨.
 INDEX_MRKT_TP_KOSPI = "0"
@@ -71,6 +80,8 @@ INDEX_MRKT_TP_KOSDAQ = "1"
 __all__ = [
     "INDEX_MRKT_TP_KOSDAQ",
     "INDEX_MRKT_TP_KOSPI",
+    "INVESTOR_TP_FOREIGN",
+    "INVESTOR_TP_INSTITUTION",
     "MARKET_TP_ALL",
     "MARKET_TP_KOSDAQ",
     "MARKET_TP_KOSPI",

@@ -279,6 +279,75 @@ def test_load_todays_discovery_symbols_filters_date_and_excludes(tmp_path: Path)
     assert [t.symbol for t in targets] == ["001210"]
 
 
+def _alt_rank_line_v2(date: str, volume_pool: list[str], alt_pools: dict[str, list[dict]]) -> str:
+    return json.dumps(
+        {
+            "v": 2,
+            "date": date,
+            "ts": f"{date}T09:02:00+09:00",
+            "volume_chosen": volume_pool[:1],
+            "volume_pool": volume_pool,
+            "alt_pools": alt_pools,
+            # v1 하위 호환 미러 — 거래대금 축이 있을 때만 최상위에 실린다.
+            **({"value_pool": alt_pools["value"]} if "value" in alt_pools else {}),
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_load_todays_discovery_symbols_covers_every_alt_pool(tmp_path: Path) -> None:
+    """v2 의 `alt_pools` 전 축이 스냅샷 대상에 들어간다.
+
+    여기서 한 축이라도 빠지면 그 종목의 일중 가격이 안 쌓여 A/B 판정 자체가
+    불가능해진다(스냅샷은 소급 수집이 안 됨) — 새 발굴 신호를 더할 때의 최대 함정.
+    """
+    path = tmp_path / "alt-rank.jsonl"
+    path.write_text(
+        _alt_rank_line_v2(
+            "2026-08-10",
+            volume_pool=["001210"],
+            alt_pools={
+                "value": [
+                    {"symbol": "005930", "name": "삼성전자", "market": "KOSPI"},
+                ],
+                "foreign_netbuy": [
+                    {"symbol": "073240", "name": "금호타이어", "market": "KOSPI"},
+                ],
+                "institution_netbuy": [
+                    {"symbol": "441270", "name": "파인엠텍", "market": "KOSDAQ"},
+                ],
+            },
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    targets = ps.load_todays_discovery_symbols(path, when=datetime(2026, 8, 10, tzinfo=KST).date())
+
+    by_symbol = {t.symbol: t for t in targets}
+    assert set(by_symbol) == {"001210", "005930", "073240", "441270"}
+    assert by_symbol["073240"].name == "금호타이어"
+    assert by_symbol["441270"].market == "KOSDAQ"
+
+
+def test_load_todays_discovery_symbols_still_reads_v1_records(tmp_path: Path) -> None:
+    """v1 레코드(최상위 value_pool, alt_pools 없음)도 그대로 읽힌다 — 과거 파일 회귀."""
+    path = tmp_path / "alt-rank.jsonl"
+    path.write_text(
+        _alt_rank_line(
+            "2026-07-06",
+            volume_pool=["001210"],
+            value_pool=[{"symbol": "005930", "name": "삼성전자", "market": "KOSPI"}],
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    targets = ps.load_todays_discovery_symbols(path, when=datetime(2026, 7, 6, tzinfo=KST).date())
+
+    assert {t.symbol for t in targets} == {"001210", "005930"}
+
+
 def test_load_todays_discovery_symbols_missing_file_is_empty(tmp_path: Path) -> None:
     assert ps.load_todays_discovery_symbols(tmp_path / "none.jsonl") == []
 

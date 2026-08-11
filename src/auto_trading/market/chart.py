@@ -72,6 +72,58 @@ async def get_daily_bars(
     return bars
 
 
+async def get_minute_bars(
+    client: KiwoomRestClient,
+    symbol: str,
+    *,
+    tic_scope: str = "1",  # 1=1분봉
+    on_date: date | None = None,
+    upd_stkpc_tp: str = "1",  # 수정주가 적용
+    max_pages: int = 3,
+) -> list[Bar]:
+    """분봉 차트 (TR ka10080). 최신부터 과거 순으로 페이지네이션 후 오름차순 반환.
+
+    무엇/왜: 게이트 차단일 대안 발굴 축(순매수 등)의 픽을 **실제 출구 스택으로**
+    사후 재생하려면 분 단위 가격이 필요하다. 이 축들은 러너 구독 유니버스가 아니라
+    틱·봉이 실시간으로 쌓이지 않으므로 사후 조회가 유일한 경로다(2026-08-10).
+
+    `on_date` 를 주면 그 날짜 봉만 남긴다 — 한 페이지(900봉)가 여러 거래일에 걸쳐
+    오므로 필터가 없으면 다른 날 봉이 섞인다. 요청 시점 기준 과거 며칠까지만
+    조회되므로(실측 900봉 ≈ 2~4거래일/페이지), 오래된 일자는 결손일 수 있다 —
+    호출자가 빈 리스트를 "그날 데이터 없음"으로 다뤄야 한다.
+
+    어떻게 확인: tests/test_market_chart.py 의 get_minute_bars 케이스.
+    """
+    body = {
+        "stk_cd": symbol,
+        "tic_scope": tic_scope,
+        "upd_stkpc_tp": upd_stkpc_tp,
+    }
+    bars: list[Bar] = []
+    async for page in client.paginate(TR.CHART_MINUTE, PATH_CHART, body, max_pages=max_pages):
+        for row in extract_rows(page):
+            # 분봉 체결시각은 `cntr_tm`(YYYYMMDDHHMMSS) — 일봉의 `dt` 와 키가 다르다.
+            ts_raw = row.get("cntr_tm") or row.get("dt") or row.get("date")
+            if not ts_raw:
+                continue
+            ts = parse_kiwoom_ts(ts_raw)
+            if on_date is not None and ts.date() != on_date:
+                continue
+            bars.append(
+                Bar(
+                    symbol=symbol,
+                    ts=ts,
+                    open=float(abs(to_decimal(row.get("open_pric") or row.get("open")))),
+                    high=float(abs(to_decimal(row.get("high_pric") or row.get("high")))),
+                    low=float(abs(to_decimal(row.get("low_pric") or row.get("low")))),
+                    close=float(abs(to_decimal(row.get("cur_prc") or row.get("close")))),
+                    volume=int(to_decimal(row.get("trde_qty") or row.get("volume"))),
+                )
+            )
+    bars.sort(key=lambda b: b.ts)
+    return bars
+
+
 def bars_to_dataframe(bars: Iterable[Bar]) -> pd.DataFrame:
     """백테스트·지표 계산용 DataFrame. 오름차순 ts 인덱스."""
     records = [
