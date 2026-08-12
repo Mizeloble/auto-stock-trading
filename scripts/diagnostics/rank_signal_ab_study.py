@@ -15,7 +15,8 @@ v2 가 축을 여러 개 동시에 축적하기 시작해(외인/기관 순매�
 
 사전 등록(중요 — 사후 축 고르기 방지):
 - **1차 가설은 `foreign_netbuy`(외인 순매수) 하나.** 판정은 이 축으로만 내린다.
-- `institution_netbuy` 는 탐색용 2차, `value`(거래대금)는 이미 기각된 대조군.
+- `institution_netbuy` 는 탐색용 2차였으나 09:30 에도 3일 연속 0행이라 수집에서
+  제거(2026-08-12, 사전 등록 규칙). `value`(거래대금)는 이미 기각된 대조군.
   둘은 참고 출력이며, 여기서 나온 수치로 "그럼 이 축으로 바꾸자"는 결론을 내지 않는다
   (축을 여러 개 보면 우연히 좋은 축이 하나는 나오게 돼 있다 — 다중비교).
 - 판정 조건 3종은 아래 `_verdict_lines()` 에 박아 두고 표본 30일(`MIN_DAYS_FOR_VERDICT`)에
@@ -33,8 +34,16 @@ v2 가 축을 여러 개 동시에 축적하기 시작해(외인/기관 순매�
   전 종목 수익률이 정확히 0 인 날은 표본에서 자동 배제.
 - 스냅샷 결손은 종목-일 단위로 스킵하고 건수를 표기 — 조용히 빠지지 않게.
 
-수집 라운드: 1차 09:02(발굴 시각, **판정 표본**) · 2차 09:30(진단 — 1차 기각이
-'엣지 없음'인지 '아직 미형성'인지 가름). 2차는 스냅샷 잡이 기록하며 판정에 안 쓴다.
+수집 라운드와 판정 표본 (2026-08-12 재등록 — 사유는 ROUND_VERDICT 주석):
+- **판정 표본 = 0930 라운드**, 수익률 창 09:40→15:15. ka10065 는 09:02/09:10/09:20 에
+  구조적으로 0행이라(2026-08-10~12 실측) 원래 등록한 09:02 표본은 영원히 비고,
+  09:30 형성 신호를 09:10 진입 창으로 재면 신호가 생기기 전 가격을 쓰는
+  전방주시(look-ahead)가 된다. 순매수 풀 종목의 스냅샷도 0930 레코드 이후(≈09:40)부터
+  쌓이므로 09:40 이 데이터가 지지하는 최초 진입 시각이다.
+- 09:02(발굴 시각) 레코드는 계속 읽되 진단·대조군 전용 — 실제 매매가 일어나는 시각의
+  기록이고, 거래대금 대조군의 v1 이력과 이어진다.
+- 채택돼도 곧바로 발굴 소스 교체가 아니다: 매매는 09:02 에 일어나므로 **발굴 시각을
+  09:30+ 로 옮기는 반사실 검증**을 별도로 통과해야 한다(사전 등록 유지).
 
 실행: uv run python scripts/diagnostics/rank_signal_ab_study.py
       uv run python scripts/diagnostics/rank_signal_ab_study.py --selftest  # 데이터 없이 로직 검증
@@ -52,7 +61,11 @@ from auto_trading.reports.snapshot_reader import TopcapSnapshots, parse_topcap_f
 
 ALT_RANK_PATH = Path("data/discovery/alt-rank.jsonl")
 SNAPSHOT_ROOT = Path("data/snapshots")
-ENTRY_MIN = 9 * 60 + 10  # 09:10 — 실제 봇 첫 진입 창
+ENTRY_MIN = 9 * 60 + 10  # 09:10 — 실제 봇 첫 진입 창(09:02 발굴 라운드 진단용)
+# 판정 표본(0930 라운드)의 진입 창. 09:30 에 형성되는 신호로 09:10 진입 수익률을 재면
+# 신호가 존재하기 전 가격을 쓰는 전방주시 편향이고, 순매수 풀 종목의 10분 스냅샷도
+# 0930 레코드가 쓰인 뒤부터 존재해 09:10 가격 자체가 없다(전부 결손 스킵됨).
+ENTRY_MIN_VERDICT = 9 * 60 + 40
 EXIT_MIN = 15 * 60 + 15  # 15:15 — EOD 청산 시각
 TOL_MIN = 12  # 스냅샷 10분 캐던스 — 목표 시각에서 이 이상 멀면 결손 처리
 TOP_N = 3  # 실제 픽 크기
@@ -67,13 +80,15 @@ MIN_DAYS_FOR_VERDICT = 30
 # 진입일에 잘려 있을 때 상한이 50%로 눌려 조건 ③ 이 구조적으로 항상 통과했다.
 OVERLAP_MAX = 0.7
 
-# 수집 라운드. 판정은 **1차(09:02)로만** 내린다 — 실제 매매가 그 시각에 일어나므로
-# 그것만이 "발굴 소스를 바꿀 수 있는가" 에 대한 답이다. 2차(09:30)는 1차가 기각됐을 때
-# "엣지가 없다" 와 "그 시각엔 아직 신호가 안 형성됐다" 를 가르는 진단 표본이다.
-ROUND_DISCOVERY = "0902"
-# 진단 라운드(10분 격자) — 순매수 신호가 **형성되는 최소 시각**을 찾기 위한 탐색용.
-# 2026-08-10 실측: 09:02 는 0행, 09:30 은 정상. 그 사이 어디서 켜지는지가 관건.
-DIAGNOSTIC_ROUNDS = ("0910", "0920", "0930")
+ROUND_DISCOVERY = "0902"  # 발굴 시각 기록 — 진단·거래대금 대조군 전용
+# 판정 표본 라운드 (2026-08-12 재등록). 사전 등록(2026-08-09) 시점엔 09:02 였으나
+# 운영 실측(08-10~12, 3일)에서 ka10065 가 09:02·09:10·09:20 에 전부 0행 — TR 이
+# 그 시각엔 데이터를 만들지 않아 표본이 영원히 0 이었고 판정 자체가 불가능했다.
+# 신호가 형성되는 최소 시각인 09:30 라운드를 표본으로 쓰되, 수익률 창은
+# ENTRY_MIN_VERDICT(09:40) 부터 — 형성 이전 가격 사용(look-ahead) 금지.
+ROUND_VERDICT = "0930"
+# 형성 시각 탐색 라운드 — 커버리지 표로만 소비. 며칠 더 0행이 확인되면 수집 제거 예정.
+DIAGNOSTIC_ROUNDS = ("0910", "0920")
 ROUND_LATE = "0930"  # 하위 호환
 
 BASELINE = "volume"  # 현행 발굴 신호
@@ -93,7 +108,7 @@ def _label(axis: str) -> str:
 @dataclass(frozen=True)
 class DayRecord:
     date: str
-    round_label: str  # "0902"(판정 표본) / "0930"(진단)
+    round_label: str  # "0930"(판정 표본) / "0902"(발굴 시각, 진단) / "0910"·"0920"(탐색)
     pools: dict[str, list[str]]  # 축 이름 → 풀 종목 (BASELINE 포함)
     picks: dict[str, list[str]]  # 축 이름 → 상위 TOP_N 픽
     blocked: bool  # volume_chosen 이 비었던 날(게이트 전면 차단)
@@ -137,18 +152,21 @@ def parse_record(rec: dict) -> DayRecord | None:
     # 실제 매수 종목(chosen)을 쓰면 기준축만 게이트·회피 필터를 통과한 셈이라
     # 사과 대 오렌지가 된다(기준축에 유리한 편향). chosen 은 blocked 판정용으로만 사용.
     picks = {name: pool[:TOP_N] for name, pool in pools.items()}
+    # round 가 없는 과거 레코드(v1·초기 v2)는 전부 발굴 시각 수집분이다.
+    round_label = str(rec.get("round") or ROUND_DISCOVERY)
     return DayRecord(
         date=str(rec.get("date")),
-        # round 가 없는 과거 레코드(v1·초기 v2)는 전부 발굴 시각 수집분이다.
-        round_label=str(rec.get("round") or ROUND_DISCOVERY),
+        round_label=round_label,
         pools=pools,
         picks=picks,
-        blocked=not chosen,
+        # 늦은 라운드(0910~0930)는 volume_chosen 이 항상 빈 리스트(그 시각엔 매수
+        # 개념이 없음) — 진입일까지 '차단일' 로 오인하지 않게 발굴 라운드에서만 판정.
+        blocked=not chosen and round_label == ROUND_DISCOVERY,
     )
 
 
 def load_day_records(
-    path: Path = ALT_RANK_PATH, *, round_label: str | None = ROUND_DISCOVERY
+    path: Path = ALT_RANK_PATH, *, round_label: str | None = ROUND_VERDICT
 ) -> list[DayRecord]:
     """alt-rank JSONL → DayRecord 목록. `round_label=None` 이면 라운드 무관 전부."""
     if not path.exists():
@@ -179,16 +197,20 @@ def price_at(snaps: TopcapSnapshots, symbol: str, minute: int) -> float | None:
     return nearest.price
 
 
-def window_return_pct(snaps: TopcapSnapshots, symbol: str) -> float | None:
-    entry = price_at(snaps, symbol, ENTRY_MIN)
+def window_return_pct(
+    snaps: TopcapSnapshots, symbol: str, *, entry_min: int = ENTRY_MIN
+) -> float | None:
+    entry = price_at(snaps, symbol, entry_min)
     exit_ = price_at(snaps, symbol, EXIT_MIN)
     if entry is None or exit_ is None or entry <= 0:
         return None
     return (exit_ / entry - 1.0) * 100.0
 
 
-def kospi_return_pct(date: str, root: Path = SNAPSHOT_ROOT) -> float | None:
-    """같은 창(09:10→15:15)의 KOSPI 지수 변화율 — 시장 통제군."""
+def kospi_return_pct(
+    date: str, root: Path = SNAPSHOT_ROOT, *, entry_min: int = ENTRY_MIN
+) -> float | None:
+    """같은 창(entry_min→15:15)의 KOSPI 지수 변화율 — 시장 통제군."""
     path = root / f"indices-{date}.jsonl"
     if not path.exists():
         return None
@@ -212,7 +234,7 @@ def kospi_return_pct(date: str, root: Path = SNAPSHOT_ROOT) -> float | None:
         m, v = min(pts, key=lambda p: abs(p[0] - minute))
         return v if abs(m - minute) <= TOL_MIN else None
 
-    entry, exit_ = nearest(ENTRY_MIN), nearest(EXIT_MIN)
+    entry, exit_ = nearest(entry_min), nearest(EXIT_MIN)
     if entry is None or exit_ is None or entry <= 0:
         return None
     return (exit_ / entry - 1.0) * 100.0
@@ -262,7 +284,7 @@ def _verdict_lines(stats: dict[str, AxisStats]) -> list[str]:
     if primary is None or base is None:
         return [
             f"⏳ 1차 가설 축({_label(PRIMARY_AXIS)}) 데이터 없음 — 판정 불가.",
-            "   수집은 다음 발굴부터 시작됩니다 (v2 레코드가 쌓이면 이 줄이 판정으로 바뀜).",
+            "   판정 표본은 스냅샷 잡의 0930 라운드가 쌓아 갑니다 (레코드가 쌓이면 판정으로 바뀜).",
         ]
 
     common = sorted(set(primary.day_pool_mean) & set(base.day_pool_mean))
@@ -283,7 +305,8 @@ def _verdict_lines(stats: dict[str, AxisStats]) -> list[str]:
     cond3 = overlap <= OVERLAP_MAX
 
     out.append(
-        f"판정 대상(1차 가설): {_label(PRIMARY_AXIS)} vs {_label(BASELINE)} · 공통 {len(diffs)}일"
+        f"판정 대상(1차 가설): {_label(PRIMARY_AXIS)} vs {_label(BASELINE)}"
+        f" · 0930 라운드 공통 {len(diffs)}일"
     )
     if len(diffs) < MIN_DAYS_FOR_VERDICT:
         out.append(
@@ -307,7 +330,10 @@ def _verdict_lines(stats: dict[str, AxisStats]) -> list[str]:
         return out  # 표본 미달이면 채택/기각 문구를 아예 내지 않는다(조기 결론 방지).
     if cond1 and cond2 and cond3:
         out.append("→ **채택 후보** — 발굴 소스 교체를 검토할 근거가 처음으로 생김.")
-        out.append("   단, 교체 전 반사실(출구 규칙 반영)로 손익까지 확인할 것.")
+        out.append(
+            "   단, 교체 전 반사실 2종을 통과해야 한다: ① 출구 규칙 반영 손익"
+            " ② 발굴 시각을 09:30+ 로 옮기는 검증(신호가 09:02 발굴로는 못 쓰는 시각에 형성)."
+        )
     else:
         out.append(
             "→ **기각** — 현행 거래량 순위 유지. 미충족 조건이 하나라도 있으면 교체하지 않는다."
@@ -315,7 +341,12 @@ def _verdict_lines(stats: dict[str, AxisStats]) -> list[str]:
     return out
 
 
-def analyze(records: list[DayRecord], *, snapshot_root: Path = SNAPSHOT_ROOT) -> dict:
+def analyze(
+    records: list[DayRecord],
+    *,
+    snapshot_root: Path = SNAPSHOT_ROOT,
+    entry_min: int = ENTRY_MIN,
+) -> dict:
     stats: dict[str, AxisStats] = {}
     skipped_symbol_days = 0
     blocked_days = 0
@@ -325,14 +356,14 @@ def analyze(records: list[DayRecord], *, snapshot_root: Path = SNAPSHOT_ROOT) ->
 
     for rec in records:
         snaps = parse_topcap_for_date(rec.date, root=snapshot_root)
-        kospi = kospi_return_pct(rec.date, root=snapshot_root)
+        kospi = kospi_return_pct(rec.date, root=snapshot_root, entry_min=entry_min)
 
         universe: set[str] = set()
         for pool in rec.pools.values():
             universe |= set(pool)
         for pick in rec.picks.values():
             universe |= set(pick)
-        ret = {sym: window_return_pct(snaps, sym) for sym in universe}
+        ret = {sym: window_return_pct(snaps, sym, entry_min=entry_min) for sym in universe}
 
         # 휴장일 가드 — 휴장이어도 수집 잡은 돌기 때문에 전일 종가로 고정된 스냅샷이
         # 하루치 쌓여 전 종목 0.00% 로 조인된다. 평균 희석·표본 부풀림 방지로 통째 배제.
@@ -389,15 +420,18 @@ def analyze(records: list[DayRecord], *, snapshot_root: Path = SNAPSHOT_ROOT) ->
 
 
 def main() -> None:
-    records = load_day_records()
+    records = load_day_records(round_label=ROUND_VERDICT)
     if not records:
-        print(f"데이터 없음: {ALT_RANK_PATH} 에 비교 가능한 레코드가 없습니다.")
-        print("paper-day 발굴이 돌면 하루 1줄씩 쌓입니다. 며칠 후 재실행하세요.")
+        print(f"데이터 없음: {ALT_RANK_PATH} 에 0930 라운드 레코드가 없습니다.")
+        print("스냅샷 잡이 장중 09:30 창에서 하루 1줄씩 쌓습니다. 며칠 후 재실행하세요.")
         return
 
-    res = analyze(records)
+    res = analyze(records, entry_min=ENTRY_MIN_VERDICT)
     stats: dict[str, AxisStats] = res["stats"]
-    print(f"=== 발굴 신호 A/B (창 09:10→15:15, 왕복비용 {ROUND_TRIP_COST_PCT}%) ===")
+    print(
+        f"=== 발굴 신호 A/B (판정 표본 0930 라운드 · 창 09:40→15:15,"
+        f" 왕복비용 {ROUND_TRIP_COST_PCT}%) ==="
+    )
     print(f"1차 가설: {_label(PRIMARY_AXIS)} · 나머지 축은 참고용(다중비교 주의)\n")
     for line in res["lines"]:
         print(line)
@@ -437,7 +471,7 @@ def main() -> None:
     for line in _verdict_lines(stats):
         print(line)
     _print_round_coverage()
-    _print_late_round_diagnostic()
+    _print_discovery_round_diagnostic()
 
 
 def _print_round_coverage() -> None:
@@ -492,36 +526,26 @@ def _print_round_coverage() -> None:
     )
 
 
-def _print_late_round_diagnostic() -> None:
-    """2차(09:30) 라운드 요약 — 판정이 아니라 '왜 그런가' 를 가르는 진단.
+def _print_discovery_round_diagnostic() -> None:
+    """발굴 시각(09:02) 라운드 요약 — 판정이 아니라 대조군 진단.
 
-    1차가 기각인데 2차가 좋으면 "신호는 있는데 09:02 엔 아직 안 형성됐다" 는 뜻이고,
-    둘 다 나쁘면 "이 축엔 엣지가 없다" 로 축 자체를 닫을 수 있다. 어느 쪽이든
-    **발굴 소스 교체 판정에는 쓰지 않는다** — 매매는 09:02 에 일어나기 때문.
+    실제 매매가 일어나는 시각의 기록이라, 판정 표본(0930)과 비교하면 "09:30 우위가
+    발굴 시각까지 살아남을 수 있는가" 를 가늠하는 참고가 된다. 순매수 축은 이 시각엔
+    구조적으로 없으므로 사실상 거래대금 대조군의 연속 관측이다. **판정에는 쓰지 않는다.**
     """
-    late = [r for label in DIAGNOSTIC_ROUNDS for r in load_day_records(round_label=label)]
+    discovery = load_day_records(round_label=ROUND_DISCOVERY)
     print()
-    if not late:
-        print("--- 진단 라운드 --- 아직 수집분 없음 (스냅샷 잡이 09:10/09:20/09:30 창에 기록).")
+    if not discovery:
+        print("--- 발굴 시각(09:02) 라운드 --- 수집분 없음.")
         return
-    res = analyze(late)
+    res = analyze(discovery, entry_min=ENTRY_MIN)
     stats: dict[str, AxisStats] = res["stats"]
-    base, primary = stats.get(BASELINE), stats.get(PRIMARY_AXIS)
-    print(f"--- 진단 라운드 합산 · {res['evaluated_days']}일 (판정에는 미사용) ---")
+    print(
+        f"--- 발굴 시각(09:02) 라운드 · {res['evaluated_days']}일 ·"
+        " 창 09:10→15:15 (판정에는 미사용) ---"
+    )
     for axis, st in stats.items():
         print(f"{_label(axis):<12} 풀 전체: {describe(st.pool_returns)}")
-    if base is None or primary is None:
-        return
-    common = sorted(set(primary.day_pool_mean) & set(base.day_pool_mean))
-    diffs = [primary.day_pool_mean[d] - base.day_pool_mean[d] for d in common]
-    if not diffs:
-        return
-    t = paired_t(diffs)
-    t_str = f" · t≈{t:.2f}" if t is not None else ""
-    print(
-        f"{_label(PRIMARY_AXIS)} 대 {_label(BASELINE)}: 평균 {statistics.fmean(diffs):+.2f}%p"
-        f" · 우위 {sum(1 for d in diffs if d > 0)}/{len(diffs)}일{t_str}"
-    )
 
 
 def selftest() -> None:
@@ -559,10 +583,13 @@ def selftest() -> None:
     )
     assert truncated is not None and truncated.pools[BASELINE] == ["A", "B", "C", "D"]
 
-    # 라운드 필터 — 판정 표본은 1차만. round 없는 과거 레코드는 1차로 간주.
+    # 라운드 필터 — 판정 표본은 0930. round 없는 과거 레코드는 발굴 라운드로 간주.
     assert rec.round_label == ROUND_DISCOVERY
-    late = parse_record({**v2, "round": ROUND_LATE})
-    assert late is not None and late.round_label == ROUND_LATE
+    late = parse_record({**v2, "round": ROUND_VERDICT})
+    assert late is not None and late.round_label == ROUND_VERDICT
+    # 늦은 라운드는 volume_chosen 이 항상 비므로 차단일로 간주하면 안 된다.
+    late_empty = parse_record({**v2, "round": ROUND_VERDICT, "volume_chosen": []})
+    assert late_empty is not None and not late_empty.blocked
 
     v1 = {"v": 1, "date": "2026-07-06", "volume_pool": ["A"], "value_pool": [{"symbol": "Z"}]}
     rec1 = parse_record(v1)

@@ -223,10 +223,11 @@ def _ranked(
 
 
 def _patch_alt_pools(monkeypatch, *, value=None, foreign=None, institution=None) -> None:
-    """record_alt_ranking 이 부르는 순위 조회 3종을 한 번에 페이크로 교체.
+    """record_alt_ranking 이 부르는 순위 조회를 한 번에 페이크로 교체.
 
     각 인자는 `(rest, top_n, exclude_etf) -> list[RankedSymbol]` 을 흉내 내는 async
     콜러블이거나, 그대로 돌려줄 리스트. None 이면 빈 풀(= 그 축 스킵).
+    institution 은 수집 축에서 빠졌지만(2026-08-12) top_net_buy 페이크의 분기 유지용으로 남긴다.
     """
     import auto_trading.daytrade.cli_helpers as ch
 
@@ -296,13 +297,13 @@ async def test_record_alt_ranking_appends_jsonl(tmp_path: Path, monkeypatch) -> 
     assert rec["volume_chosen"] == ["005930"]
     assert rec["volume_pool"] == ["005930", "356680"]
     pools = rec["alt_pools"]
-    assert set(pools) == {"value", "foreign_netbuy", "institution_netbuy"}
+    # 기관계 축은 2026-08-12 수집 제거(사전 등록 규칙 — 09:30 에도 3일 연속 0행).
+    assert set(pools) == {"value", "foreign_netbuy"}
     assert [r["symbol"] for r in pools["value"]] == ["222222", "111111"]
     assert pools["value"][0]["price"] == 300_000.0
     # 순매수 축은 metric/rank 로만 의미가 있고 부호를 유지해야 한다(병합 규칙 재구성용).
     assert pools["foreign_netbuy"][0]["metric"] == 594_000.0
     assert pools["foreign_netbuy"][0]["rank"] == 1
-    assert pools["institution_netbuy"][0]["metric"] == -1_000.0
     # v1 리더 하위 호환 — 거래대금 풀은 최상위에도 미러링.
     assert [r["symbol"] for r in rec["value_pool"]] == ["222222", "111111"]
 
