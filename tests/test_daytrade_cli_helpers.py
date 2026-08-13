@@ -666,11 +666,11 @@ async def test_record_alt_ranking_late_honors_round_label(tmp_path: Path, monkey
         None,  # type: ignore[arg-type]
         pool_n=10,
         exclude_etf=True,
-        round_label="0910",
+        round_label="0935",
         out_path=out,
     )
 
-    assert json.loads(out.read_text(encoding="utf-8").strip())["round"] == "0910"
+    assert json.loads(out.read_text(encoding="utf-8").strip())["round"] == "0935"
 
 
 async def test_record_alt_ranking_late_skips_without_baseline(tmp_path: Path, monkeypatch) -> None:
@@ -697,11 +697,12 @@ async def test_record_alt_ranking_late_skips_without_baseline(tmp_path: Path, mo
 
 
 def test_alt_rank_due_round_maps_time_to_label(tmp_path: Path) -> None:
-    """10분 격자 라운드 — 시각이 속한 창의 라벨을 돌려주고, 창 밖이면 None.
+    """판정 라운드(0930) — 시각이 창(09:30~09:45)에 속하면 라벨, 창 밖이면 None.
 
-    라벨이 실제 시각을 속이면 "신호 형성 최소 시각" 분석이 통째로 무너진다. 맥북이
-    오후에 깨어난 날 15:00 데이터가 "0930" 으로 박히는 것도 이 가드가 막는다
-    (2026-07 슬립 사고 전례).
+    라벨이 실제 시각을 속이면 판정 표본이 통째로 무너진다. 맥북이 오후에 깨어난 날
+    15:00 데이터가 "0930" 으로 박히는 것도 이 가드가 막는다(2026-07 슬립 사고 전례).
+    09:10/09:20 탐색 라운드는 3거래일 연속 0건으로 제거(2026-08-13) — 그 시각은 이제
+    창 밖이라 None 이어야 한다.
     """
     import auto_trading.daytrade.cli_helpers as ch
 
@@ -709,38 +710,36 @@ def test_alt_rank_due_round_maps_time_to_label(tmp_path: Path) -> None:
     path.write_text("", encoding="utf-8")
     day = datetime(2026, 8, 10, tzinfo=KST)
 
-    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=10)) == "0910"
-    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=19)) == "0910"
-    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=20)) == "0920"
+    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=30)) == "0930"
     assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=31)) == "0930"
     assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=45)) == "0930"
+    # 제거된 탐색 라운드 시각 — 더는 기록하지 않는다.
+    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=10)) is None
+    assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=22)) is None
     # 발굴(09:02)은 러너가 기록 — 이 잡의 창이 아니다.
     assert ch.alt_rank_due_round(path, now=day.replace(hour=9, minute=2)) is None
     assert ch.alt_rank_due_round(path, now=day.replace(hour=15, minute=0)) is None
 
 
 def test_alt_rank_due_round_is_idempotent_per_round(tmp_path: Path) -> None:
-    """라운드마다 하루 한 번 — 10분 잡이 같은 라운드를 두 번 기록하지 않게."""
+    """라운드는 하루 한 번 — 10분 잡이 같은 라운드를 두 번 기록하지 않게."""
     import auto_trading.daytrade.cli_helpers as ch
 
     path = tmp_path / "alt-rank.jsonl"
     day = datetime(2026, 8, 10, tzinfo=KST)
-    at0910 = day.replace(hour=9, minute=12)
-    at0920 = day.replace(hour=9, minute=22)
+    at0930 = day.replace(hour=9, minute=32)
 
     path.write_text(
         json.dumps({"v": 2, "round": ch.ALT_RANK_ROUND_DISCOVERY, "date": "2026-08-10"}) + "\n",
         encoding="utf-8",
     )
-    assert ch.alt_rank_due_round(path, now=at0910) == "0910", "1차 기록은 진단 라운드와 무관"
+    assert ch.alt_rank_due_round(path, now=at0930) == "0930", "1차 기록은 판정 라운드와 무관"
 
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"v": 2, "round": "0910", "date": "2026-08-10"}) + "\n")
-    assert ch.alt_rank_due_round(path, now=at0910) is None
-    # 다른 라운드는 여전히 due — 라운드 단위로 독립이어야 격자 탐색이 성립한다.
-    assert ch.alt_rank_due_round(path, now=at0920) == "0920"
+        fh.write(json.dumps({"v": 2, "round": "0930", "date": "2026-08-10"}) + "\n")
+    assert ch.alt_rank_due_round(path, now=at0930) is None
     # 어제치는 오늘 판단에 영향을 주면 안 된다.
-    assert ch.alt_rank_due_round(path, now=at0910.replace(day=11)) == "0910"
+    assert ch.alt_rank_due_round(path, now=at0930.replace(day=11)) == "0930"
 
 
 def test_alt_rank_pool_n_matches_discovery_formula() -> None:
