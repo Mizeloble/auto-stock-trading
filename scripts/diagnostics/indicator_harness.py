@@ -240,32 +240,44 @@ def build_panel(symbols: Sequence[str], start: str, end: str) -> dict[str, list[
 
 
 # ── 평가 ─────────────────────────────────────────────────────────────────────
-def moving_block_ci(diffs: Sequence[float]) -> tuple[float, float] | None:
-    """이동블록 부트스트랩 95% CI — 일별 차이의 자기상관 보정."""
+def moving_block_ci(
+    diffs: Sequence[float], *, block: int = BOOT_BLOCK
+) -> tuple[float, float] | None:
+    """이동블록 부트스트랩 95% CI — 표본의 자기상관 보정.
+
+    `block` 은 보유기간이 겹치는 경우(hold>1) 호출자가 넓혀 준다 — 겹친 표본을
+    독립으로 취급하면 CI 가 실제보다 좁아져 없는 유의성을 만들어낸다.
+    """
     n = len(diffs)
-    if n < BOOT_BLOCK * 2:
+    if n < block * 2:
         return None
     rng = random.Random(BOOT_SEED)
-    nblocks = math.ceil(n / BOOT_BLOCK)
+    nblocks = math.ceil(n / block)
     means = []
     for _ in range(BOOT_N):
         sample: list[float] = []
         for _ in range(nblocks):
-            s = rng.randrange(0, n - BOOT_BLOCK + 1)
-            sample.extend(diffs[s : s + BOOT_BLOCK])
+            s = rng.randrange(0, n - block + 1)
+            sample.extend(diffs[s : s + block])
         means.append(statistics.fmean(sample[:n]))
     means.sort()
     return means[int(0.025 * BOOT_N)], means[int(0.975 * BOOT_N)]
 
 
-def evaluate(panel: dict[str, list[DayBar]]) -> dict:
-    """일자별로 풀을 만들고 특성마다 top-K 픽의 당일 수익률을 집계."""
+def evaluate(panel: dict[str, list[DayBar]], *, hold: int = 1) -> dict:
+    """일자별로 풀을 만들고 특성마다 top-K 픽의 보유기간 수익률을 집계.
+
+    `hold` = 보유 거래일 수. 1 이면 당일 시가→종가(현행 데이트레이딩), N 이면
+    D 시가 매수 → D+N-1 종가 매도. **회전율이 1/N 로 줄어 왕복비용 부담도 1/N** 이
+    되므로, "엣지가 없는 게 아니라 비용을 못 이기는 것" 인지 가르는 축이다.
+    """
     index: dict[str, dict[date, int]] = {
         sym: {b.day: i for i, b in enumerate(bars)} for sym, bars in panel.items()
     }
     all_days = sorted({b.day for bars in panel.values() for b in bars})
     per_feature: dict[str, dict[date, float]] = {name: {} for name in FEATURES}
     pool_mean: dict[date, float] = {}
+    universe_mean: dict[date, float] = {}
 
     for day in all_days:
         # 풀 = D-1 거래량 상위. 각 종목의 D-1 은 그 종목 시계열에서 day 직전 봉.
@@ -277,12 +289,16 @@ def evaluate(panel: dict[str, list[DayBar]]) -> dict:
                 continue
             hist = bars[:pos]  # D-1 까지 — 룩어헤드 차단
             today = bars[pos]
-            if today.open <= 0:
+            exit_pos = pos + hold - 1  # 보유 마지막 거래일
+            if today.open <= 0 or exit_pos >= len(bars):
                 continue
             cands.append((hist[-1].volume, sym, hist))
-            outcome[sym] = (today.close / today.open - 1) * 100
+            outcome[sym] = (bars[exit_pos].close / today.open - 1) * 100
         if len(cands) < POOL_N:
             continue
+        # 유니버스 전체 평균 = 베타 벤치마크. 보유기간을 늘리면 시장 상승분이 그대로
+        # 수익에 들어오므로, 이걸 빼지 않으면 '엣지' 와 '그냥 오른 것' 을 구분 못 한다.
+        universe_mean[day] = statistics.fmean([outcome[s] for _, s, _ in cands])
         cands.sort(key=lambda c: -c[0])
         pool = cands[:POOL_N]
         pool_mean[day] = statistics.fmean([outcome[s] for _, s, _ in pool])
@@ -299,7 +315,55 @@ def evaluate(panel: dict[str, list[DayBar]]) -> dict:
             picks = [s for _, s in scored[:PICK_K]]
             per_feature[name][day] = statistics.fmean([outcome[s] for s in picks])
 
-    return {"per_feature": per_feature, "pool_mean": pool_mean, "days": len(pool_mean)}
+    return {
+        "per_feature": per_feature,
+        "pool_mean": pool_mean,
+        "universe_mean": universe_mean,
+        "days": len(pool_mean),
+        "hold": hold,
+    }
+
+
+TRADING_DAYS_PER_YEAR = 250
+
+
+def hold_sweep(panel: dict[str, list[DayBar]], holds: Sequence[int]) -> None:
+    """보유기간 스윕 — 회전율을 낮추면 비용 부담이 줄어 결과가 뒤집히는지 본다.
+
+    핵심 산식: 보유 N일이면 연 `250/N` 회전 → **연 비용 = 왕복비용 x 250/N**.
+    현행(N=1)은 연 82%p 를 비용으로 쓴다(픽 3종목이라 실제 자본 대비로는 더 작지만,
+    수익률 자체가 비용을 이겨야 한다는 구조는 동일). N 을 키우면 이 부담이 급감한다.
+    """
+    print(f"\n=== 보유기간 스윕 (풀 {POOL_N} · 픽 {PICK_K} · 왕복비용 {COST_PCT}%) ===")
+    print(
+        f"{'보유':<6}{'평가':>6}{'픽 수익':>9}{'유니버스':>9}{'초과(알파)':>11}"
+        f"{'초과 95% CI':>21}{'연 비용':>9}"
+    )
+    for hold in holds:
+        res = evaluate(panel, hold=hold)
+        base = res["per_feature"].get(BASELINE_FEATURE, {})
+        uni = res["universe_mean"]
+        if not base or not uni:
+            continue
+        days = sorted(set(base) & set(uni))
+        vals = [base[d] for d in days]
+        unis = [uni[d] for d in days]
+        excess = [base[d] - uni[d] for d in days]
+        turns = TRADING_DAYS_PER_YEAR / hold
+        # 보유기간이 겹치므로 자기상관이 크다 — 블록을 보유일의 2배로 넓힌다.
+        ci = moving_block_ci(excess, block=max(BOOT_BLOCK, hold * 2))
+        ci_s = f"[{ci[0]:+.2f}, {ci[1]:+.2f}]" if ci else "CI 불가"
+        print(
+            f"{hold:>3}일{len(days):>6}{statistics.fmean(vals):>+8.2f}%"
+            f"{statistics.fmean(unis):>+8.2f}%{statistics.fmean(excess):>+10.2f}%p"
+            f"{ci_s:>21}{COST_PCT * turns:>8.1f}%"
+        )
+    print(
+        "\n※ **초과(알파) = 픽 - 유니버스 전체 평균.** 보유기간을 늘리면 시장 상승분이"
+        "\n  그대로 수익에 들어오므로, 이걸 빼야 '선정 실력' 과 '그냥 오른 것' 이 갈린다."
+        "\n※ 회전율이 낮을수록 연 비용이 급감한다 — 알파가 같아도 순익은 달라진다."
+        "\n※ 보유기간이 길수록 표본이 겹쳐 CI 가 낙관적일 수 있다(블록 확대로 일부 보정)."
+    )
 
 
 def report(res: dict) -> None:
@@ -445,6 +509,9 @@ def main() -> None:
     ap.add_argument("--years", type=float, default=2.0, help="평가 기간(년)")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--no-control", action="store_true", help="양성 대조군 생략 (기본은 매번 실행)")
+    ap.add_argument(
+        "--hold-sweep", action="store_true", help="보유기간 1/3/5/10/20일 스윕 (회전율 축)"
+    )
     args = ap.parse_args()
     if args.selftest:
         selftest()
@@ -456,6 +523,9 @@ def main() -> None:
     print(f"유니버스 {len(universe)}종목 · 기간 {start} ~ {end} (캐시: {CACHE_DIR})")
     panel = build_panel(universe, start.isoformat(), end.isoformat())
     print(f"적재 완료 {len(panel)}종목")
+    if args.hold_sweep:
+        hold_sweep(panel, [1, 3, 5, 10, 20])
+        return
     report(evaluate(panel))
     if not args.no_control:
         positive_control(panel)
