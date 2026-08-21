@@ -8,6 +8,14 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [x] **📡 수집기 모드 전환 — 매수 전면 차단, 수집만 유지** (2026-08-21, 사용자 결정, `feat/collector-mode`)
+  - **무엇**: `daytrade-current.yaml` 을 수집기 모드로 전환. ① `max_order_value=1` + `daily_notional_limit=1` — 모든 매수가 0주로 사이징돼 거부(crash 프로파일에서 검증된 규약, 0=무제한 함정 주의) ② `regime_router.enabled=false` — 다른 프로파일로 라우팅돼 매매가 재개될 경로 차단 ③ top_n=3(직전 운영본과 동일 — 발굴 풀 10 연속성 유지)·`shadow_on_blocked=true` 유지. 백업: `daytrade-current.yaml.bak.2026-08-21-pre-collector`.
+  - **왜**: 2026-08-15~17 전면 재검토에서 가격·거래량 파생 신호 전 계열이 실측 비용(0.316%/왕복)을 못 넘음이 확정(기각 기록 3종 등재, PR #209). 모의 손실(8월 −123만원 페이스)을 멈추되, 열린 가설(순매수 A/B — 스냅샷 잡이 매매와 무관하게 0930 표본 축적)과 데이터 자산(틱·스냅샷·발굴 기록·차단일 섀도우)은 계속 쌓는다.
+  - **유지되는 것**: 틱 수집(유니버스 3종목), 10분 스냅샷·시총 마스터(별도 launchd), 09:02 발굴 기록, 0930 순매수 A/B 라운드, 게이트 차단일 섀도우, 일일 리포트(매수 0건으로 기록), 텔레그램 알림. **주간 LLM 자동 갱신은 차단 캡·router 를 수정할 수 없음을 확인**(profile_writer 필드 화이트리스트).
+  - **되돌리는 법**: 백업 파일 복원 → 다음 paper-day 시동부터 적용.
+  - **어떻게 확인**: 다음 거래일 리포트에 매수 0건 + 로그에 매수 거부(0주 사이징). `uv run python -c "from pathlib import Path; from auto_trading.daytrade.profile import DaytradeProfile; p=DaytradeProfile.load_yaml(Path('strategies/profiles/daytrade-current.yaml')); print(p.name, p.risk.max_order_value)"` → `daytrade collector 1.0`.
+
+
 - [ ] **🚨 mock 순위 TR(ka10030)이 실제 시장 거래량이 아님 — 실거래 전환 차단 사유** (2026-08-15 발견, `feat/indicator-harness`)
   - **무엇**: 봇의 발굴 순위 근거인 `ka10030`(거래량 상위, mock)이 돌려주는 거래량이 실제 시장과 무관한 값이다. 09:02 누적은 그날 총거래량을 넘을 수 없는데, 봇 기록의 **50%(25/50건)가 초과**(중앙 106%·90분위 421%). 예: 위메이드맥스 2026-08-14 봇 4,943,263 vs 실제 705,947 = **700%**.
   - **어느 쪽이 틀렸나(확정)**: 키움 자체 **일봉(ka10081)·분봉(ka10080)**과 **fdr(KRX 공식)**이 서로 정확히 일치 → 차트 계열은 실제 데이터, **어긋나는 것은 순위 TR 하나**. 체결가도 실제와 1틱 내외 일치(8/14 매수 3건) → **과거 손익 기록 자체는 유효**하고, 무효인 것은 '무엇을 골랐는가'의 입력뿐.
