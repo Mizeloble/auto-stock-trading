@@ -170,6 +170,24 @@ def _format_message(event: str, fields: dict[str, Any]) -> str:
             " (맥북 슬립·네트워크 끊김 등) 확인해 주세요."
         )
 
+    if event == "runner.wallclock_gap":
+        # 2026-10-18 — 러너가 장중 자기 시계 공백을 깨어난 직후 감지(맥북 슬립 의심).
+        # heartbeat-check 도 같이 잠들어 못 잡는 경우라 러너가 직접 알린다. 하루 1회.
+        try:
+            gap_part = f"약 {round(float(fields.get('gap_min')))}분"  # type: ignore[arg-type]
+        except TypeError, ValueError:
+            gap_part = "몇 분"
+        since, until = fields.get("since"), fields.get("until")
+        span = f" ({since}→{until})" if since and until else ""
+        return (
+            f"😴 장중 수집 공백 감지 — 봇이 {gap_part}{span} 멈췄다가 방금 깨어났습니다.\n"
+            "원인: 맥북이 잠자기에 들어간 것으로 보여요. 이 구간 시세·틱 기록이 비어 있을 수"
+            " 있습니다.\n"
+            "확인: 메뉴 막대의 Amphetamine 세션이 켜져 있는지, 전원 어댑터가 연결돼 있는지"
+            " 봐 주세요.\n"
+            "(이 알림은 하루 한 번만 보내요. 이후 공백은 로그에만 남습니다.)"
+        )
+
     if event == "notify.throttled_summary":
         # 23단계 Phase H — ThrottledNotifier 가 N분 윈도우 모은 요약. 본문 그대로.
         return str(fields.get("text") or "🔁 (요약 비어있음)")
