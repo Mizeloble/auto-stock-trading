@@ -35,6 +35,8 @@ _PASSTHROUGH: frozenset[str] = frozenset(
         "runner.kill_switch_blind",
         "runner.weekly_insight",
         "runner.daily_report",
+        # 장중 벽시계 공백(맥북 슬립) — 하루 1회 제한은 러너 감지기가 이미 쥐므로 즉시 통과.
+        "runner.wallclock_gap",
     }
 )
 

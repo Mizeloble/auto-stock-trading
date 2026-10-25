@@ -51,6 +51,7 @@ from ..strategy.base import Signal, Strategy
 from .aggregator import _BarAggregator
 from .control import RunnerControlState
 from .day_state import DayState, DayStateStore
+from .wallclock import WallclockGapDetector
 
 log = structlog.get_logger(__name__)
 
@@ -128,6 +129,9 @@ class PaperRunner:
     # 돈다(일반 dry_run 은 시뮬 매수가 잔고에 안 잡혀 출구 로직이 못 돌던 것과 대비).
     # 실주문·실계좌·day-state 디스크에는 어떤 영향도 없음.
     shadow_tracker: ShadowTracker | None = None
+    # 2026-10-18 — 장중 벽시계 공백(맥북 슬립) 감지. run() 시작 직후부터 도는 독립 task 가
+    # 깨어난 직후 공백을 잡아 로그 + 텔레그램(하루 1회). None 이면 비활성.
+    wallclock_gap: WallclockGapDetector | None = field(default_factory=WallclockGapDetector)
     _settings: Settings = field(default_factory=get_settings)
     _balance_failures: int = field(default=0, init=False)
     # 텔레그램 인커밍 명령 응답용 인메모리 상태 (runner 가 매 사이클 갱신)
@@ -265,6 +269,20 @@ class PaperRunner:
                 "KIWOOM_MODE=real 에서 페이퍼 러너를 돌리려면 allow_real=True 를 명시하세요."
             )
 
+        # 벽시계 공백 감시는 universe 대기 구간(발굴 전)까지 덮어야 하므로 세션 본문
+        # 바깥에서 시동한다 — 슬립은 종목이 정해지기 전에도 수집을 망가뜨린다.
+        gap_task: asyncio.Task[None] | None = None
+        if self.wallclock_gap is not None:
+            gap_task = asyncio.create_task(self._wallclock_gap_loop(self.wallclock_gap))
+        try:
+            await self._run_session()
+        finally:
+            if gap_task is not None:
+                gap_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await gap_task
+
+    async def _run_session(self) -> None:
         self._install_signal_handlers()
         self._started_at = datetime.now()
 
@@ -1638,6 +1656,42 @@ class PaperRunner:
             except asyncio.CancelledError:
                 return
             self.heartbeat.write()
+
+    async def _wallclock_gap_loop(self, detector: WallclockGapDetector) -> None:
+        """check_interval_sec 마다 벽시계를 관측해 장중 공백(맥북 슬립)을 사후 감지.
+
+        2026-10-06~16 Amphetamine 꺼짐 — 맥북이 ~17분 주기로만 깨어 수집이 열화됐는데
+        heartbeat-check 도 같이 잠들어 경보가 없었다. 러너가 깨어나는 순간 스스로 공백을
+        재서 알린다. 공백마다 로그, 텔레그램은 감지기가 하루 1회로 제한.
+        알림 실패가 러너를 멈추면 안 되므로 notify 예외는 삼킨다.
+        """
+        detector.observe()
+        while self._control_state is not RunnerControlState.STOPPING:
+            try:
+                await asyncio.sleep(detector.check_interval_sec)
+            except asyncio.CancelledError:
+                return
+            gap = detector.observe()
+            if gap is None:
+                continue
+            log.warning(
+                "runner.wallclock_gap",
+                gap_min=round(gap.gap_min, 1),
+                since=gap.since.isoformat(),
+                until=gap.until.isoformat(),
+                notified=gap.notify,
+            )
+            if not gap.notify:
+                continue
+            try:
+                await self.notifier.notify(
+                    "runner.wallclock_gap",
+                    gap_min=round(gap.gap_min, 1),
+                    since=gap.since.astimezone(KST).strftime("%H:%M"),
+                    until=gap.until.astimezone(KST).strftime("%H:%M"),
+                )
+            except Exception as exc:
+                log.warning("runner.wallclock_gap_notify_failed", error=str(exc))
 
     async def _protection_loop(self, rest: KiwoomRestClient) -> None:
         """잔고 갱신 + kill switch — 메인 tick 루프와 독립된 background task.
