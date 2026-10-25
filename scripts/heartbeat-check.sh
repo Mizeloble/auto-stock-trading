@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/Users/jjmize/Project/auto-stock-trading"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"  # 스크립트 위치 기준 저장소 루트 (scripts/ 의 부모)
 UV_BIN="/opt/homebrew/bin/uv"
 
 # 평일 (DOW: 1=월 ~ 7=일) + 장중 (09:00~16:00 KST) 만 검사.

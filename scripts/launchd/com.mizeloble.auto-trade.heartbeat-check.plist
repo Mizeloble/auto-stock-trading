@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/heartbeat-check.sh</string>
+        <string>__PROJECT_DIR__/scripts/heartbeat-check.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jjmize/Project/auto-stock-trading</string>
+    <string>__PROJECT_DIR__</string>
 
     <!-- 5분(300초) 간격. 평일 장중 게이트는 셸 스크립트가 처리 (plist 단순화). -->
     <key>StartInterval</key>
@@ -25,9 +25,9 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-heartbeat-check.out.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-heartbeat-check.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-heartbeat-check.err.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-heartbeat-check.err.log</string>
 
     <key>ProcessType</key>
     <string>Background</string>

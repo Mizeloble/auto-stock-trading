@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/legacy/paper-stop.sh</string>
+        <string>__PROJECT_DIR__/scripts/legacy/paper-stop.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jjmize/Project/auto-stock-trading</string>
+    <string>__PROJECT_DIR__</string>
 
     <!-- 평일(월~금) 15:35 KST 트리거. 장 마감(15:30) 후 5분 여유. -->
     <key>StartCalendarInterval</key>
@@ -49,8 +49,8 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper-stop.out.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-paper-stop.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper-stop.err.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-paper-stop.err.log</string>
 </dict>
 </plist>

@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/churnfix-verify.sh</string>
+        <string>__PROJECT_DIR__/scripts/churnfix-verify.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jjmize/Project/auto-stock-trading</string>
+    <string>__PROJECT_DIR__</string>
 
     <!-- 1회성 — 2026-05-21 09:30 KST. launchd StartCalendarInterval 은 시스템
          로컬시간(KST) 기준 (insight-weekly Hour=9 == 09:00 KST 선례).
@@ -32,9 +32,9 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-churnfix-verify.out.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-churnfix-verify.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-churnfix-verify.err.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-churnfix-verify.err.log</string>
 
     <key>ProcessType</key>
     <string>Interactive</string>

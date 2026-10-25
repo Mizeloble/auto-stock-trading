@@ -8,11 +8,11 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/zsh</string>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/rotate-logs.sh</string>
+        <string>__PROJECT_DIR__/scripts/rotate-logs.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jjmize/Project/auto-stock-trading</string>
+    <string>__PROJECT_DIR__</string>
 
     <!-- 매일 02:30 KST. paper-day(08:55)·insight-weekly(토 09:00) 와 충돌 X. -->
     <key>StartCalendarInterval</key>
@@ -29,9 +29,9 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-log-rotate.out.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-log-rotate.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-log-rotate.err.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-log-rotate.err.log</string>
 
     <key>ProcessType</key>
     <string>Background</string>

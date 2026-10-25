@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/shadow-verdict-check.sh</string>
+        <string>__PROJECT_DIR__/scripts/shadow-verdict-check.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jjmize/Project/auto-stock-trading</string>
+    <string>__PROJECT_DIR__</string>
 
     <!-- 평일 15:50 — 15:15 청산·15:30 스냅샷 조인 재보강 이후. 주말 가드는 셸에서. -->
     <key>StartCalendarInterval</key>
@@ -29,9 +29,9 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-shadow-verdict.out.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-shadow-verdict.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-shadow-verdict.err.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-shadow-verdict.err.log</string>
 
     <key>ProcessType</key>
     <string>Background</string>

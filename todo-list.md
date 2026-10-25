@@ -8,6 +8,11 @@
 
 ## 🔧 진행 중 — 미완 항목
 
+- [ ] **🌐 저장소 공개(public) 전환 — AI 개인 활용 사례 공유** (2026-10-25, `chore/oss-public-cleanup`)
+  - **무엇**: 공개 전 정리 완료 — MIT `LICENSE`, README 면책 고지(모의투자·투자권유 아님·키움 무관), 스크립트·plist 의 개인 경로(`/Users/<이름>/…`) 제거(스크립트는 자기 위치 기준, plist 는 `__PROJECT_DIR__` 플레이스홀더를 `launchd-install.sh` 가 치환), `pyproject.toml` 이메일 → GitHub noreply. 시크릿은 현재 트리·히스토리 전체 스캔에서 0건.
+  - **남은 것**: GitHub 저장소 설정에서 visibility 를 public 으로 바꾸는 것은 **사용자가 직접**(되돌려도 이미 복제·캐시된 사본은 회수 불가). 과거 커밋 작성자 이메일(gmail)은 히스토리 재작성 없이는 남는다 — 재작성은 전 커밋 해시·PR 이력이 바뀌어 기본 보류(필요 시 사용자 결정).
+  - **어떻게 확인**: `git grep -n "$USER"` 결과 0건 · `./scripts/launchd-install.sh` 재등록 후 `uv run auto-trade ops` 정상.
+
 - [x] **📡 수집기 모드 전환 — 매수 전면 차단, 수집만 유지** (2026-08-21, 사용자 결정, `feat/collector-mode`)
   - **무엇**: `daytrade-current.yaml` 을 수집기 모드로 전환. ① `max_order_value=1` + `daily_notional_limit=1` — 모든 매수가 0주로 사이징돼 거부(crash 프로파일에서 검증된 규약, 0=무제한 함정 주의) ② `regime_router.enabled=false` — 다른 프로파일로 라우팅돼 매매가 재개될 경로 차단 ③ top_n=3(직전 운영본과 동일 — 발굴 풀 10 연속성 유지)·`shadow_on_blocked=true` 유지. 백업: `daytrade-current.yaml.bak.2026-08-21-pre-collector`.
   - **왜**: 2026-08-15~17 전면 재검토에서 가격·거래량 파생 신호 전 계열이 실측 비용(0.316%/왕복)을 못 넘음이 확정(기각 기록 3종 등재, PR #209). 모의 손실(8월 −123만원 페이스)을 멈추되, 열린 가설(순매수 A/B — 스냅샷 잡이 매매와 무관하게 0930 표본 축적)과 데이터 자산(틱·스냅샷·발굴 기록·차단일 섀도우)은 계속 쌓는다.

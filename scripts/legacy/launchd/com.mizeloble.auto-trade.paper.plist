@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/legacy/paper-day.sh</string>
+        <string>__PROJECT_DIR__/scripts/legacy/paper-day.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jjmize/Project/auto-stock-trading</string>
+    <string>__PROJECT_DIR__</string>
 
     <!-- 평일(월~금) 08:55 KST 트리거. 토(6)/일(0) 제외. -->
     <key>StartCalendarInterval</key>
@@ -55,9 +55,9 @@
     <!-- 표준 출력/에러는 legacy/paper-day.sh 안에서 logs/paper-YYYY-MM-DD.log 로 리다이렉트.
          launchd 자체 로그는 트리거 실패 등 메타 이벤트만 남김. -->
     <key>StandardOutPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper.out.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-paper.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper.err.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-paper.err.log</string>
 
     <!-- macOS sandbox 방지: 일반 사용자 GUI 세션에서 실행 (LaunchAgent 기본 동작) -->
     <key>ProcessType</key>

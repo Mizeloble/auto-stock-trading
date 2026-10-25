@@ -27,7 +27,7 @@ day-trade 모드:
 uv run auto-trade paper --profile strategies/profiles/auto_005930.yaml --dry-run
 ```
 
-자동 등록을 복귀하려면 두 plist 의 ProgramArguments 경로가 `scripts/legacy/paper-day.sh` / `scripts/legacy/paper-stop.sh` 로 갱신되어 있는지 확인 후 `launchctl bootstrap` 으로 직접 로드해야 한다 (`launchd-install.sh` 는 더 이상 처리하지 않는다).
+자동 등록을 복귀하려면 두 plist 의 ProgramArguments 경로가 `scripts/legacy/paper-day.sh` / `scripts/legacy/paper-stop.sh` 로 갱신되어 있는지 확인 후 `launchctl bootstrap` 으로 직접 로드해야 한다 (`launchd-install.sh` 는 더 이상 처리하지 않는다). 이때 plist 의 `__PROJECT_DIR__` 플레이스홀더를 실제 저장소 경로로 바꾼 사본을 로드한다 — 예: `sed "s|__PROJECT_DIR__|$PWD|g" scripts/legacy/launchd/<파일>.plist > ~/Library/LaunchAgents/<파일>.plist`.
 
 ## 왜 삭제하지 않고 보존?
 
