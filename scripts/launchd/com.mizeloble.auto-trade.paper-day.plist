@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/paper-day-mode.sh</string>
+        <string>__PROJECT_DIR__/scripts/paper-day-mode.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jjmize/Project/auto-stock-trading</string>
+    <string>__PROJECT_DIR__</string>
 
     <!-- 평일(월~금) 08:55 KST 트리거. launchd Weekday 는 0/7=일, 1=월, ..., 6=토
          (Apple `man launchd.plist`). 아래 1-5 가 월~금. 토(6)·일(0|7) 자동 제외.
@@ -55,9 +55,9 @@
 
     <!-- 표준 출력/에러는 paper-day-mode.sh 안에서 logs/paper-day-YYYY-MM-DD.log 로 리다이렉트. -->
     <key>StandardOutPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper-day.out.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-paper-day.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-paper-day.err.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-paper-day.err.log</string>
 
     <!-- macOS sandbox 방지: 일반 사용자 GUI 세션에서 실행 (LaunchAgent 기본 동작) -->
     <key>ProcessType</key>

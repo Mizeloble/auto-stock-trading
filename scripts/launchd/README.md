@@ -20,7 +20,7 @@
 ## 어떻게 등록
 
 ```bash
-cd /Users/jjmize/Project/auto-stock-trading
+cd <저장소를 clone 한 경로>
 chmod +x scripts/launchd-install.sh scripts/launchd-uninstall.sh
 ./scripts/launchd-install.sh
 ```
@@ -68,6 +68,9 @@ launchctl kickstart -k gui/$UID/com.mizeloble.auto-trade.insight-weekly
   launchctl bootout gui/$UID/com.mizeloble.auto-trade.paper
   ```
 - **plist 수정 후 반영 안 됨**: bootout 후 다시 install 스크립트.
+- **저장소 plist 를 직접 bootstrap 하면 실패**: 저장소의 plist 는 경로 자리에 `__PROJECT_DIR__`
+  플레이스홀더가 들어 있다(개인 경로 비공개 + 어느 위치에 clone 해도 동작). install 스크립트가
+  복사하면서 실제 경로로 바꿔 주므로, 등록은 항상 `launchd-install.sh` 로 한다.
 - **paper 프로세스가 launchd 자식이 아니라 파이프 후속으로 분리됨**: `paper-day-mode.sh` 가
   `exec` 로 caffeinate 를 띄우므로 정상은 launchd 의 직접 자식. 그래도 종료가 안
   잡히면 `pgrep -fa "auto-trade paper"` 로 PID 직접 확인.
@@ -97,8 +100,8 @@ Claude API 로 누적 분석 → 텔레그램에 한국어 인사이트 푸시. 
 ### 등록·해제
 
 ```bash
-# 등록
-launchctl bootstrap gui/$UID scripts/launchd/com.mizeloble.auto-trade.insight-weekly.plist
+# 등록 (plist 경로 치환이 필요하므로 install 스크립트 사용 — 다른 잡도 함께 재등록됨)
+./scripts/launchd-install.sh
 
 # 확인
 launchctl list | grep mizeloble.auto-trade.insight-weekly

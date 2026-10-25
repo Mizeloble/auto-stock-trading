@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-LOG_DIR="/Users/jjmize/Project/auto-stock-trading/logs"
+LOG_DIR="$(cd "$(dirname "$0")/../.." && pwd)/logs"
 LOG="$LOG_DIR/paper-stop-$(date +%Y-%m-%d).log"
 mkdir -p "$LOG_DIR"
 

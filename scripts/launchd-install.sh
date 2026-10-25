@@ -2,7 +2,7 @@
 # launchd 에 day-trade 자동 운영 잡 등록.
 #
 # 무엇/왜:
-# - ~/Library/LaunchAgents/ 에 plist 복사 후 bootstrap 으로 등록.
+# - ~/Library/LaunchAgents/ 에 plist 복사(경로 플레이스홀더 치환) 후 bootstrap 으로 등록.
 # - 등록 후 자동 사이클:
 #   * 평일 08:55 KST: paper-day 시동 → 발굴·매수·15:15 자체 청산·종료
 #   * 토요일 06:00 KST: news-prefetch cron → RSS 뉴스 미리 fetch (LLM X)
@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/Users/jjmize/Project/auto-stock-trading"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"  # 스크립트 위치 기준 저장소 루트 (scripts/ 의 부모)
 PLIST_SRC="$PROJECT_DIR/scripts/launchd"
 PLIST_DST="$HOME/Library/LaunchAgents"
 LABELS=(
@@ -60,7 +60,10 @@ for label in "${LABELS[@]}"; do
     launchctl bootout "gui/$UID/$label" 2>/dev/null || true
   fi
 
-  cp "$src" "$dst"
+  # 저장소 plist 는 머신별 경로 대신 `__PROJECT_DIR__` 플레이스홀더를 쓴다 (공개 저장소에
+  # 개인 경로 미노출 + 다른 위치에 clone 해도 동작). launchd 는 plist 안의 환경변수를
+  # 펼치지 않으므로 복사 시점에 실제 저장소 경로로 치환한다.
+  sed "s|__PROJECT_DIR__|$PROJECT_DIR|g" "$src" > "$dst"
   echo "  - 복사: $dst"
 
   launchctl bootstrap "gui/$UID" "$dst"

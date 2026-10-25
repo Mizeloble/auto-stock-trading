@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/insight-weekly.sh</string>
+        <string>__PROJECT_DIR__/scripts/insight-weekly.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jjmize/Project/auto-stock-trading</string>
+    <string>__PROJECT_DIR__</string>
 
     <!-- 매주 토요일 09:00 KST. launchd 의 Weekday 표기는 0/7=일요일, 6=토요일
          (Apple `man launchd.plist`). 5/9 첫 발화 누락 회귀 — 7 로 잘못 적어
@@ -32,9 +32,9 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-insight-weekly.out.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-insight-weekly.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-insight-weekly.err.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-insight-weekly.err.log</string>
 
     <key>ProcessType</key>
     <string>Interactive</string>

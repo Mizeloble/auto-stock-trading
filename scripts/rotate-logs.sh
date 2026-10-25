@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-LOGS_ROOT="${LOGS_ROOT:-/Users/jjmize/Project/auto-stock-trading/logs}"
+LOGS_ROOT="${LOGS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)/logs}"
 
 if [[ ! -d "$LOGS_ROOT" ]]; then
   echo "logs dir not found: $LOGS_ROOT" >&2

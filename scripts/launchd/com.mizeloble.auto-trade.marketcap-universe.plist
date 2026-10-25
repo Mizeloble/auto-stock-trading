@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/build-marketcap-universe.sh</string>
+        <string>__PROJECT_DIR__/scripts/build-marketcap-universe.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jjmize/Project/auto-stock-trading</string>
+    <string>__PROJECT_DIR__</string>
 
     <!-- 평일 08:50 KST — paper-day 08:55 시동 직전.
          시총 데이터는 직전 거래일 종가 기준이라 장 시작 전 산출이 자연스럽다. -->
@@ -50,9 +50,9 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-marketcap-universe.out.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-marketcap-universe.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-marketcap-universe.err.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-marketcap-universe.err.log</string>
 
     <key>ProcessType</key>
     <string>Background</string>

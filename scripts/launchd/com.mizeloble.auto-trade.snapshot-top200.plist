@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jjmize/Project/auto-stock-trading/scripts/snapshot-top200.sh</string>
+        <string>__PROJECT_DIR__/scripts/snapshot-top200.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jjmize/Project/auto-stock-trading</string>
+    <string>__PROJECT_DIR__</string>
 
     <!-- 매 10분 09:00–15:30 KST (총 40 시각). Weekday 미지정 → 매일 호출 → shell
          스크립트 안에서 평일/주말 가드. 200 dict 대신 40 dict 로 가볍게. -->
@@ -185,9 +185,9 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-snapshot-top200.out.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-snapshot-top200.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jjmize/Project/auto-stock-trading/logs/launchd-snapshot-top200.err.log</string>
+    <string>__PROJECT_DIR__/logs/launchd-snapshot-top200.err.log</string>
 
     <key>ProcessType</key>
     <string>Background</string>
